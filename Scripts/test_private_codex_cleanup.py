@@ -56,6 +56,9 @@ import Foundation
 import Darwin
 
 nonisolated func Log(_ message: String) {}
+nonisolated enum CrashReporting {
+    static func diagnosticBreadcrumb(_ name: String, data: [String: String]) {}
+}
 
 nonisolated enum CodexRuntime {
     nonisolated(unsafe) static var root = URL(fileURLWithPath: "/fixture-unset")
@@ -78,10 +81,11 @@ nonisolated enum CodexCLI {
     var forceTerminateCalls = 0
     var exitsOnTerminate = true
     var exitsOnForceTerminate = true
+    var onForceTerminate: (() -> Void)?
     init(_ url: URL?) { bundleURL = url }
     static func runningApplications(withBundleIdentifier: String) -> [NSRunningApplication] { applications }
     func terminate() { terminateCalls += 1; isTerminated = exitsOnTerminate }
-    func forceTerminate() { forceTerminateCalls += 1; isTerminated = exitsOnForceTerminate }
+    func forceTerminate() { forceTerminateCalls += 1; isTerminated = exitsOnForceTerminate; onForceTerminate?() }
 }
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture"
@@ -155,7 +159,7 @@ __CLEANUP__
         NSRunningApplication.applications = [healthyOwn, standalone, retiredHelper]
         try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
         precondition(healthyOwn.terminateCalls == 0 && healthyOwn.forceTerminateCalls == 0)
-        precondition([standalone, retiredHelper].allSatisfy { $0.isTerminated && $0.terminateCalls == 1 && $0.forceTerminateCalls == 0 })
+        precondition([standalone, retiredHelper].allSatisfy { $0.isTerminated && $0.terminateCalls == 0 && $0.forceTerminateCalls == 1 })
         print("PASS task takeover stops all foreign helpers and preserves the private helper")
 
         NSRunningApplication.applications = [healthyOwn]
@@ -178,9 +182,34 @@ __CLEANUP__
         stubborn.exitsOnTerminate = false
         NSRunningApplication.applications = [healthyOwn, stubborn]
         try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
-        precondition(stubborn.isTerminated && stubborn.terminateCalls == 1 && stubborn.forceTerminateCalls == 1)
+        precondition(stubborn.isTerminated && stubborn.terminateCalls == 0 && stubborn.forceTerminateCalls == 1)
         precondition(healthyOwn.terminateCalls == 0 && healthyOwn.forceTerminateCalls == 0)
-        print("PASS unresponsive foreign helper is force-quit after the graceful wait")
+        print("PASS unresponsive foreign helper is immediately force-quit")
+
+        let respawned = NSRunningApplication(foreign), original = NSRunningApplication(foreign)
+        original.onForceTerminate = { NSRunningApplication.applications.append(respawned) }
+        NSRunningApplication.applications = [healthyOwn, original]
+        try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+        precondition(original.forceTerminateCalls == 1 && respawned.forceTerminateCalls == 1)
+        precondition(healthyOwn.forceTerminateCalls == 0)
+        print("PASS takeover rechecks and stops a helper relaunched during shutdown")
+
+        var respawns = 0
+        func returningHelper() -> NSRunningApplication {
+            let app = NSRunningApplication(foreign)
+            app.onForceTerminate = {
+                respawns += 1
+                NSRunningApplication.applications.append(returningHelper())
+            }
+            return app
+        }
+        NSRunningApplication.applications = [returningHelper()]
+        do {
+            try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+            preconditionFailure("endlessly respawning helper accepted")
+        } catch OpenAIComputerUse.RuntimeError.conflictingHelper {}
+        precondition(respawns == 3)
+        print("PASS continuous respawning has a finite three-takeover budget")
 
         let unkillable = NSRunningApplication(foreign)
         unkillable.exitsOnTerminate = false

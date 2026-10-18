@@ -126,11 +126,11 @@ nonisolated enum OpenAIComputerUse {
             case .unsupportedSystem: "This OpenAI computer-use version needs a newer version of macOS."
             case .helperRunning: "Computer use is currently running. Finish the active task, then try the repair again."
             case .changedInstallation: "Computer use changed during setup. Repair it in Permissions & Health."
-            case .conflictingHelper: "Another Codex installation is using computer use. Finish its task and quit its computer-use helper, then try again in Sentient."
+            case .conflictingHelper: "Computer use couldn’t get ready. Please try again."
             case .launchFailed: "OpenAI computer use could not start. Try again in Permissions & Health."
             case .cliUnavailable: "Codex could not be found. Set up Codex in Permissions & Health."
             case .unsupportedCLI: "This Codex version cannot check computer use. Check for updates to Codex and Sentient, then try again."
-            case .backendUnavailable: "Computer use could not connect to Codex. Finish any computer-use tasks in other apps, then restart computer use."
+            case .backendUnavailable: "Computer use couldn’t connect. Please try again."
             case .permissionRequired: "Allow Sentient to control computer use in Permissions & Health."
             case .restartRequired: "Computer use needs to restart. Finish any computer-use tasks in other apps, then choose Restart computer use."
             }
@@ -170,15 +170,35 @@ nonisolated enum OpenAIComputerUse {
     /// A user-started task takes over the shared service identity from other installations.
     /// Identify the helper by bundle ID and path, never by its localized process name.
     @MainActor static func stopConflictingHelpers(configuration: Configuration) async throws {
-        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .filter { !$0.isTerminated }
-        guard running.allSatisfy({ $0.bundleURL != nil }) else { throw RuntimeError.conflictingHelper }
-        let conflicting = running.filter {
-            $0.bundleURL?.standardizedFileURL != configuration.appURL.standardizedFileURL
+        var stopped = 0
+        // Re-enumerate after exit: another client can relaunch the service while it is
+        // shutting down. Bound the handover rather than entering a process-killing loop.
+        for attempt in 0...3 {
+            try Task.checkCancellation()
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .filter { !$0.isTerminated }
+            guard running.allSatisfy({ $0.bundleURL != nil }) else { throw RuntimeError.conflictingHelper }
+            let conflicting = running.filter {
+                $0.bundleURL?.standardizedFileURL != configuration.appURL.standardizedFileURL
+            }
+            if conflicting.isEmpty {
+                if stopped > 0 {
+                    Log("Native computer use: stopped \(stopped) conflicting helper(s)")
+                    CrashReporting.diagnosticBreadcrumb("computer_use.helper_takeover", data: [
+                        "outcome": "ready", "terminated_count": String(stopped), "attempts": String(attempt)])
+                }
+                return
+            }
+            guard attempt < 3 else {
+                CrashReporting.diagnosticBreadcrumb("computer_use.helper_takeover", data: [
+                    "outcome": "conflict_returned", "terminated_count": String(stopped)])
+                throw RuntimeError.conflictingHelper
+            }
+            try await terminateHelpers(conflicting, failure: .conflictingHelper, forceImmediately: true)
+            stopped += conflicting.count
+            // Allow Launch Services to retire the old registration before checking again.
+            try await Task.sleep(for: .milliseconds(100))
         }
-        guard !conflicting.isEmpty else { return }
-        try await terminateHelpers(conflicting, failure: .conflictingHelper)
-        Log("Native computer use: stopped \(conflicting.count) conflicting helper(s)")
     }
 
     /// Uninstall stops only the helper launched from Sentient's directory.
@@ -192,14 +212,19 @@ nonisolated enum OpenAIComputerUse {
         try await terminateHelpers(running, failure: .helperRunning)
     }
 
-    /// Wait for graceful shutdown before escalating; never launch over a helper still exiting.
-    @MainActor private static func terminateHelpers(_ running: [NSRunningApplication], failure: RuntimeError) async throws {
+    /// Takeover uses the same force-quit as Activity Monitor. Uninstall still prefers a
+    /// graceful exit. Both wait for process death before letting a replacement launch.
+    @MainActor private static func terminateHelpers(_ running: [NSRunningApplication], failure: RuntimeError,
+                                                   forceImmediately: Bool = false) async throws {
         try Task.checkCancellation()
-        for app in running where !app.isTerminated { app.terminate() }
-        for _ in 0..<30 {
-            if running.allSatisfy(\.isTerminated) { return }
-            try await Task.sleep(for: .milliseconds(100))
+        if !forceImmediately {
+            for app in running where !app.isTerminated { app.terminate() }
+            for _ in 0..<30 {
+                if running.allSatisfy(\.isTerminated) { return }
+                try await Task.sleep(for: .milliseconds(100))
+            }
         }
+        try Task.checkCancellation()
         for app in running where !app.isTerminated { app.forceTerminate() }
         for _ in 0..<20 {
             if running.allSatisfy(\.isTerminated) { return }

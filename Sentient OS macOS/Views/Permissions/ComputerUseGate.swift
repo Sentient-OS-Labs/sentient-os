@@ -44,6 +44,8 @@ final class ComputerUseGate {
     private(set) var requestingAutomation = false
     private(set) var checkingAutomation = false
     private(set) var nativePermissionError: String?
+    /// A competing helper is a recoverable startup condition, not missing permission.
+    private var nativeHelperConflict = false
     private(set) var nativeRestartRequired = false
     private(set) var restartingNative = false
     @ObservationIgnored private var automationProbe: Task<Void, Never>?
@@ -66,7 +68,7 @@ final class ComputerUseGate {
     }
 
     var allRequiredGranted: Bool {
-        localRequirementsReady && (backend == .cua || (automation == .granted && nativePermissionError == nil))
+        localRequirementsReady && (backend == .cua || (automation == .granted && nativePermissionError == nil && !nativeHelperConflict))
     }
 
     /// The visible setup surface owns the native consent request. Already-granted and denied
@@ -123,6 +125,7 @@ final class ComputerUseGate {
         else { configuration = try await OpenAIComputerUse.Configuration.resolveForSetup() }
         _ = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration,
             stoppingConflictingHelpers: ask || stoppingConflictingHelpers)
+        nativeHelperConflict = false
         automation = await Permissions.nativeAutomationState(ask: ask)
         if automation == .granted {
             // Only explicit setup/repair diagnoses the live service. Routine refresh is a
@@ -136,11 +139,18 @@ final class ComputerUseGate {
         }
     }
 
-    private func recordNativeFailure(_ error: Error) {
+    private func recordNativeFailure(_ error: Error, passive: Bool = false) {
         guard !Task.isCancelled, !(error is CancellationError) else { return }
         OpenAIComputerUseRuntime.shared.invalidate()
-        nativePermissionError = error.localizedDescription
         let failure = error as? OpenAIComputerUse.RuntimeError
+        if failure == .conflictingHelper && passive {
+            nativeHelperConflict = true
+            nativePermissionError = nil
+            nativeRestartRequired = false
+            return
+        }
+        nativeHelperConflict = false
+        nativePermissionError = error.localizedDescription
         nativeRestartRequired = failure == .restartRequired || failure == .backendUnavailable
         if !Diagnostics.isExpected(error) {
             Diagnostics.report(.readinessFailed, phase: .probe, error: error)
@@ -342,7 +352,7 @@ final class ComputerUseGate {
             do {
                 try await checkNativeAccess(ask: false)
             } catch {
-                recordNativeFailure(error)
+                recordNativeFailure(error, passive: true)
             }
         }
     }
@@ -359,7 +369,8 @@ final class ComputerUseGate {
             guard !Task.isCancelled else { return }
             // A held user action may take over a foreign helper that a passive refresh refused.
             // Resolve that conflict before turning it into a blocking permission window.
-            if self.backend == .openAI, self.setup.ready, self.nativePermissionError != nil {
+            if self.backend == .openAI, self.setup.ready,
+               self.nativeHelperConflict || self.nativePermissionError != nil {
                 do { try await self.checkNativeAccess(ask: false, stoppingConflictingHelpers: true) }
                 catch { self.recordNativeFailure(error) }
             }

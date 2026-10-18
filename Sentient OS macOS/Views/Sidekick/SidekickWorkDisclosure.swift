@@ -17,8 +17,10 @@ struct SidekickWorkDisclosure: View {
     private var expanded: Bool { presentation.expandedWorkTasks.contains(taskID) }
     @State private var records: [SidekickConversationStore.Record] = []
     @State private var steps: [SidekickActivityPresentation.Step] = []
-    @State private var cursor: Int64 = 0
-    @State private var previousCursors: [Int64] = []
+    private typealias Page = SidekickPresentation.WorkPage
+    @State private var earlier = false
+    private var currentPage: Page { presentation.workPage(taskID) ?? (running ? .latest : .after(0)) }
+    private func selectPage(_ page: Page) { presentation.setWorkPage(page, taskID: taskID) }
     @State private var more = false
     @State private var loading = false
     @State private var hasLoaded = false
@@ -46,7 +48,7 @@ struct SidekickWorkDisclosure: View {
         let generation: UUID?
         let expanded: Bool
         let revision: Int
-        let cursor: Int64
+        let page: Page
     }
 
     var body: some View {
@@ -58,11 +60,34 @@ struct SidekickWorkDisclosure: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
-        .task(id: LoadKey(task: taskID, generation: conversation.generation, expanded: expanded, revision: revision, cursor: cursor)) {
+        .task(id: LoadKey(task: taskID, generation: conversation.generation, expanded: expanded, revision: revision, page: currentPage)) {
             guard expanded else { return }
             await load()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .sidekickConversationChanged).receive(on: DispatchQueue.main)) { notification in
+        .onChange(of: presentation.readingIntentRevision) { _, _ in
+            // Freeze the existing visible window as soon as the reader takes control.
+            // Future commits can update its statuses without pushing its first rows away.
+            if running, hasLoaded, currentPage == .latest, !presentation.canFollowLatest,
+               let first = records.first {
+                selectPage(.after(max(0, first.sequence - 1)))
+            }
+        }
+        .onChange(of: presentation.canFollowLatest) { _, follows in
+            if follows, running, !presentation.isBrowsingWork(taskID), currentPage != .latest {
+                selectPage(.latest)
+            }
+        }
+        .onChange(of: presentation.latestWorkPageRevision) { _, _ in
+            if running { selectPage(.latest); revision &+= 1 }
+        }
+        .onChange(of: progressNote) { _, _ in
+            guard running, active else { return }
+            presentation.activityDidChange(taskID: taskID, generation: conversation.generation,
+                                           intent: presentation.readingIntentRevision)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sidekickConversationChanged)
+            .receive(on: DispatchQueue.main)
+            .throttle(for: .milliseconds(100), scheduler: DispatchQueue.main, latest: true)) { notification in
             guard expanded, let store = notification.object as? SidekickConversationStore,
                   store === conversation.store else { return }
             revision &+= 1
@@ -84,7 +109,11 @@ struct SidekickWorkDisclosure: View {
             .clipped()
             // A first asynchronous page or a nested detail changes the measured height. Give
             // that resize its own animation instead of snapping from the loading placeholder.
-            .animation(reduced ? nil : .easeInOut(duration: 0.24), value: activityHeight)
+            // During live following, publish the real tail geometry immediately; the
+            // transcript's scroll supplies the motion. Two concurrent height/scroll
+            // animations otherwise leave the newest row below a transitional frame.
+            .animation(reduced || (running && active && presentation.canFollowLatest)
+                ? nil : .easeInOut(duration: 0.24), value: activityHeight)
             .animation(reduced ? nil : .spring(response: 0.35, dampingFraction: 0.92), value: expanded)
             .opacity(revealed ? 1 : 0)
             .animation(.easeOut(duration: reduced ? 0.10 : 0.14), value: expanded)
@@ -146,15 +175,23 @@ struct SidekickWorkDisclosure: View {
             ForEach(steps) { step in
                 SidekickActivityRow(step: step)
             }
-            if !previousCursors.isEmpty || more {
+            if earlier || more || (running && currentPage != .latest) {
                 HStack(spacing: 18) {
-                    if !previousCursors.isEmpty {
-                        Button("Earlier steps") { cursor = previousCursors.removeLast() }
+                    if earlier {
+                        Button("Earlier steps") {
+                            guard let first = records.first else { return }
+                            presentation.browseWork(taskID); selectPage(.before(first.sequence))
+                        }
                     }
                     if more {
                         Button("Next steps") {
                             guard let last = records.last else { return }
-                            previousCursors.append(cursor); cursor = last.sequence
+                            presentation.browseWork(taskID); selectPage(.after(last.sequence))
+                        }
+                    }
+                    if running && currentPage != .latest {
+                        Button("Latest steps") {
+                            presentation.followLatestWork(taskID); selectPage(.latest)
                         }
                     }
                     if expanded && loading { ProgressView().controlSize(.mini) }
@@ -169,6 +206,7 @@ struct SidekickWorkDisclosure: View {
         .padding(.leading, 17)
         .overlay(alignment: .leading) { Rectangle().fill(.white.opacity(0.09)).frame(width: 1) }
         .accessibilityIdentifier("sidekick.activity.\(taskID.uuidString)")
+        .id(SidekickPresentation.workTailID(taskID))
     }
 
     private func load() async {
@@ -177,17 +215,38 @@ struct SidekickWorkDisclosure: View {
             return
         }
         loadToken &+= 1
-        let token = loadToken, after = cursor
+        let token = loadToken, requestedPage = currentPage
+        let intent = presentation.readingIntentRevision
+        let following = running && active && requestedPage == .latest && presentation.canFollowLatest
         loading = true
         defer { if loadToken == token { loading = false } }
         do {
-            try await Task.sleep(for: .milliseconds(100))
-            let (page, projected) = try await Task.detached(priority: .userInitiated) {
-                let page = try store.activityRecords(taskID: taskID, after: after, limit: 41)
-                return (page, SidekickActivityPresentation.steps(Array(page.prefix(40))))
+            let (result, projected) = try await Task.detached(priority: .userInitiated) {
+                let result: SidekickConversationStore.TranscriptPage
+                switch requestedPage {
+                case .latest: result = try store.activityPage(taskID: taskID)
+                case .before(let cursor): result = try store.activityPage(taskID: taskID, before: cursor)
+                case .after(let cursor): result = try store.activityPage(taskID: taskID, after: cursor)
+                }
+                return (result, SidekickActivityPresentation.steps(result.records))
             }.value
-            guard !Task.isCancelled, token == loadToken, conversation.generation == generation else { return }
-            records = Array(page.prefix(40)); steps = projected; more = page.count > 40; failed = false; hasLoaded = true
+            guard !Task.isCancelled, token == loadToken, conversation.generation == generation,
+                  result.generation == generation else { return }
+            if requestedPage == .latest, hasLoaded, intent != presentation.readingIntentRevision,
+               !presentation.canFollowLatest, let first = records.first {
+                selectPage(.after(max(0, first.sequence - 1)))
+                return
+            }
+            let changed = records != result.records
+            if changed { records = result.records; steps = projected }
+            earlier = result.hasEarlier; more = result.hasLater
+            if requestedPage == .latest, !presentation.canFollowLatest, let first = records.first {
+                selectPage(.after(max(0, first.sequence - 1)))
+            } else { selectPage(requestedPage) }
+            failed = false; hasLoaded = true
+            if changed && following {
+                presentation.activityDidChange(taskID: taskID, generation: generation, intent: intent)
+            }
         } catch is CancellationError { }
         catch {
             guard !Task.isCancelled, token == loadToken, conversation.generation == generation else { return }
@@ -230,6 +289,7 @@ private struct SidekickActivityRow: View {
             }
         }
         .tint(SidekickStyle.secondary.opacity(0.7))
+        .accessibilityIdentifier("sidekick.activityStep." + step.id)
     }
     private func detail(_ text: String) -> some View {
         ScrollView([.horizontal, .vertical]) {

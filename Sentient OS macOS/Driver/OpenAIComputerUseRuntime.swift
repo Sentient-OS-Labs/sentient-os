@@ -38,7 +38,14 @@ final class OpenAIComputerUseRuntime {
             let sameConfiguration = startingConfiguration == configuration
             do {
                 let app = try await awaitStartup(starting, id: startingID)
-                if sameConfiguration, !app.isTerminated { return app }
+                if sameConfiguration, !app.isTerminated {
+                    // A foreground waiter may have joined a passive startup just before a
+                    // different client relaunched its helper. Recheck before taking ownership.
+                    if stoppingConflictingHelpers {
+                        try await OpenAIComputerUse.stopConflictingHelpers(configuration: configuration)
+                    }
+                    if !app.isTerminated { return app }
+                }
             } catch OpenAIComputerUse.RuntimeError.conflictingHelper where stoppingConflictingHelpers {
                 // A task can arrive while a passive health check is refusing a foreign helper.
                 // Retry with takeover after that shared startup has settled.
@@ -60,40 +67,57 @@ final class OpenAIComputerUseRuntime {
             let configuration = try configuration.afterRuntimeLease()
             _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
             try Task.checkCancellation()
-            if stoppingConflictingHelpers {
-                try await OpenAIComputerUse.stopConflictingHelpers(configuration: configuration)
-            }
-            let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
-                .filter { !$0.isTerminated }
-            if let app = running.first {
-                guard running.count == 1, let url = app.bundleURL,
-                      await OpenAIComputerUse.acceptsRunningHelper(at: url, configuration: configuration) else {
-                    throw OpenAIComputerUse.RuntimeError.conflictingHelper
-                }
-                if let launched, !launched.app.isTerminated,
-                   launched.app.processIdentifier == app.processIdentifier,
-                   launched.configuration != configuration,
-                   url.standardizedFileURL == configuration.appURL.standardizedFileURL {
+            for attempt in 0..<3 {
+                do {
+                    if stoppingConflictingHelpers {
+                        try await OpenAIComputerUse.stopConflictingHelpers(configuration: configuration)
+                    }
+                    let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+                        .filter { !$0.isTerminated }
+                    if let app = running.first {
+                        guard running.count == 1, let url = app.bundleURL,
+                              await OpenAIComputerUse.acceptsRunningHelper(at: url, configuration: configuration) else {
+                            throw OpenAIComputerUse.RuntimeError.conflictingHelper
+                        }
+                        // The last native client can close while compatibility is checked.
+                        // A dead cached helper is a fresh startup, not a permission failure.
+                        if app.isTerminated { continue }
+                        if let launched, !launched.app.isTerminated,
+                           launched.app.processIdentifier == app.processIdentifier,
+                           launched.configuration != configuration,
+                           url.standardizedFileURL == configuration.appURL.standardizedFileURL {
+                            self.checked = nil
+                            throw OpenAIComputerUse.RuntimeError.restartRequired
+                        }
+                        return app
+                    }
                     self.checked = nil
-                    throw OpenAIComputerUse.RuntimeError.restartRequired
+                    let options = NSWorkspace.OpenConfiguration()
+                    options.activates = false
+                    options.allowsRunningApplicationSubstitution = false
+                    options.environment = configuration.environment
+                    let app: NSRunningApplication
+                    do { app = try await NSWorkspace.shared.openApplication(at: configuration.appURL, configuration: options) }
+                    catch { throw OpenAIComputerUse.RuntimeError.launchFailed }
+                    guard app.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL else {
+                        throw OpenAIComputerUse.RuntimeError.conflictingHelper
+                    }
+                    // openApplication can succeed before a service that lost its registration exits.
+                    // Detect that startup failure before any model or user action is sent.
+                    try await Task.sleep(for: .milliseconds(100))
+                    guard !app.isTerminated else { throw OpenAIComputerUse.RuntimeError.launchFailed }
+                    self.launched = (app, configuration)
+                    Log("Native computer use: helper started with the selected CLI")
+                    try Task.checkCancellation()
+                    return app
+                } catch let error as OpenAIComputerUse.RuntimeError where stoppingConflictingHelpers
+                    && attempt < 2 && [.conflictingHelper, .launchFailed].contains(error) {
+                    // Startup-only retries: never replay a tool, click, keystroke or send.
+                    self.checked = nil
+                    try await Task.sleep(for: .milliseconds(100))
                 }
-                return app
             }
-            self.checked = nil
-            let options = NSWorkspace.OpenConfiguration()
-            options.activates = false
-            options.allowsRunningApplicationSubstitution = false
-            options.environment = configuration.environment
-            let app: NSRunningApplication
-            do { app = try await NSWorkspace.shared.openApplication(at: configuration.appURL, configuration: options) }
-            catch { throw OpenAIComputerUse.RuntimeError.launchFailed }
-            guard app.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL else {
-                throw OpenAIComputerUse.RuntimeError.helperRunning
-            }
-            self.launched = (app, configuration)
-            Log("Native computer use: helper started with the selected CLI")
-            try Task.checkCancellation()
-            return app
+            throw OpenAIComputerUse.RuntimeError.launchFailed
         }
         starting = task
         startingID = id
@@ -200,8 +224,8 @@ final class OpenAIComputerUseRuntime {
 
     func invalidate() { checked = nil }
 
-    /// Invoked only by the visible Restart button, whose copy asks the user to finish other
-    /// apps' computer-use tasks. Never force-kill, never terminate a different installed bundle.
+    /// Explicit repair respects Sentient's active-task lease and takes over competing helpers
+    /// just like task startup, then gracefully restarts only the private helper.
     func restart(configuration selected: OpenAIComputerUse.Configuration) async throws {
         let lease = try await CodexRuntime.sharedRuntimeLease()
         defer { lease.unlock() }
@@ -214,6 +238,7 @@ final class OpenAIComputerUseRuntime {
         defer { restarting = false }
         _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
         try Task.checkCancellation()
+        try await OpenAIComputerUse.stopConflictingHelpers(configuration: configuration)
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
         guard running.count <= 1, running.allSatisfy({
             $0.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL

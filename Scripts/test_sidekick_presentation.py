@@ -227,14 +227,14 @@ typealias Presentation = SidekickPresentation
                   "replacement store search remains usable after old worker failure")
 
         model.setSelection(true, messageID: "selected-old-message")
-        model.search = "search-alpha"; model.scrollID = "old-scroll"; model.navigationTarget = "old-target"
+        model.search = "search-alpha"; model.navigationTarget = "old-target"
         model.newMessages = true; model.loading = true
         model.searchResults = try store.searchTranscript("search-alpha")
         try store.reset(); conversation.generation = try store.generation
         model.resetForGeneration(conversation.generation)
         try check(model.rows.isEmpty && model.searchResults.isEmpty && model.search.isEmpty, "generation reset clears old transcript and search state")
         try check(!model.textSelected && !model.loading && !model.newMessages, "generation reset releases selections, loading and unread presentation")
-        try check(model.scrollID == nil && model.navigationTarget == nil && !model.hasEarlier && !model.hasLater,
+        try check(model.navigationTarget == nil && !model.hasEarlier && !model.hasLater,
                   "generation reset clears deleted destinations and page boundaries")
 
         model.surface = .conversation; model.searchShown = true; model.clearChatConfirmationShown = true
@@ -299,7 +299,9 @@ typealias Presentation = SidekickPresentation
         model.hasLater = true
         try check(!model.canFollowLatest, "historical page never follows latest automatically")
         model.hasLater = false
-        model.atLatest = false
+        model.userScrollChanged(true)
+        model.viewportChanged(atLatest: false)
+        model.userScrollChanged(false)
         try check(!model.canFollowLatest, "reader away from bottom retains position")
 
         // Observation fires synchronously as the real asynchronous page request starts.
@@ -310,7 +312,7 @@ typealias Presentation = SidekickPresentation
         }
         await model.load(.latest, conversation: conversation)
         try check(model.newMessages, "back-to-latest read cannot erase a concurrent arrival notification")
-        model.atLatest = true
+        model.viewportChanged(atLatest: true)
         try check(model.canFollowLatest && model.newMessages, "reaching bottom schedules deferred arrival refresh")
         let task = UUID()
         try store.appendBatch([
@@ -337,6 +339,178 @@ typealias Presentation = SidekickPresentation
         try check(model.navigationTarget == "response-arrivals-2", "arrival policy preserves explicit history destination")
     }
 
+    static func liveActivityFollowing(_ directory: URL) async throws {
+        let store = try seed(directory, name: "live-follow", tasks: 2)
+        let conversation = try SidekickConversation(store)
+        let model = Presentation()
+        await model.load(.latest, conversation: conversation)
+        let task = UUID()
+        model.followActiveWork(task, generation: conversation.generation)
+        let intent = model.readingIntentRevision
+        let before = model.scrollRequest
+        model.viewportChanged(atLatest: false) // More rows increased content height, no user gesture.
+        try check(model.canFollowLatest, "content growth preserves following intent while bottom moves")
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: intent)
+        try check(model.scrollRequest == before + 1 && model.scrollIsAutomatic
+                    && model.navigationTarget == Presentation.workTailID(task), "tool-only page update requests current expanded activity tail")
+        model.userScrollChanged(true)
+        let held = model.scrollRequest
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: intent)
+        try check(model.scrollRequest == held && !model.canFollowLatest, "gesture revokes already-scheduled live follow intent")
+        model.viewportChanged(atLatest: true)
+        try check(!model.canFollowLatest, "geometry callback cannot re-enable following during user gesture")
+        model.viewportChanged(atLatest: false)
+        model.userScrollChanged(false)
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == held, "ending an upward scroll preserves deliberate older reading position")
+        model.userScrollChanged(true)
+        model.viewportChanged(atLatest: true)
+        model.userScrollChanged(false)
+        try check(model.canFollowLatest, "returning to bottom resumes live following")
+        model.browseWork(task)
+        model.setWorkPage(.before(42), taskID: task)
+        try check(model.workPage(task) == .before(42), "task owns older activity cursor across disclosure view relocation")
+        model.viewportChanged(atLatest: true)
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == held && !model.canFollowLatest, "manual older activity page stays pinned even at transcript bottom")
+        model.followLatestWork(task)
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == held + 1 && model.canFollowLatest && model.workPage(task) == .latest,
+                  "latest-steps action explicitly rejoins current activity")
+        model.setSelection(true, messageID: "selected")
+        let selected = model.scrollRequest
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == selected, "selecting text suppresses activity scroll")
+        model.setSelection(false, messageID: "selected")
+        let collapseIntent = model.readingIntentRevision
+        model.toggleWork(task)
+        try check(model.canFollowLatest && model.readingIntentRevision == collapseIntent,
+                  "manually collapsing current work preserves response-following intent")
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == selected, "collapsed current work never targets hidden activity")
+        model.toggleWork(task)
+        model.activityDidChange(taskID: UUID(), generation: conversation.generation, intent: model.readingIntentRevision)
+        model.activityDidChange(taskID: task, generation: UUID(), intent: model.readingIntentRevision)
+        try check(model.scrollRequest == selected, "old task and cleared-generation callbacks cannot move viewport")
+        model.searchShown = true
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == selected, "history search owns viewport over activity")
+        model.searchShown = false
+        model.browseWork(task)
+        let pageVersion = model.latestWorkPageRevision
+        await model.load(.latest, conversation: conversation)
+        try check(model.latestWorkPageRevision > pageVersion && !model.isBrowsingWork(task)
+                    && model.canFollowLatest, "back-to-latest restores live activity page and following together")
+
+        // Native size-change anchoring must yield to explicit older-work inspection.
+        let olderTask = model.rows.first!.event.taskID
+        model.expandedWorkTasks.remove(olderTask)
+        let olderIntent = model.readingIntentRevision
+        model.toggleWork(olderTask)
+        try check(!model.canFollowLatest && model.readingIntentRevision > olderIntent,
+                  "expanding completed history pauses native bottom-follow before its height grows")
+        let oldReadingTarget = model.navigationTarget, oldReadingRequest = model.scrollRequest
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.navigationTarget == oldReadingTarget && model.scrollRequest == oldReadingRequest,
+                  "live activity cannot displace an explicitly opened older disclosure")
+        model.toggleWork(olderTask)
+        try check(!model.canFollowLatest, "collapsing old work does not silently resume following")
+        await model.load(.latest, conversation: conversation)
+        try check(model.canFollowLatest, "explicit latest navigation restores size-change following")
+        model.followActiveWork(nil, generation: conversation.generation)
+        model.viewportChanged(atLatest: false)
+        try check(model.canFollowLatest, "completion height changes retain intent even after active task clears")
+        let latestCompleted = model.rows.last!.event.taskID
+        model.expandedWorkTasks.remove(latestCompleted)
+        model.toggleWork(latestCompleted)
+        try check(!model.canFollowLatest, "manually opening the newest completed details also respects reading intent")
+        await model.load(.latest, conversation: conversation)
+
+        // Moving away while a real asynchronous latest query runs must also preserve rows.
+        await model.load(.around("response-live-follow-0"), conversation: conversation)
+        let pinned = model.rows, target = model.navigationTarget
+        model.userScrollChanged(true, atLatest: true)
+        model.userScrollChanged(false, atLatest: true)
+        withObservationTracking { _ = model.loading } onChange: {
+            MainActor.assumeIsolated { model.pauseAutomaticFollowing() }
+        }
+        await model.load(.latest, conversation: conversation, automaticallyFollowing: true)
+        try check(model.rows == pinned && model.navigationTarget == target,
+                  "user intent during asynchronous auto-refresh wins before row replacement")
+    }
+
+
+    static func completionAndActivationFollowing(_ directory: URL) async throws {
+        let store = try seed(directory, name: "completion-follow", tasks: 2)
+        let conversation = try SidekickConversation(store)
+        let model = Presentation()
+        let task = UUID()
+        try store.appendBatch([
+            Event(id: "completion-live-start", taskID: task, kind: .taskStarted),
+            Event(id: "completion-live-request", taskID: task, kind: .userMessage, text: "A live fixture task")])
+        await model.load(.latest, conversation: conversation)
+        model.followActiveWork(task, generation: conversation.generation)
+        let intent = model.readingIntentRevision
+        model.resumeFollowing(generation: conversation.generation)
+        try check(model.navigationTarget == Presentation.workTailID(task) && model.scrollIsAutomatic,
+                  "reactivating an expanded live task resumes at current work tail")
+        model.toggleWork(task)
+        model.resumeFollowing(generation: conversation.generation)
+        try check(model.navigationTarget == "sidekick-bottom" && model.readingIntentRevision == intent,
+                  "reactivating collapsed current work targets visible bottom without changing intent")
+        model.toggleWork(task)
+        try store.append(Event(id: "completion-live-answer", taskID: task, kind: .assistantMessage,
+                               text: "The final answer arrived before the provider stopped.", messageKind: .answer))
+        conversation.revision &+= 1
+        await model.load(.latest, conversation: conversation, automaticallyFollowing: true)
+        let beforeLateActivity = model.scrollRequest
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == beforeLateActivity + 1 && model.navigationTarget == "sidekick-bottom",
+                  "late activity after final answer cannot override bottom with work tail")
+        let beforeFinish = model.scrollRequest, finishIntent = model.readingIntentRevision
+        model.followActiveWork(nil, generation: conversation.generation)
+        try check(model.scrollRequest == beforeFinish + 1 && model.navigationTarget == "sidekick-bottom"
+                    && model.readingIntentRevision == finishIntent && model.canFollowLatest,
+                  "completion requests final response bottom without inventing a reading gesture")
+        let discardedWhileHidden = model.scrollRequest
+        model.resumeFollowing(generation: conversation.generation)
+        try check(model.scrollRequest == discardedWhileHidden + 1 && model.navigationTarget == "sidekick-bottom",
+                  "activation reissues an identical follow target that could have been dropped while inactive")
+        let settled = model.scrollRequest
+        model.activityDidChange(taskID: task, generation: conversation.generation, intent: model.readingIntentRevision)
+        try check(model.scrollRequest == settled, "completed task's late tool callback cannot replace final destination")
+        model.resumeFollowing(generation: UUID())
+        try check(model.scrollRequest == settled, "stale-generation activation cannot navigate")
+
+        let next = UUID()
+        model.followActiveWork(next, generation: conversation.generation)
+        model.userScrollChanged(true, atLatest: false)
+        model.userScrollChanged(false, atLatest: false)
+        let readerTarget = model.navigationTarget, readerRequest = model.scrollRequest
+        model.resumeFollowing(generation: conversation.generation)
+        model.followActiveWork(nil, generation: conversation.generation)
+        try check(model.scrollRequest == readerRequest && model.navigationTarget == readerTarget && !model.followsLatest,
+                  "activation and completion both preserve explicit older-message reading")
+        await model.load(.latest, conversation: conversation)
+        model.followActiveWork(UUID(), generation: conversation.generation)
+        model.setSelection(true, messageID: "completion-live-answer")
+        let selecting = model.scrollRequest
+        model.resumeFollowing(generation: conversation.generation)
+        model.followActiveWork(nil, generation: conversation.generation)
+        try check(model.scrollRequest == selecting, "completion and activation cannot displace selected text")
+        model.setSelection(false, messageID: "completion-live-answer")
+        model.searchShown = true
+        model.resumeFollowing(generation: conversation.generation)
+        try check(model.scrollRequest == selecting, "history search keeps ownership on activation")
+        model.searchShown = false; model.hasLater = true
+        model.resumeFollowing(generation: conversation.generation)
+        try check(model.scrollRequest == selecting, "an older history page is not automatically replaced")
+        model.hasLater = false
+        model.resumeFollowing(generation: conversation.generation)
+        try check(model.scrollRequest == selecting + 1 && model.navigationTarget == "sidekick-bottom",
+                  "eligible following resumes once the reader's transient hold ends")
+    }
+
     static func workMetadata(_ directory: URL) async throws {
         let store = try seed(directory, name: "work-metadata", tasks: 50)
         let conversation = try SidekickConversation(store)
@@ -353,9 +527,8 @@ typealias Presentation = SidekickPresentation
         model.atLatest = false
         model.expandedWorkTasks.insert(openTask)
         model.navigationTarget = "work-open-response"
-        model.scrollID = model.rows.first!.event.id
         let originalRows = model.rows, originalTarget = model.navigationTarget
-        let originalScroll = model.scrollID, originalRequest = model.scrollRequest
+        let originalRequest = model.scrollRequest
         let originalAutomatic = model.scrollIsAutomatic
         try store.appendBatch([
             Event(id: "work-operation", taskID: openTask, kind: .activity, text: "fixture.search",
@@ -369,7 +542,7 @@ typealias Presentation = SidekickPresentation
                     && model.taskStates[openTask]?.hasActivity == true, "off-bottom refresh left completed work metadata stale")
         try check(model.rows == originalRows && !model.atLatest, "metadata-only refresh replaced rows or reading position")
         try check(model.navigationTarget == originalTarget && model.scrollRequest == originalRequest
-                    && model.scrollID == originalScroll && model.scrollIsAutomatic == originalAutomatic,
+                    && model.scrollIsAutomatic == originalAutomatic,
                   "metadata-only refresh issued or changed navigation")
         try check(model.expandedWorkTasks == [openTask], "metadata refresh collapsed the reader's open work disclosure")
         await model.load(.latest, conversation: conversation)
@@ -419,7 +592,7 @@ typealias Presentation = SidekickPresentation
         await resetRefresh.value; resetStarted.continuation.finish()
         try check(cancelledModel.rows.isEmpty && cancelledModel.taskStates.isEmpty && cancelledModel.expandedWorkTasks.isEmpty,
                   "reset metadata refresh reintroduced deleted tasks or expansion state")
-        try check(cancelledModel.error == nil && cancelledModel.scrollID == nil && cancelledModel.navigationTarget == nil,
+        try check(cancelledModel.error == nil && cancelledModel.navigationTarget == nil,
                   "reset refresh restored a stale error or navigation state")
         try cancelStore.appendBatch([
             Event(id: "reused-request", taskID: cancelTask, kind: .userMessage, text: "New generation"),
@@ -517,6 +690,8 @@ typealias Presentation = SidekickPresentation
         let store = try seed(directory, name: "history")
         try await paging(store)
         try await arrivals(directory)
+        try await liveActivityFollowing(directory)
+        try await completionAndActivationFollowing(directory)
         try await workMetadata(directory)
         try await searchAndReset(directory, store: store)
         try visits(directory)

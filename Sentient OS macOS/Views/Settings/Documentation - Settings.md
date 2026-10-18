@@ -92,7 +92,7 @@ Cloud Sync group with the "Set up in 2 minutes" / "Configure" CTA into `ConnectA
 sharing on/off; the pane carries no toggle), live `stats()` activity when sharing is on, and the
 local-folder access explanation when off. A local tool can read the folder directly; whether inference is local depends on that tool’s model. Regenerate has no UI (a support remediation only).
 
-**System.** Three chapters split by two dividers: how Sentient runs (the overnight story as prose, the
+**System.** Three chapters split by two dividers: how Sentient runs (the daily overnight wake-time picker, the
 launch-at-login toggle with a keep-Sentient-alive confirm on the way off, the Updates group with the
 version and Check for Updates Now), privacy (the two toggles: crash reports → Sentry, analytics →
 TelemetryDeck, each applying live; the always-on core-tier disclosure appears under the analytics
@@ -102,6 +102,16 @@ start of onboarding and dismisses Settings; locked while `PipelineActivity` repo
 **Uninstall Sentient…** (the farewell sheet). Reset removes local knowledge/analysis and attempts
 mirror deletion; uninstall also clears local setup and credentials. Both preserve the founder-feedback
 list and invitation/lifetime-access records. There is no saved-address management pane.
+
+The **overnight wake time** defaults to 3 AM and uses local wall-clock time. It retains the existing
+`dbg.scheduler.minutes` key so earlier configured times survive. Edits re-arm the enabled production
+or developer schedule through the existing loop, never interrupt an active overnight analysis, and
+do not enable scheduling when it is off. The Analysis popover reflects the selected time.
+
+Under **Proactive & Sidekick**, **Open Sidekick by clicking the notch** controls only the idle hover
+and click affordance (`sidekick.notchClickEnabled`, default true). Turning it off immediately releases
+an idle hover and leaves the notch available to other apps. Keyboard shortcuts and active Sidekick
+panels, questions and messages keep their normal behavior; no restart is needed.
 
 **Permissions & Health.** The health board: a "Checking your Sentient…" line during the first probe
 (the codex login check shells out), then rows cascading in. ON-DEVICE INTELLIGENCE: Full Disk Access

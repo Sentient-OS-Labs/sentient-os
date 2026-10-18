@@ -215,7 +215,9 @@ struct SidekickSelectableMarkdown: NSViewRepresentable {
         view.isRichText = true; view.importsGraphics = false; view.allowsUndo = false
         view.textContainerInset = .zero; view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.widthTracksTextView = false
-        view.isVerticallyResizable = true
+        // SwiftUI's sizeThatFits owns both dimensions. AppKit autoresizing during a
+        // measurement can invalidate the surrounding scroll layout before it settles.
+        view.isVerticallyResizable = false; view.isHorizontallyResizable = false
         view.minSize = .zero; view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         view.delegate = view
         view.linkTextAttributes = [.foregroundColor: NSColor(white: 0.88, alpha: 1), .underlineStyle: NSUnderlineStyle.single.rawValue]
@@ -232,7 +234,7 @@ struct SidekickSelectableMarkdown: NSViewRepresentable {
             view.dismissSelectionReply()
         }
         view.onReply = onReply; view.onReplyToMessage = onReplyToMessage; view.onSelectionChange = onSelectionChange
-        view.source = source; view.fragment = fragment; view.isHorizontallyResizable = !wrapping
+        view.source = source; view.fragment = fragment
         guard view.rendered != fragment.attributed || view.style != style else { return }
         let sameText = view.string == fragment.text
         let selection = view.selectedRange()
@@ -254,7 +256,8 @@ struct SidekickSelectableMarkdown: NSViewRepresentable {
                 options: [.usesLineFragmentOrigin, .usesFontLeading]).width
             width = max(1, ceil(natural) + 2)
         }
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        let size = NSSize(width: width, height: .greatestFiniteMagnitude)
+        if container.containerSize != size { container.containerSize = size }
         layout.ensureLayout(for: container)
         let height = max(ceil(style.pointSize * 1.25), ceil(layout.usedRect(for: container).height) + 1)
         return CGSize(width: width, height: height)

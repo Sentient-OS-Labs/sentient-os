@@ -590,6 +590,37 @@ nonisolated final class SidekickConversationStore: @unchecked Sendable {
         }
     }
 
+    /// A bounded activity window, independent of transcript pagination. Active work follows
+    /// the latest window; explicit before/after cursors let readers inspect older steps without
+    /// loading every operation or losing their place when more work arrives.
+    func activityPage(taskID: UUID, before: Int64? = nil, after: Int64? = nil,
+                      limit: Int = 40) throws -> TranscriptPage {
+        try locked {
+            try readSnapshot {
+                guard before == nil || after == nil, before.map({ $0 >= 0 }) ?? true,
+                      after.map({ $0 >= 0 }) ?? true else { throw Failure.invalidWatermark }
+                let generation = try state().generation
+                guard limit > 0 else { return TranscriptPage(generation: generation, records: [], hasEarlier: false, hasLater: false) }
+                let direction = after == nil ? "DESC" : "ASC"
+                let clause = before != nil ? " AND sequence < ?" : (after != nil ? " AND sequence > ?" : "")
+                var values: [Value] = [.text(taskID.uuidString)]
+                if let cursor = before ?? after { values.append(.integer(cursor)) }
+                values.append(.integer(Int64(min(limit, Self.maximumTranscriptPageSize))))
+                let selected = try queryRecords("SELECT sequence, payload FROM events WHERE task_id = ? AND kind = 'activity'" + clause + " ORDER BY sequence " + direction + " LIMIT ?", values)
+                let records = after == nil ? Array(selected.reversed()) : selected
+                let low = records.first?.sequence ?? after ?? 0
+                let high = records.last?.sequence ?? before ?? Int64.max
+                let earlierComparison = records.isEmpty && after != nil ? " <= " : " < "
+                let laterComparison = records.isEmpty && before != nil ? " >= " : " > "
+                let earlier = try integer("SELECT EXISTS(SELECT 1 FROM events WHERE task_id = ? AND kind = 'activity' AND sequence" + earlierComparison + "?)",
+                    [.text(taskID.uuidString), .integer(low)]) != 0
+                let later = try integer("SELECT EXISTS(SELECT 1 FROM events WHERE task_id = ? AND kind = 'activity' AND sequence" + laterComparison + "?)",
+                    [.text(taskID.uuidString), .integer(high)]) != 0
+                return TranscriptPage(generation: generation, records: records, hasEarlier: earlier, hasLater: later)
+            }
+        }
+    }
+
     /// One indexed row for the live notch; never load a task's full activity history.
     func latestActivity(taskID: UUID) throws -> Record? {
         try locked {

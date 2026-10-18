@@ -26,6 +26,7 @@ struct BriefingCard: View {
     var onOpenEnvelope: () -> Void
     var liveLines: [String] = []       // real cards: codex's live play-by-play (empty → demo theater)
     var onStop: (() -> Void)? = nil    // real cards: the per-card STOP
+    var onOpenConversation: (() -> Void)? = nil
     var fireDimmed = false             // one task at a time: another task is running → the CTA waits
     var cardWidth: CGFloat = BriefingCard.width
     var previewBodyLines = 5
@@ -93,7 +94,11 @@ struct BriefingCard: View {
             case .offer:
                 offerFace.transition(.blurReplace)
             case .working(let visible):
-                workingFace(visible).transition(.blurReplace)
+                if let onOpenConversation {
+                    conversationFace(open: onOpenConversation).transition(.blurReplace)
+                } else {
+                    workingFace(visible).transition(.blurReplace)
+                }
             case .done:
                 doneFace.transition(.blurReplace)
             }
@@ -169,6 +174,22 @@ struct BriefingCard: View {
                 .font(.system(size: 20, design: .serif)).foregroundStyle(.white.opacity(0.85))
                 .padding(.top, 8)
             workLogBody(visible).padding(.top, 10)
+        }
+    }
+
+    private func conversationFace(open: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(briefing.title)
+                .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
+                .lineLimit(previewTitleLines)
+            Button(action: open) {
+                Label("View in chat", systemImage: "arrow.up.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Ink.bright)
+                    .padding(.vertical, 6).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("proactive.openChat.\(briefing.id)")
         }
     }
 

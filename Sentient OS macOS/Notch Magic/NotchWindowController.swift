@@ -60,6 +60,7 @@ final class NotchWindowController {
     /// The hardware notch cutout in screen coords — the hover ENTRY zone, cached so the per-mouse-move
     /// idle check is a bare rect test (recomputed only on build + display changes). `.null` = no notch.
     private var hoverEntryRect: NSRect = .null
+    private var notchClickEnabled = NotchPreferences.clickEnabled()
 
     /// Extra room around the largest notch state so the morph's bounce-overshoot + the glow bloom never
     /// clip at the fixed window's edge. The notch is centered + top-anchored inside this canvas.
@@ -504,7 +505,7 @@ final class NotchWindowController {
         }
         // notchButtonAvailable: during onboarding, before the film's notch beat, a click would do
         // NOTHING — so the swell stays off too (a button must never tease a dead click).
-        guard !hovering, coordinator.phase == .hidden, coordinator.notchButtonAvailable,
+        guard notchClickEnabled, !hovering, coordinator.phase == .hidden, coordinator.notchButtonAvailable,
               hoverEntryRect.contains(location) else { return }
         beginHover()
     }
@@ -515,6 +516,7 @@ final class NotchWindowController {
     /// notch-less Mac — gets `.null` (matches nothing). The rect extends 2pt past the screen's top
     /// edge so a cursor pinned at the very top still counts.
     private func refreshHoverEntryRect() {
+        guard notchClickEnabled else { hoverEntryRect = .null; return }
         if coordinator.run.recovery.isPending, let screen = activeScreen() {
             let size = Self.metrics(for: screen).size(for: .hidden)
             hoverEntryRect = NSRect(x: screen.frame.midX - size.width / 2,
@@ -548,7 +550,7 @@ final class NotchWindowController {
     /// hardware silhouette — black over the black cutout, so its arrival is invisible — then springs
     /// to the grown shape: the dismiss retract-merge trick, played in reverse.
     private func beginHover() {
-        guard panel != nil else { return }
+        guard notchClickEnabled, panel != nil else { return }
         if coordinator.run.recovery.isPending {
             if coordinator.run.recovery.reopen() { return }
         }
@@ -603,6 +605,13 @@ final class NotchWindowController {
             })
         }
         add(nc, NSApplication.didChangeScreenParametersNotification) { [weak self] in self?.reposition() }
+        add(nc, .notchInteractionChanged) { [weak self] in
+            guard let self else { return }
+            self.notchClickEnabled = NotchPreferences.clickEnabled()
+            if !self.notchClickEnabled { self.endHover() }
+            self.refreshHoverEntryRect()
+            self.applyPhase()
+        }
         add(ws, NSWorkspace.activeSpaceDidChangeNotification) { [weak self] in self?.reposition() }
         add(ws, NSWorkspace.didWakeNotification) { [weak self] in self?.reposition() }
         add(ws, NSWorkspace.didActivateApplicationNotification) { [weak self] in

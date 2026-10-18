@@ -38,9 +38,9 @@ struct SpinningLogo: View {
     }()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: paused)) { ctx in
+        TimelineView(.animation(minimumInterval: fast ? 1.0 / 60.0 : 1.0 / 30.0, paused: paused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            let angle = anchorAngle + (t - anchorTime) / Self.period(fast: fast) * 360
+            let angle = anchorAngle + (paused ? 0 : (t - anchorTime) / Self.period(fast: fast) * 360)
             let spectrum = AngularGradient(colors: Self.bandStops, center: .center, angle: .degrees(angle))
             ZStack {
                 // Big, bright colored neon glow — several ADDITIVE passes (wide → tight) so it really reads.
@@ -64,7 +64,12 @@ struct SpinningLogo: View {
         .transaction { $0.animation = nil }
         .onChange(of: fast) { oldFast, _ in
             let t = Date().timeIntervalSinceReferenceDate
-            anchorAngle += (t - anchorTime) / Self.period(fast: oldFast) * 360
+            if !paused { anchorAngle += (t - anchorTime) / Self.period(fast: oldFast) * 360 }
+            anchorTime = t
+        }
+        .onChange(of: paused) { wasPaused, _ in
+            let t = Date().timeIntervalSinceReferenceDate
+            if !wasPaused { anchorAngle += (t - anchorTime) / Self.period(fast: fast) * 360 }
             anchorTime = t
         }
         .allowsHitTesting(false)

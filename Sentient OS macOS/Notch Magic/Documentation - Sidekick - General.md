@@ -92,6 +92,8 @@ fallback. A refusal from either source wins over a contradictory DONE. Without e
 outcome remains unconfirmed; saving a plain message or exiting zero alone never means success.
 Substantive tools, new provider legs and questions invalidate earlier structured completion claims.
 Failed/cancelled providers and connector action-evidence checks still control the actual outcome.
+Visible final answers omit a standalone terminal STATUS protocol line. Quoted and code examples
+remain intact, and this display cleanup does not create or alter a completion claim.
 
 `setPhase` bumps a token that every delayed transition checks, so a stale timer can never clobber a
 newer phase.
@@ -127,6 +129,11 @@ labels and cached app icons used by chat. Its observable conversation projection
 latest-activity row for the active task; it never scans the full activity history. Caption changes
 blur-dissolve (fade with Reduce Motion). Agent narration, connection notices, read-back and memory
 status retain their existing priority. Ending/resetting a task clears its live activity projection.
+
+The notch always uses the full `SpinningLogo` brand mark, including idle and reduced-motion states.
+It rotates slowly before work (13 seconds per turn, 30 Hz) and faster while running (2 seconds,
+60 Hz). Hidden, Reduce Motion and Low Power states pause the same artwork rather than substituting
+a different ring/dot design. Pausing/resuming retains the current angle.
 
 Both ChatGPT and Claude computer runs emit activity through `ComputerUseStream`; Claude's bridge
 provides narration only. `SidekickActivityLab` (`SENTIENT_SELFTEST=sidekickbackend`,

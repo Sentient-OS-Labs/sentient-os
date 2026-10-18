@@ -54,10 +54,12 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               markdown.utf8.count <= 65_536 else { throw Failure.invalidMessage }
         guard completion == nil || kind == .answer else { throw Failure.invalidCompletion }
+        let visibleText = kind == .answer ? Self.answerText(markdown) : markdown
+        guard !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalidMessage }
         if let receipt = deliveredMessages[id] {
             guard try store.generation == generation else { throw SidekickConversationStore.Failure.staleGeneration }
             guard receipt.completion == completion, let original = try store.record(id: id),
-                  original.event.text == markdown, original.event.messageKind == kind,
+                  original.event.text == visibleText, original.event.messageKind == kind,
                   original.event.priority == priority else { throw SidekickConversationStore.Failure.duplicateEvent(id) }
             // A replay acknowledges the original save without restoring an outcome claim
             // invalidated by subsequent work or creating a different timestamp.
@@ -66,7 +68,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         // An attempted replacement final answer supersedes the old claim even if this
         // write fails. A stale DONE must never survive a failed correction to could_not.
         if kind == .answer { recordedCompletion = nil }
-        _ = try append(Event(id: id, taskID: taskID, kind: .assistantMessage, text: markdown,
+        _ = try append(Event(id: id, taskID: taskID, kind: .assistantMessage, text: visibleText,
                              messageKind: kind, priority: priority))
         deliveredMessages[id] = MessageReceipt(completion: completion)
         if kind == .answer {
@@ -76,7 +78,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
             let pending = tools.values.contains { $0.status == .started && !Self.isBookkeeping($0.name) }
             switch pending ? nil : completion {
             case .done: recordedCompletion = .done
-            case .couldNot: recordedCompletion = .couldNot(reason: Self.bounded(Self.answerText(markdown), bytes: 2048))
+            case .couldNot: recordedCompletion = .couldNot(reason: Self.bounded(visibleText, bytes: 2048))
             case nil: recordedCompletion = nil
             }
         }
@@ -203,7 +205,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
             events.append(Event(id: "checkpoint:\(taskID)", taskID: taskID, kind: .checkpoint, text: checkpoint))
         }
         if !answerDelivered, outcome != .stopped && outcome != .interrupted {
-            let cleaned = outcome == .success ? Self.answerText(finalText) : ""
+            let cleaned = outcome == .success ? Self.answerText(finalText).trimmingCharacters(in: .whitespacesAndNewlines) : ""
             let text = cleaned.isEmpty ? status : cleaned
             events.append(Event(id: "fallback:\(taskID)", taskID: taskID, kind: .assistantMessage,
                                 text: Self.bounded(text, bytes: 65_536), messageKind: .answer, priority: .high))
@@ -239,14 +241,45 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         return local && ["describe_task_usage", "message_user", "read_history", "search_history"].contains(leaf)
     }
 
+    /// Remove only a standalone terminal protocol line. Models occasionally include their
+    /// final STATUS in message_user as well as the CLI reply; it is bookkeeping, not UI text.
+    /// Literal examples inside quotes, inline code, indented code or an open fence stay exact.
+    /// No-marker messages retain their original whitespace and Markdown unchanged.
     static func answerText(_ raw: String) -> String {
-        var lines = raw.components(separatedBy: .newlines)
-        while lines.last?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { lines.removeLast() }
-        if let last = lines.last, last.trimmingCharacters(in: .whitespaces).range(
-            of: #"^STATUS:\s*(DONE|COULD_NOT)(?:\s*[-:—–].*)?$"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            lines.removeLast()
+        let lines = raw.components(separatedBy: "\n")
+        guard let last = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return raw }
+        let candidate = lines[last]
+        let indentation = candidate.prefix { $0 == " " || $0 == "\t" }
+        guard indentation.count <= 3, !indentation.contains("\t"),
+              candidate.trimmingCharacters(in: .whitespacesAndNewlines).range(
+                of: #"^STATUS:\s*(DONE|COULD_NOT)(?:\s*[-:—–].*)?$"#,
+                options: [.regularExpression, .caseInsensitive]) != nil else { return raw }
+
+        var fence: (marker: Character, length: Int)?
+        for line in lines[..<last] {
+            let indentation = line.prefix { $0 == " " || $0 == "\t" }
+            guard indentation.count <= 3, !indentation.contains("\t") else { continue }
+            var body = String(line.dropFirst(indentation.count))
+            // Fenced examples may also be the contents of a list item. Treat uncertainty
+            // conservatively: retaining a literal is preferable to erasing the user's code.
+            if fence == nil, let marker = body.range(of: #"^(?:[-+*]|[0-9]{1,9}[.)]) +"#, options: .regularExpression) {
+                body.removeSubrange(marker)
+            }
+            guard let marker = body.first, marker == "`" || marker == "~" else { continue }
+            let length = body.prefix { $0 == marker }.count
+            guard length >= 3 else { continue }
+            let rest = body.dropFirst(length)
+            if let open = fence {
+                if marker == open.marker, length >= open.length,
+                   rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { fence = nil }
+            } else if marker == "~" || !rest.contains("`") {
+                fence = (marker, length)
+            }
         }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard fence == nil else { return raw }
+        var content = Array(lines[..<last])
+        while content.last?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { content.removeLast() }
+        return content.joined(separator: "\n")
     }
 
     static func bounded(_ text: String, bytes: Int) -> String {

@@ -97,7 +97,7 @@ Task) records nothing.
 
 ## Where it surfaces
 
-- **The home** deals real cards from `ProactiveResearch.latest()` (`Views/HomeView.swift`, `ForYouModel`): editable drafts, the LLM-written fire button, live streamed progress, a per-card STOP; a fired card flies away and is removed from the persisted set; a failed one returns to the offer state for edit and retry. Any fireable card fire ADOPTS Sidekick's shared run, so the notch lights with the card's title, `CommandRunModel.isRunning` is the app-wide one-task-at-a-time lock, and every STOP surface reaches it. Research cards fire nothing and stay quiet.
+- **The home** deals real cards from `ProactiveResearch.latest()` (`Views/HomeView.swift`, `ForYouModel`): editable drafts and the LLM-written action button. Clicking an executable action immediately records the reviewed request, adopts Sidekick's shared run and opens chat, before evidence or permission checks await. Progress, questions, Stop and the final response live in chat; reopening the proactive dock shows a compact **View in chat** link on the active card. Success removes the consumed card from the current and persisted decks; failure or cancellation keeps it available. The original executor, exact edited content/recipient, connector policy and evidence rechecks remain in force. `CommandRunModel.isRunning` is the app-wide one-task lock, and task ownership survives leaving Home. Research cards remain read-only; demo decks keep their synthetic theater.
 - **Dev Tools:** "proactive system" (part 1), "proactive RESEARCH + PREPARE" (part 2), the "PROACTIVE · EXECUTE" window (part 3 with real FIRE buttons), and "VIEW ACTION ITEMS".
 
 ## The gift letter (`GiftLetter.generate`)

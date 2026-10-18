@@ -54,6 +54,7 @@ struct AnalysisPopover: View {
     // The overnight run's battery opt-in — the production scheduler key, so the 3 AM gate and this
     // switch are one truth. Default off: AC-only unless the user says otherwise.
     @AppStorage(OvernightScheduler.allowBatteryKey) private var overnightOnBattery = false
+    @AppStorage(OvernightScheduler.minutesKey) private var overnightMinutes = OvernightScheduler.defaultMinutes
 
     @State private var vault: (notes: Int, domains: Int)?
     @State private var hasBattery = false   // desktop Macs hide the battery row entirely
@@ -151,8 +152,8 @@ struct AnalysisPopover: View {
                 GridRow {
                     MonoCaps("Next run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
                     footerValue(overnightOnBattery
-                        ? "Tonight at \(Self.overnightTime), if Sentient's open in the menu bar; battery's fine above \(PowerState.batteryFloorPercent)%"
-                        : "Tonight at \(Self.overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
+                        ? "Tonight at \(overnightTime), if Sentient's open in the menu bar; battery's fine above \(PowerState.batteryFloorPercent)%"
+                        : "Tonight at \(overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
                 }
             }
         }
@@ -181,10 +182,9 @@ struct AnalysisPopover: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The scheduler's configured time-of-day ("3 AM"; "3:15 AM" off the hour) — live, so a dev
-    /// override of the overnight time shows the truth.
-    private static var overnightTime: String {
-        let minutes = OvernightScheduler.configuredMinutes
+    /// Matches the saved wake time, including edits while this popover is mounted.
+    private var overnightTime: String {
+        let minutes = OvernightScheduler.validatedMinutes(overnightMinutes)
         var comps = DateComponents(); comps.hour = minutes / 60; comps.minute = minutes % 60
         let f = DateFormatter(); f.dateFormat = minutes % 60 == 0 ? "h a" : "h:mm a"
         return f.string(from: Calendar.current.date(from: comps) ?? Date())

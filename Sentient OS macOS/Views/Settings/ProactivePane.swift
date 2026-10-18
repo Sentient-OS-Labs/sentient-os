@@ -15,6 +15,7 @@ import SwiftUI
 struct ProactivePane: View {
     @AppStorage(CustomInstructions.proactiveKey) private var proactiveInstructions = ""
     @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
+    @AppStorage(NotchPreferences.clickEnabledKey) private var notchClickEnabled = true
     @State private var memoryText = ""
     @State private var memoryError: String?
     @State private var hasUnsavedMemoryEdit = false
@@ -33,6 +34,11 @@ struct ProactivePane: View {
                 SettingsGroup(label: "Sidekick", inset: 0) {
                     VStack(spacing: 0) {
                         ShortcutSetting()
+                        SettingsHairline(opacity: 0.10)
+                        SettingToggleLine(title: "Open Sidekick by clicking the notch",
+                            sub: "Turn off to leave the idle notch to apps like Alcove or Droppy. Your keyboard shortcut still works.",
+                            isOn: $notchClickEnabled)
+                            .accessibilityIdentifier("settings.notchClickEnabled")
                         SettingsHairline(opacity: 0.10)
                         VStack(alignment: .leading, spacing: 12) {
                             instructionLabel("Custom instructions", detail: "Sidekick learns your preferences as you work. Edit its instructions anytime.")
@@ -79,6 +85,9 @@ struct ProactivePane: View {
             }
         }
         .onAppear(perform: refreshMemory)
+        .onChange(of: notchClickEnabled) { _, _ in
+            NotificationCenter.default.post(name: .notchInteractionChanged, object: nil)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshMemory()
         }

@@ -66,6 +66,19 @@ struct SidekickComposer: View {
                         .accessibilityLabel(answering ? "Answer Sidekick" : "Message Sidekick")
                         .accessibilityIdentifier("sidekick.composer")
                         .help("Return to send. Shift-Return for a new line.")
+                    if coordinator.run.isRunning && !answering {
+                        Button(action: coordinator.stop) {
+                            Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(SidekickStyle.ink)
+                                .frame(width: 36, height: 36)
+                                .background(.white.opacity(0.10), in: Circle())
+                                .overlay(Circle().strokeBorder(.white.opacity(0.18)))
+                        }
+                        .buttonStyle(SidekickPressStyle())
+                        .accessibilityLabel("Stop current task")
+                        .accessibilityIdentifier("sidekick.stop")
+                        .help("Stop")
+                    } else {
                     Button(action: send) {
                         Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(canSend ? SidekickStyle.base : .white.opacity(0.30))
@@ -74,22 +87,29 @@ struct SidekickComposer: View {
                             .overlay(Circle().strokeBorder(.white.opacity(canSend ? 0.6 : 0.09)))
                             .background {
                                 if canSend {
-                                    Circle().fill(AngularGradient(colors: GlowHalo.stops, center: .center))
-                                        .frame(width: 37, height: 37).blur(radius: 10)
-                                        .opacity(focused ? 0.30 : 0.12)
+                                    ZStack {
+                                        Circle().fill(AngularGradient(colors: GlowHalo.stops, center: .center))
+                                            .frame(width: 48, height: 48).blur(radius: 11)
+                                            .opacity(focused ? 0.75 : 0.52)
+                                        Circle().stroke(AngularGradient(colors: GlowHalo.stops, center: .center), lineWidth: 3)
+                                            .frame(width: 39, height: 39).blur(radius: 1.5)
+                                            .opacity(0.95)
+                                    }
+                                    .saturation(1.25).allowsHitTesting(false)
                                 }
                             }
                     }
                     .buttonStyle(SidekickPressStyle()).disabled(!canSend)
                     .accessibilityLabel(answering ? "Send answer" : "Send message")
                     .accessibilityIdentifier("sidekick.send")
-                    .help(coordinator.run.isRunning && !answering ? "You can send when Sidekick finishes" : "Send (Return)")
+                    .help("Send (Return)")
+                    }
                 }
-                if answering || coordinator.run.isRunning {
+                if answering {
                 HStack(spacing: 7) {
-                    Image(systemName: answering ? "bubble.left.and.bubble.right" : "circle.dotted")
+                    Image(systemName: "bubble.left.and.bubble.right")
                         .foregroundStyle(SidekickStyle.accent.opacity(0.8))
-                    Text(answering ? "Your answer continues this task" : "Working on it. You can draft your next message.")
+                    Text("Your answer continues this task")
                         .lineLimit(1)
                     Spacer()
                     if coordinator.run.isRunning {

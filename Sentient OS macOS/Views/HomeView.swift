@@ -198,14 +198,6 @@ struct HomeView: View {
             caution = OvernightCaution.latest()
             probeHealth()
         }
-        .alert("Analyze again before using this card", isPresented: Binding(
-            get: { model.mailEvidenceIssue != nil },
-            set: { if !$0 { model.mailEvidenceIssue = nil } }
-        )) {
-            Button("OK", role: .cancel) { model.mailEvidenceIssue = nil }
-        } message: {
-            Text(model.mailEvidenceIssue ?? "")
-        }
         .onDisappear { conversation.isVisible = false }
         .onChange(of: presentation.surface) { _, surface in
             if surface == .suggestions { overviewPull = 0; gatheringFromScroll = false }
@@ -662,6 +654,7 @@ struct HomeView: View {
                         openLetter(current.b)
                     },
                     onStop: { model.stopRun(item.element.id) },
+                    onOpenConversation: showConversation,
                     onFling: { model.dismiss(item.element.id, toward: $0) })
             }
             if !kbOnly && !inConversation && layout.pageCount > 1 {
@@ -1024,10 +1017,9 @@ final class ForYouModel {
     }
 
     var entries: [Entry] = []
-    var mailEvidenceIssue: String?
     /// The app-lifetime command coordinator (HomeView sets it on appear) — the notch and the
-    /// app-wide one-task lock. A computer-use card fire ADOPTS its run (lighting the notch and
-    /// locking out Sidekick/the bar/other cards); gmail/calendar/research fires ignore it.
+    /// app-wide one-task lock. Every executable card adopts the shared conversation run;
+    /// its setup, progress, questions and result all belong to chat.
     weak var coordinator: CommandCoordinator?
     /// Bumped per appearance — in-flight Tasks from a previous visit check it and bail,
     /// so a re-deal can never be mutated by stale theater/dismiss timers.
@@ -1040,8 +1032,6 @@ final class ForYouModel {
             beginVisit(deck: deck)
         }
     }
-    /// Live real-card fires, keyed by card id, so a card's STOP can cancel exactly its run.
-    private var runTasks: [String: Task<Void, Never>] = [:]
     /// Editor values waiting for the existing autosave. Keep them separate from the saved
     /// action so reading Sidekick context cannot change the editor's identity or its fields.
     private var draftPreviews: [String: (content: String, recipient: String)] = [:]
@@ -1072,7 +1062,6 @@ final class ForYouModel {
         loadedBriefing = UserDefaults.standard.object(forKey: ProactiveCycle.lastCycleKey) as? Date
         visit += 1
         let v = visit
-        runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         draftPreviews.removeAll()
         switch deck {
         case .real:
@@ -1108,12 +1097,10 @@ final class ForYouModel {
         }
     }
 
-    /// Uninstall's quiet home: cancel any running theater and take every card off the table.
+    /// Uninstall's quiet home: invalidate theater timers and take every card off the table.
     func clear() {
         visit += 1
-        runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         entries.removeAll()
-        mailEvidenceIssue = nil
         draftPreviews.removeAll()
     }
 
@@ -1127,29 +1114,13 @@ final class ForYouModel {
     /// STOP); a demo card plays the briefing's hard-coded `workLog` theater for visual feedback.
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
-        if let action = e.action {   // real card → fire for real (behind the first-use permission gate)
-            // The app-wide one-task lock (every fireable channel): while ANY task owns the run — a
-            // Sidekick/command-bar run or another card — a new fire can't start (the CTA is
-            // dimmed; this is the backstop for a click that lands anyway). Only research is
-            // exempt (nothing fires).
-            if ProactiveExecutor.isFireable(action), coordinator?.run.isRunning == true {
-                Log("card fire blocked — a task is already running (one at a time)")
-                return
-            }
-            if action.mailEvidence != nil || action.appleMailReferences != nil {
-                let v = visit
-                update(id) { $0.phase = .working(0); $0.liveLines = ["Checking email evidence…"] }
-                runTasks[id] = Task { [weak self] in
-                    let issue = await ProactiveExecutor.mailEvidenceIssue(action)
-                    guard let self, self.visit == v, !Task.isCancelled else { return }
-                    self.runTasks[id] = nil
-                    self.update(id) { $0.phase = .offer; $0.liveLines = [] }
-                    if let issue { self.mailEvidenceIssue = issue; return }
-                    self.startWithPermissions(id, action)
-                }
-            } else {
-                startWithPermissions(id, action)
-            }
+        if let action = e.action {
+            guard ProactiveExecutor.isFireable(action), coordinator?.run.isRunning != true else { return }
+            // Include a live edit even if its debounced persistence has not fired yet.
+            let reviewed = draftPreviews[id].map {
+                Self.replacing(action, content: $0.content, recipient: $0.recipient)
+            } ?? action
+            runReal(id, reviewed)
             return
         }
         let v = visit
@@ -1171,87 +1142,72 @@ final class ForYouModel {
         }
     }
 
-    private func startWithPermissions(_ id: String, _ action: PreparedAction) {
-        if ComputerUseGate.shared.intercept({ [weak self] in self?.runReal(id, action) }) { return }
-        runReal(id, action)
-    }
-
-    /// Fire a REAL card: route its action through the executor, stream codex's play-by-play into the
-    /// card (replacing the demo theater), and on success fly it away + drop it from the persisted set
-    /// so a re-deal won't show it again. `ProactiveExecutor.fire` reads `action.preparedContent`, so a
-    /// draft the user edited in the letter is exactly what gets sent.
-    ///
-    /// Every fireable fire (computer, gmail, calendar) is also ADOPTED by the notch
-    /// (`beginExternalRun`): the shared run lights up (the one-task lock engages), the card's lines
-    /// tee into it, and every exit — success, failure, ANY stop — completes the adoption exactly
-    /// once, here, when `fire` unwinds (it always returns, even cancelled). `beginExternalRun`'s
-    /// refusal doubles as the re-check for a fire the permission gate held while another task
-    /// started.
+    /// Persist the selected request and open chat before any setup or execution awaits.
+    /// The app-owned run keeps the exact reviewed artifact and executor policy; the card
+    /// is only a suggestion, never a second progress surface or owner of the running task.
     private func runReal(_ id: String, _ action: PreparedAction, retryContext: String = "") {
         let v = visit
-        let external = ProactiveExecutor.isFireable(action)
-        if external {
-            let fallback: String = switch action.method {
-            case .gmail:    "Sending your email…"
-            case .calendar: "Updating your calendar…"
-            case .mcp:      "Working through your \(action.methodTarget.map { ConnectorRegistry.displayName(slug: $0) } ?? "connected service") connector…"
-            default:        "Working on your Mac…"
-            }
-            guard let coordinator,
-                  coordinator.beginExternalRun(
-                      caption: entry(id)?.b.title ?? fallback,
-                      request: SidekickCardContext.taskSnapshot(action),
-                      retryContext: retryContext,
-                      onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
-                      onStopRequest: { [weak self] in self?.stopRun(id) })
-            else { Log("card fire blocked at launch — a task already owns the run"); return }
-        }
+        guard ProactiveExecutor.isFireable(action), let coordinator,
+              coordinator.beginExternalRun(
+                  caption: action.title,
+                  request: SidekickCardContext.taskSnapshot(action),
+                  retryContext: retryContext,
+                  onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
+                  onStopRequest: { [weak self] in self?.stopRun(id) }) else { return }
+        let adoptedRun = coordinator.run
+        let generation = adoptedRun.runID
+        let interaction = adoptedRun.interaction
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
+        adoptedRun.conversation.requestNavigation()
         InviteProgram.shared.record(.proactive)
-        let adoptedRun = external ? coordinator?.run : nil
-        let generation = adoptedRun?.runID
-        let interaction = adoptedRun?.interaction
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
-                Task { @MainActor in
-                    if external { adoptedRun?.externalPush(line, runID: generation) }
-                    guard self.visit == v, !external || adoptedRun?.runID == generation else { return }
-                    self.appendLine(id, line)                                  // the card (raw)
+                Task { @MainActor in adoptedRun.externalPush(line, runID: generation) }
+            }
+            let outcome: ProactiveExecutor.Outcome
+            do {
+                // Validate before setup, then let the executor recheck immediately before acting.
+                if let issue = await ProactiveExecutor.mailEvidenceIssue(action) {
+                    outcome = .notFireable(issue)
+                } else {
+                    try Task.checkCancellation()
+                    try await ComputerUseGate.shared.waitUntilReady()
+                    try Task.checkCancellation()
+                    outcome = await SidekickInteraction.$current.withValue(interaction) {
+                        await ProactiveExecutor.shared.fire(action, progress: progress)
+                    }
                 }
+            } catch {
+                guard adoptedRun.runID == generation else { return }
+                let stopped = Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled
+                let message = (error as? LocalizedError)?.errorDescription ?? "Sidekick couldn’t finish setup. Try again."
+                if !stopped { Log("card setup failed — \(ErrorLabel(error))") }
+                adoptedRun.completeExternal(stopped ? .stopped : .failed,
+                    line: stopped ? "■ stopped" : "✗ \(message)", runID: generation)
+                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
+                return
             }
-            let outcome = await SidekickInteraction.$current.withValue(interaction) {
-                await ProactiveExecutor.shared.fire(action, progress: progress)
-            }
-            let adopted = adoptedRun
-            if external, adopted?.runID != generation { return }
-            if !external { self.runTasks[id] = nil }
+            guard adoptedRun.runID == generation else { return }
             guard !Task.isCancelled else {
-                adopted?.completeExternal(.stopped, line: "■ stopped", runID: generation)
+                adoptedRun.completeExternal(.stopped, line: "■ stopped", runID: generation)
                 if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
                 return
             }
             switch outcome {
             case .fired(let answer):
                 self.removeFromLatest(id)
-                adopted?.completeExternal(.success, line: "✓ done", finalText: answer, runID: generation)
+                adoptedRun.completeExternal(.success, line: "✓ done", finalText: answer, runID: generation)
                 guard self.visit == v else { return }
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { self.update(id) { $0.phase = .done } }
-                try? await Task.sleep(for: .seconds(2.6))
-                guard self.visit == v else { return }
-                self.dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
-                                                height: -CGFloat.random(in: 350...560)))
-            case .notFireable(let m), .failed(let m):
-                adopted?.completeExternal(.failed, line: "✗ \(m)", runID: generation)
-                guard self.visit == v else { return }
-                self.appendLine(id, "✗ \(m)")
-                try? await Task.sleep(for: .seconds(1.4))
-                guard self.visit == v, !external || adopted?.runID == generation else { return }
-                withAnimation { self.update(id) { $0.phase = .offer } }   // back to offer — edit + retry
+                // The answer lives in chat. Retire the consumed suggestion without a second
+                // completion presentation when the user reopens the proactive dock.
+                self.entries.removeAll { $0.id == id }
+                self.draftPreviews[id] = nil
+            case .notFireable(let message), .failed(let message):
+                adoptedRun.completeExternal(.failed, line: "✗ \(message)", runID: generation)
+                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
             }
         }
-        if let adoptedRun {
-            adoptedRun.ownExternalTask(task, cardID: id)
-        } else { runTasks[id] = task }
+        adoptedRun.ownExternalTask(task, cardID: id)
     }
 
     /// STOP a live real-card run: cancel the codex process (CodexCLI honors it) and return to offer.
@@ -1261,20 +1217,6 @@ final class ForYouModel {
     func stopRun(_ id: String) {
         if let run = coordinator?.run, run.isExternal, run.externalCardID == id {
             run.stop(); return
-        }
-        guard let task = runTasks[id] else { return }
-        task.cancel(); runTasks[id] = nil
-        withAnimation { update(id) { $0.liveLines.append("■ stopped"); $0.phase = .offer } }
-    }
-
-    /// Append one live line to a real card (dedup consecutive duplicates; cap the buffer).
-    private func appendLine(_ id: String, _ line: String) {
-        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        update(id) {
-            guard $0.liveLines.last != t else { return }   // item.started + .completed can repeat
-            $0.liveLines.append(t)
-            if $0.liveLines.count > 40 { $0.liveLines.removeFirst($0.liveLines.count - 40) }
         }
     }
 
@@ -1366,6 +1308,7 @@ private struct DealtCard: View {
     var onDetail: () -> Void
     var onOpenEnvelope: () -> Void
     var onStop: () -> Void
+    var onOpenConversation: () -> Void
     var onFling: (CGSize) -> Void
 
     @State private var drag: CGSize = .zero
@@ -1381,6 +1324,7 @@ private struct DealtCard: View {
         BriefingCard(briefing: entry.b, phase: entry.phase,
                      onOffer: onOffer, onDetail: onDetail, onOpenEnvelope: onOpenEnvelope,
                      liveLines: entry.liveLines, onStop: entry.action != nil ? onStop : nil,
+                     onOpenConversation: entry.action != nil ? onOpenConversation : nil,
                      fireDimmed: fireDimmed, cardWidth: cardWidth,
                      previewBodyLines: previewBodyLines, previewTitleLines: previewTitleLines,
                      onDismiss: { onFling(CGSize(width: -100, height: -300)) })

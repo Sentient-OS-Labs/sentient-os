@@ -90,6 +90,53 @@ enum FixtureFailure: Error { case intentional }
         try failed.finish(outcome: .failed, status: "Action verification failed", finalText: "Successfully sent it!\nSTATUS: DONE")
         check(try store.record(id: "fallback:\(failed.taskID)")?.event.text == "Action verification failed", "failed outcome never repeats an unverified success claim")
 
+        // Explicit final delivery must hide protocol machinery without changing literal examples.
+        let finalDelivery = try start()
+        let recap = "## Results\n\nThe recorded work is complete.\n\nSTATUS: DONE — Recapped the recorded test results.\n"
+        _ = try finalDelivery.message(recap, kind: .answer, priority: .high, id: "clean-final-recap", completion: .done)
+        check(try store.record(id: "clean-final-recap")?.event.text == "## Results\n\nThe recorded work is complete.",
+              "message_user final answer excludes terminal STATUS before durable delivery")
+        check(finalDelivery.completionStatus == .done, "display cleanup leaves explicit structured completion intact")
+        _ = try finalDelivery.message(recap, kind: .answer, priority: .high, id: "clean-final-recap", completion: .done)
+        check(try store.records(taskID: finalDelivery.taskID).filter { $0.event.kind == .assistantMessage }.count == 1,
+              "same original final message retry still acknowledges the cleaned save once")
+        _ = try finalDelivery.message("I could not verify it.\nSTATUS: COULD_NOT — Not verified", kind: .answer,
+                                      priority: .normal, id: "clean-final-refusal", completion: .couldNot)
+        check(try store.record(id: "clean-final-refusal")?.event.text == "I could not verify it."
+                && finalDelivery.completionStatus == .couldNot(reason: "I could not verify it."),
+              "refusal explanation is clean in both saved answer and typed outcome")
+        let literalExamples = [
+            "A quoted example:\n> STATUS: DONE",
+            "A quoted example:\n> STATUS: COULD_NOT — Missing access",
+            "The literal is `STATUS: DONE`",
+            "'STATUS: DONE'",
+            "Code:\n    STATUS: DONE",
+            "Code:\n\tSTATUS: COULD_NOT — Example",
+            "```text\nSTATUS: DONE\n```",
+            "```text\nSTATUS: DONE", // Unclosed fences must also preserve code.
+            "~~~text\nSTATUS: COULD_NOT — Example",
+            "````text\n```\nSTATUS: DONE", // A shorter fence does not close the outer example.
+            "- ```text\n  STATUS: DONE",
+            "STATUS: DONE\nThis is an explanation after the marker.",
+            "\n  Keep my original whitespace.  \n\n"
+        ]
+        for (index, literal) in literalExamples.enumerated() {
+            let id = "literal-status-\(index)"
+            _ = try finalDelivery.message(literal, kind: .answer, priority: .normal, id: id)
+            check(try store.record(id: id)?.event.text == literal, "literal Markdown/status preserved exactly: \(index)")
+        }
+        let closedCode = "```text\nSTATUS: DONE\n```\n\nSTATUS: DONE — Explained a literal marker"
+        check(SidekickConversationRun.answerText(closedCode) == "```text\nSTATUS: DONE\n```",
+              "real protocol line after closed code is removed while code stays")
+        check(SidekickConversationRun.answerText("~~~text\nSTATUS: DONE\n~~~\nSTATUS: DONE") == "~~~text\nSTATUS: DONE\n~~~",
+              "tilde fence closes before real terminal marker")
+        check(SidekickConversationRun.answerText("    code stays indented\n\nSTATUS: DONE") == "    code stays indented",
+              "removing a marker never strips meaningful leading code indentation")
+        _ = try finalDelivery.message("Progress\nSTATUS: DONE", kind: .update, priority: .normal, id: "literal-update")
+        check(try store.record(id: "literal-update")?.event.text == "Progress\nSTATUS: DONE", "progress updates are not treated as final protocol output")
+        check(rejects { _ = try finalDelivery.message("STATUS: DONE", kind: .answer, priority: .normal) },
+              "protocol-only answer cannot be saved as an empty response")
+
         // A connector's final answer covers that execution, not a subsequent computer leg.
         for provider in ["codex", "claude"] {
             let fallback = try start(), firstStream = UUID(), nextStream = UUID()

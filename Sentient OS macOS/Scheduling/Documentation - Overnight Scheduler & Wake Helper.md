@@ -81,7 +81,7 @@ the home's health banner all gate on this probe, never on files alone.
 
 The loop: ensure the helper is ready (`healthProbe`; DEBUG builds self-install via the password
 installer, Release flags `needsSchedulerSetup` for the setup UI) → `cancelAllWakes` → arm ONE wake for
-the configured time (3:00 AM by default; a dev key can override) → wait, re-arming every ~5 min so the
+the configured time (3:00 AM by default; editable in Settings → System) → wait, re-arming every ~5 min so the
 helper's record stays fresh → run → re-arm for tomorrow.
 
 `runProcessing`: read the selected sources through the shared `SourceSelection.current` (persistent

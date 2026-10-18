@@ -44,6 +44,10 @@ struct SidekickTranscript: View {
         .onChange(of: activeWorkKey, initial: true) { _, key in
             presentation.followActiveWork(key.taskID, generation: key.generation)
         }
+        .onChange(of: active, initial: true) { _, visible in
+            guard visible, conversation.navigationRequest == nil else { return }
+            presentation.resumeFollowing(generation: conversation.generation)
+        }
         .onAppear { presentation.isScrolling = false }
         .onDisappear { presentation.isScrolling = false }
         .task(id: NavigationKey(generation: conversation.generation, request: conversation.navigationRequest)) {
@@ -70,7 +74,10 @@ struct SidekickTranscript: View {
         let display = SidekickTranscriptLayout.rows(presentation.rows)
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                // History is already paged (normally 40, at most 100 records). Stable
+                // measured rows avoid lazy estimated-height gaps when a live disclosure
+                // moves into its final response while the window is hidden.
+                VStack(alignment: .leading, spacing: 18) {
                     if presentation.hasEarlier {
                         pagingButton("Earlier messages", symbol: "arrow.up") {
                             guard let first = presentation.rows.first else { return }
@@ -126,7 +133,17 @@ struct SidekickTranscript: View {
                 .scrollTargetLayout()
             }
             .scrollIndicators(.hidden)
-            .onScrollPhaseChange { _, phase in presentation.isScrolling = phase != .idle }
+            // A final response can acquire its activity height after the explicit scroll
+            // request. Keep followers at the native bottom through those size changes;
+            // deliberate history reading/selection keeps its existing viewport instead.
+            .defaultScrollAnchor(presentation.canFollowLatest ? .bottom : nil, for: .sizeChanges)
+            .onScrollPhaseChange { _, phase, context in
+                // Programmatic smooth scrolling is not a new reading gesture. Use this
+                // phase's actual geometry so a late layout callback cannot re-enable follow.
+                let bottom = context.geometry.contentSize.height - context.geometry.visibleRect.maxY < 70
+                presentation.userScrollChanged(phase == .tracking || phase == .interacting || phase == .decelerating,
+                                               atLatest: bottom)
+            }
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
@@ -134,26 +151,33 @@ struct SidekickTranscript: View {
                     LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16)
                 }
             }
-            .scrollPosition(id: $presentation.scrollID, anchor: .top)
+            // ScrollViewReader owns navigation and live following. A second top-anchored
+            // scrollPosition binding competes with bottom following as row heights change.
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentSize.height - geo.visibleRect.maxY < 70
-            } action: { _, bottom in presentation.atLatest = bottom && !presentation.hasLater }
-            .onChange(of: presentation.scrollRequest) { _, _ in
+            } action: { _, bottom in presentation.viewportChanged(atLatest: bottom) }
+            .task(id: presentation.scrollRequest) {
                 let request = presentation.scrollRequest
-                let target = presentation.navigationTarget
+                let requestedDestination = presentation.navigationTarget
                 let automatic = presentation.scrollIsAutomatic
-                Task { @MainActor in
-                    await Task.yield()
-                    guard request == presentation.scrollRequest, let requestedTarget = target else { return }
-                    let target = SidekickTranscriptLayout.destination(requestedTarget, records: presentation.rows)
-                    guard !automatic || (!presentation.textSelected && !presentation.isScrolling) else { return }
-                    if target == "sidekick-bottom" && !reduced {
-                        withAnimation(.smooth(duration: 0.34)) { proxy.scrollTo(target, anchor: .bottom) }
-                    } else { proxy.scrollTo(target, anchor: target == "sidekick-bottom" ? .bottom : .top) }
-                }
+                let intent = presentation.readingIntentRevision
+                // Activity rows and their expanded viewport measure in the next layout pass.
+                // Coalesce bursts before scrolling to the new actual tail, not its old frame.
+                await Task.yield()
+                do { try await Task.sleep(for: .milliseconds(20)) } catch { return }
+                guard !Task.isCancelled, request == presentation.scrollRequest,
+                      let requestedTarget = requestedDestination else { return }
+                let target = SidekickTranscriptLayout.destination(requestedTarget, records: presentation.rows)
+                guard !automatic || (active && intent == presentation.readingIntentRevision
+                    && presentation.canFollowLatest) else { return }
+                let tail = target == "sidekick-bottom" || target.hasPrefix("sidekick-work-bottom-")
+                if tail && !reduced {
+                    withAnimation(.smooth(duration: 0.28)) { proxy.scrollTo(target, anchor: .bottom) }
+                } else { proxy.scrollTo(target, anchor: tail ? .bottom : .top) }
             }
             .overlay(alignment: .bottom) {
-                if presentation.hasLater || (presentation.newMessages && !presentation.atLatest) {
+                if presentation.hasLater || (presentation.newMessages && !presentation.atLatest)
+                    || (!presentation.followsLatest && presentation.activeWorkTaskID != nil) {
                     Button {
                         Task { await presentation.load(.latest, conversation: conversation) }
                     } label: {

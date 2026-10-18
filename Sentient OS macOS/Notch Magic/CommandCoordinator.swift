@@ -284,6 +284,7 @@ final class CommandCoordinator {
     /// The window controller's gate for the hover affordance: no swell for a button that would
     /// do nothing (pre-beat silence); during the beat and after it, the swell is honest.
     var notchButtonAvailable: Bool {
+        guard NotchPreferences.clickEnabled() else { return false }
         guard doubleTapDemoKeyChanged == nil else { return false }
         return Self.hasCompletedOnboarding || onboardingDemoArmed
             || UserDefaults.standard.bool(forKey: Self.notchDemoPlayedKey)
@@ -610,6 +611,7 @@ final class CommandCoordinator {
     /// the field): the knowledge-base-only aside, then the field. Permissions are checked when
     /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
+        guard NotchPreferences.clickEnabled() else { return }
         guard !run.isClearingChat else { return }
         guard doubleTapDemoKeyChanged == nil else { return }
         if run.recovery.isPending { run.recovery.reopen(); return }

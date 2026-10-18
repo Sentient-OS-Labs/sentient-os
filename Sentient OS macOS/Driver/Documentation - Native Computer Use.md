@@ -21,9 +21,10 @@ tasks neither install nor launch CUA.
 
 ## Installation
 
-The native installer reuses the user's existing Codex home, normally `~/.codex`. It only installs
-`computer-use/Codex Computer Use.app`, including the nested `SkyComputerUseClient.app` and all signed
-resources. ComputerUseSetup also prepares the required Codex CLI, including for Claude users,
+The native installer uses Sentient's private Codex home inside
+`~/Library/Application Support/SentientOS/Private Codex`, independently of the user's `~/.codex`.
+It installs `computer-use/Codex Computer Use.app`, including the nested `SkyComputerUseClient.app`
+and all signed resources. ComputerUseSetup also prepares the required Codex CLI, including for Claude users,
 without requiring a ChatGPT login. The helper installer does not install the desktop app or plugin
 files. It never
 rewrites Codex configuration, skills, notification hooks or authentication.
@@ -54,9 +55,28 @@ than downgraded. The CLI and helper have separate versions; a CLI update does no
 redownload the helper. Sentient's minimum supported helper build is a tested compatibility floor.
 A change to that floor requires a new artifact and runtime check.
 
-An installation receipt under Sentient's Application Support records the helper version, path and
-whether Sentient created the original installation. Uninstall drains both installers and preserves
-the shared Codex home, including the helper. Another Codex installation may be using those files.
+The private runtime manifest pins and verifies the CLI and helper. Uninstall drains installers and
+stops only the helper at Sentient's exact private path; standalone Codex files and credentials remain untouched.
+
+## Competing helper takeover
+
+OpenAI's helper is named **ChatGPT Computer Use** in Activity Monitor, despite its bundle directory
+being **Codex Computer Use.app**. Its identity is `com.openai.sky.CUAService`. A user-started Sidekick
+task automatically force-quits instances of that identity outside Sentient's private path, waits for
+exit, and re-enumerates to catch a concurrent relaunch. It preserves a healthy private helper.
+Takeover and startup retries are bounded; they run before any agent tools and never replay actions.
+
+Passive health refreshes leave other apps' helpers alone and retain the conflict internally instead
+of presenting a permission error or manual-quit instructions. When the user starts a task, the normal
+permission gate resolves the conflict before presenting any setup window. Genuine missing macOS
+permissions still use the existing consent flow. Explicit idle repair also handles a foreign helper,
+while active Sentient task leases prevent repair from terminating their helper.
+
+Sentry breadcrumbs record takeover outcome, attempt count and terminated count, without process paths
+or user content. `test_private_codex_cleanup.py` verifies force-quit, respawn bounds and ownership;
+`test_native_helper_startup.py` exercises the full runtime's shared-startup and launch races.
+`test_native_helper_takeover.py --app <signed Debug app> [--suspend]` verifies the actual foreground
+gate and native capture after starting a competing helper, without a model call or user-app actions.
 
 ## Running a task
 

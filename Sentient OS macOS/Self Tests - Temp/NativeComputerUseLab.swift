@@ -22,7 +22,11 @@ nonisolated enum NativeComputerUseLab {
             "bundlePath": Bundle.main.bundlePath, "pid": ProcessInfo.processInfo.processIdentifier,
             "started": Date().timeIntervalSince1970]
         persist(result)
-        if env["LAB_SKIP_AUTOMATION_PROBE"] == "1" {
+        if command == "helper-takeover" {
+            // AEDeterminePermission can hang on a deliberately suspended foreign helper.
+            // The production gate performs this check after replacing it; preserve that order.
+            result["appleEventsBefore"] = "checked_by_production_gate_after_takeover"
+        } else if env["LAB_SKIP_AUTOMATION_PROBE"] == "1" {
             result["appleEventsBefore"] = "diagnostic probe skipped; OS authorization unchanged"
         } else if command.hasPrefix("claude") || command == "coordinator" {
             result["appleEventsBefore"] = "not_required_for_this_test"
@@ -38,7 +42,7 @@ nonisolated enum NativeComputerUseLab {
         do {
             switch command {
             case "preflight": break
-            case "capture":
+            case "capture", "helper-takeover":
                 // Explicit test-only capture through the current model-free session API.
                 // No production health UI/recovery loop, saved pixels, or model call.
                 let bootstrap = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
@@ -56,6 +60,31 @@ nonisolated enum NativeComputerUseLab {
                 let lease = try await CodexRuntime.sharedRuntimeLease()
                 defer { lease.unlock() }
                 let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+                if command == "helper-takeover" {
+                    let foreign = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+                        .filter { !$0.isTerminated && $0.bundleURL?.standardizedFileURL != configuration.appURL.standardizedFileURL }
+                    guard !foreign.isEmpty else { throw LabError.missingConflict }
+                    result["foreignHelpersBefore"] = foreign.count
+                    await CodexSetup.shared.refreshInstalled()
+                    let gate = ComputerUseGate.shared
+                    gate.refresh()
+                    await gate.awaitAutomationRefresh()
+                    result["passiveConflictHidden"] = gate.nativePermissionError == nil
+                    result["passiveCheckPreservedOtherHelper"] = foreign.allSatisfy { !$0.isTerminated }
+                    persist(result)
+                    // Exactly the preparation used by the real prompt-box task, with all
+                    // existing macOS grants. No model, credential edits or user-app actions.
+                    try await gate.waitUntilReady()
+                    result["foregroundGateReady"] = gate.allRequiredGranted
+                    result["foreignHelpersTerminated"] = foreign.allSatisfy(\.isTerminated)
+                    let own = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration, stoppingConflictingHelpers: true)
+                    let reused = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration, stoppingConflictingHelpers: true)
+                    result["privateHelperReused"] = !own.isTerminated && own.processIdentifier == reused.processIdentifier
+                    result["privateHelperPath"] = own.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL
+                    guard gate.allRequiredGranted, gate.nativePermissionError == nil,
+                          foreign.allSatisfy(\.isTerminated), !own.isTerminated,
+                          own.processIdentifier == reused.processIdentifier else { throw LabError.takeoverFailed }
+                }
                 let task = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: configuration)
                 defer { OpenAIComputerUseRuntime.shared.endTask(task) }
                 let session = try await OpenAIComputerUseSession.open(configuration)
@@ -271,6 +300,6 @@ nonisolated enum NativeComputerUseLab {
     private static func status(_ value: AgentStatus) -> String {
         switch value { case .done: "done"; case .none: "none"; case .couldNot(let reason): "couldNot: " + reason }
     }
-    private enum LabError: Error { case missingPrompt, invalidCapture }
+    private enum LabError: Error { case missingPrompt, invalidCapture, missingConflict, takeoverFailed }
 }
 #endif

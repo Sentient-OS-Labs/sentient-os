@@ -50,7 +50,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
         let env = ProcessInfo.processInfo.environment
         guard env["SENTIENT_SELFTEST"] == "sidekickapp", CommandLine.arguments.count == 1,
               let path = env["LAB_SIDEKICK_ROOT"], path.hasPrefix("/"),
-              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear"].contains(stage),
+              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-stress", "live-workflows"].contains(stage),
               let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = ModelBackend(rawValue: selected), provider != .custom else { throw Failure.configuration }
         let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
@@ -109,6 +109,15 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "reopen": try reopen(c)
             case "compaction": try await compaction(c)
             case "compaction_reopen": try compactionReopen(c)
+            case "live-workflows":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickLiveWorkflowLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-stress":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickTranscriptStressLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-polish":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickPolishLab.run(app: state, root: c.root)) { _, new in new }
             case "ui-clear":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickUILab.runClearChat(app: state, root: c.root)) { _, new in new }
@@ -122,7 +131,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             receipt["failure"] = (error as? Failure)?.rawValue ?? "execution_failure"
             receipt["reason"] = CodexFailureReason.classify(error).rawValue
             if c.stage.hasPrefix("ui") {
-                receipt["ui_failure"] = (error as? SidekickUILab.Failure)?.rawValue ?? "system_or_native_fixture"
+                receipt["ui_failure"] = (error as? SidekickTranscriptStressLab.Failure)?.rawValue ?? (error as? SidekickPolishLab.Failure)?.rawValue ?? (error as? SidekickUILab.Failure)?.rawValue ?? "system_or_native_fixture"
                 receipt["ui_error_domain"] = (error as NSError).domain
                 receipt["ui_error_code"] = (error as NSError).code
                 receipt["ui_screen_locked_at_failure"] = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false

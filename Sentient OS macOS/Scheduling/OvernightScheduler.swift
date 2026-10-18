@@ -6,8 +6,7 @@
 //  only ever happens while Sentient is open — force-quit it and nothing runs (and the root helper
 //  cancels the pending wake when the app's connection drops, so the Mac won't even wake).
 //
-//  Driven today by the DEV TOOLS "Scheduled run" control (a time + on/off — for testing); the same
-//  engine will back the production auto-3am trigger. When enabled it: arms a wake for the chosen
+//  Settings → System chooses the daily local wake time (3 AM by default). When enabled it: arms a wake for the chosen
 //  time → waits (the Task freezes with the Mac, thaws on the scheduled wake) → on wake keeps the Mac
 //  awake (root) + heartbeats → runs IterativeRun `.auto` (initial-if-fresh, iterative-if-caught-up,
 //  PER source) over the connectors selected in the app, plus the Gmail/Calendar legs → then runs the
@@ -43,27 +42,32 @@ final class OvernightScheduler {
     // scheduler. The dev toggle is hand-flipped in DevToolsView; the production flag is what the 14h
     // auto-enable (and a future Settings switch) writes. Keeping them apart means a dev testing the
     // toggle never trips the production auto-enable latch, and vice-versa.
-    static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
-    static let prodEnabledKey = "scheduler.enabled"         // PRODUCTION flag (auto-enable / Settings)
-    static let minutesKey = "dbg.scheduler.minutes"        // minutes since midnight
-    static let allowBatteryKey = "scheduler.allowBattery"  // opt-in: battery nights above the charge floor
+    nonisolated static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
+    nonisolated static let prodEnabledKey = "scheduler.enabled"         // PRODUCTION flag (auto-enable / Settings)
+    // Keep the existing key so previously chosen times survive the public Settings control.
+    nonisolated static let minutesKey = "dbg.scheduler.minutes"        // daily local minutes since midnight
+    nonisolated static let allowBatteryKey = "scheduler.allowBattery"  // opt-in: battery nights above the charge floor
                                                           // (the home's Analysis dropdown owns the toggle)
 
     /// The stall watchdog's silence budget: 70 minutes deliberately sits just past the longest
     /// single CLI timeout (1 h, the structured vault runs), so the watchdog can never kill a
     /// healthy call that is about to finish or time out cleanly on its own.
-    static let stallSeconds: TimeInterval = 4200
-    static let defaultMinutes = 3 * 60                     // 3:00 AM — the production overnight time (the dev
-                                                          // UI can override `minutesKey` for testing)
+    nonisolated static let stallSeconds: TimeInterval = 4200
+    nonisolated static let defaultMinutes = 3 * 60                     // 3:00 AM unless changed in Settings
 
     // 14h auto-enable state (all UserDefaults; survive restarts).
-    static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
-    static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
-    static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 14h wait
-    static let defaultAutoEnableDelay: TimeInterval = 14 * 3600      // 14 hours after initial finishes
+    nonisolated static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
+    nonisolated static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
+    nonisolated static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 14h wait
+    nonisolated static let defaultAutoEnableDelay: TimeInterval = 14 * 3600      // 14 hours after initial finishes
 
     /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
-    nonisolated static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
+    nonisolated static var configuredMinutes: Int {
+        validatedMinutes(UserDefaults.standard.object(forKey: minutesKey) as? Int ?? defaultMinutes)
+    }
+    nonisolated static func validatedMinutes(_ minutes: Int) -> Int {
+        (0..<1440).contains(minutes) ? minutes : defaultMinutes
+    }
 
     /// The auto-enable wait (default 14h; a dev key shortens it for testing). (Pure UserDefaults read.)
     nonisolated static var autoEnableDelay: TimeInterval {
@@ -93,6 +97,8 @@ final class OvernightScheduler {
     private var loopTask: Task<Void, Never>?
     private var autoEnableTask: Task<Void, Never>?
     private var everArmed = false
+    private var scheduleRevision = 0
+    private var scheduleWaitTask: Task<Void, Never>?
 
     /// Run if EITHER the dev toggle or the production flag is on. Call on launch and on any toggle.
     func reevaluate() {
@@ -100,21 +106,28 @@ final class OvernightScheduler {
         if on { start() } else { stop() }
     }
 
-    /// "Done" — finalize the chosen time: restart the loop, which wipes EVERY scheduled wake (clears
-    /// duplicates / stale times) then arms exactly this one. No-op while the feature is off.
+    /// Re-arm from the same loop, so an older in-flight helper call cannot overwrite a newer
+    /// choice. A time edit only interrupts the waiting timer, never an overnight run in progress.
+    /// Saving while disabled leaves the time ready for the next enable without turning it on.
     func commit() {
-        guard UserDefaults.standard.bool(forKey: Self.enabledKey) else { return }
-        start()
+        guard UserDefaults.standard.bool(forKey: Self.enabledKey)
+                || UserDefaults.standard.bool(forKey: Self.prodEnabledKey) else { return }
+        scheduleRevision &+= 1
+        scheduleWaitTask?.cancel()
+        nextWakeAt = nil
+        if loopTask == nil { start() }
     }
 
     private func start() {
         loopTask?.cancel()
+        scheduleWaitTask?.cancel()
         nextWakeAt = nil
         loopTask = Task { await loop() }
     }
 
     private func stop() {
         loopTask?.cancel(); loopTask = nil
+        scheduleWaitTask?.cancel(); scheduleWaitTask = nil
         statusLine = "off"
         nextWakeAt = nil
         if everArmed {   // only reach out to the helper if we actually scheduled something
@@ -222,25 +235,34 @@ final class OvernightScheduler {
         _ = await WakeHelperClient.shared.cancelAllWakes()
 
         while !Task.isCancelled {
+            let revision = scheduleRevision
             let minutes = Self.configuredMinutes
             let target = Self.nextOccurrence(minutesSinceMidnight: minutes)
             statusLine = "armed for \(Self.clock(target))"
             log.line("arming wake for \(target)")
             let armed = await WakeHelperClient.shared.armWake(at: target)
             guard !Task.isCancelled else { return }
+            guard revision == scheduleRevision else { continue }
             nextWakeAt = armed ? target : nil
 
             // Wait for the target. Re-arm every ~5 min while awake (idempotent — keeps the helper's
             // record fresh so its force-quit auto-cancel always knows what to cancel).
-            while Date() < target && !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(300))
-                if !Task.isCancelled && Date() < target {
+            while Date() < target && !Task.isCancelled && revision == scheduleRevision {
+                let wait = Task<Void, Never> { try? await Task.sleep(for: .seconds(min(300, max(0, target.timeIntervalSinceNow)))) }
+                scheduleWaitTask = wait
+                await wait.value
+                guard !Task.isCancelled else { return }
+                scheduleWaitTask = nil
+                if revision != scheduleRevision { break }
+                if Date() < target {
                     let rearmed = await WakeHelperClient.shared.armWake(at: target)
                     guard !Task.isCancelled else { return }
+                    if revision != scheduleRevision { break }
                     nextWakeAt = rearmed ? target : nil
                 }
             }
             if Task.isCancelled { break }
+            if revision != scheduleRevision { continue }
 
             let lateness = Date().timeIntervalSince(target)
             if armed, lateness > 900 {
@@ -250,7 +272,7 @@ final class OvernightScheduler {
             statusLine = "running…"
             nextWakeAt = nil
             await runNight(log: log)
-            statusLine = "armed (next \(Self.clock(Self.nextOccurrence(minutesSinceMidnight: minutes))))"
+            statusLine = "armed (next \(Self.clock(Self.nextOccurrence(minutesSinceMidnight: Self.configuredMinutes))))"
         }
     }
 
@@ -561,12 +583,14 @@ final class OvernightScheduler {
 
     // MARK: - Time helpers
 
-    static func nextOccurrence(minutesSinceMidnight m: Int) -> Date {
-        var c = Calendar.current.dateComponents([.year, .month, .day], from: Date())
-        c.hour = m / 60; c.minute = m % 60; c.second = 0
-        var t = Calendar.current.date(from: c) ?? Date().addingTimeInterval(60)
-        if t <= Date() { t = Calendar.current.date(byAdding: .day, value: 1, to: t) ?? t }
-        return t
+    nonisolated static func nextOccurrence(minutesSinceMidnight minutes: Int, after now: Date = Date(),
+                                          calendar: Calendar = .current) -> Date {
+        let m = validatedMinutes(minutes)
+        // A missing spring-forward time runs at the next valid time. A repeated fall-back
+        // time uses its first occurrence. Calendar matching preserves the chosen local hour.
+        return calendar.nextDate(after: now, matching: DateComponents(hour: m / 60, minute: m % 60, second: 0),
+            matchingPolicy: .nextTime, repeatedTimePolicy: .first, direction: .forward)
+            ?? now.addingTimeInterval(86_400)
     }
 
     static func clock(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "h:mm a"; return f.string(from: d) }

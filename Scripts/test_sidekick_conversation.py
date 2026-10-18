@@ -402,6 +402,57 @@ nonisolated func sql(_ url: URL, _ command: String) throws {
         try check(try store.activityRecords(taskID: active, after: next[0].sequence).isEmpty, "activity cursor finishes only after last operation")
         try check(try store.activityRecords(taskID: task).isEmpty && store.activityRecords(taskID: active, limit: 0).isEmpty,
             "activity query respects task and empty-page bounds")
+
+        // A long live run follows its bounded tail, while explicit cursors remain stable.
+        let longTask = UUID()
+        let longTools = try store.appendBatch((0..<133).flatMap { index in [
+            Event(id: "live-update-\(index)", taskID: longTask, kind: .assistantMessage, text: "Progress", messageKind: .update),
+            Event(id: "live-operation-\(index)", taskID: longTask, kind: .activity,
+                activity: .init(toolID: "operation-\(index)", name: "fixture", status: .completed))
+        ] }).filter { $0.event.kind == .activity }
+        let tail = try store.activityPage(taskID: longTask)
+        try check(tail.records == Array(longTools.suffix(40)) && tail.hasEarlier && !tail.hasLater,
+                  "live activity page loads newest forty records, not first forty")
+        try check(tail.generation == store.generation, "activity page carries atomic history generation")
+        let older = try store.activityPage(taskID: longTask, before: tail.records.first!.sequence)
+        try check(older.records == Array(longTools[53..<93]) && older.hasEarlier && older.hasLater,
+                  "earlier activity page is chronological, bounded and contiguous")
+        let forward = try store.activityPage(taskID: longTask, after: older.records.last!.sequence)
+        try check(forward.records == tail.records && forward.hasEarlier && !forward.hasLater,
+                  "activity forward navigation reaches exact newest window")
+        let first = try store.activityPage(taskID: longTask, after: 0)
+        try check(first.records == Array(longTools.prefix(40)) && !first.hasEarlier && first.hasLater,
+                  "historical expansion can still begin with first bounded page")
+        let newStep = try store.append(Event(id: "live-operation-latest", taskID: longTask, kind: .activity,
+            activity: .init(toolID: "latest", name: "fixture", status: .started)))
+        let liveTail = try store.activityPage(taskID: longTask)
+        try check(liveTail.records.count == 40 && liveTail.records.last == newStep
+                    && liveTail.records.first == longTools[94], "new operation advances only the live tail")
+        let pinned = try store.activityPage(taskID: longTask, after: tail.records.first!.sequence - 1)
+        try check(pinned.records == tail.records && pinned.hasLater, "pinning a visible activity page prevents arrivals replacing old rows")
+        let emptyOlder = try store.activityPage(taskID: longTask, before: longTools.first!.sequence)
+        let emptyNewer = try store.activityPage(taskID: longTask, after: newStep.sequence)
+        try check(emptyOlder.records.isEmpty && !emptyOlder.hasEarlier && emptyOlder.hasLater,
+                  "empty older boundary still offers later activity")
+        try check(emptyNewer.records.isEmpty && emptyNewer.hasEarlier && !emptyNewer.hasLater,
+                  "empty newer boundary still offers earlier activity")
+        let singleTask = UUID()
+        let single = try store.append(Event(taskID: singleTask, kind: .activity,
+            activity: .init(toolID: "only", name: "fixture", status: .completed)))
+        try check(try store.activityPage(taskID: singleTask, after: single.sequence).hasEarlier,
+                  "single-row empty newer boundary includes its exclusive cursor")
+        try check(try store.activityPage(taskID: singleTask, before: single.sequence).hasLater,
+                  "single-row empty older boundary includes its exclusive cursor")
+        try check(try store.activityPage(taskID: UUID()).records.isEmpty,
+                  "activity window never crosses task boundaries")
+        try check(try store.activityPage(taskID: longTask, limit: 0).records.isEmpty
+                    && store.activityPage(taskID: longTask, limit: 500).records.count == 100,
+                  "activity page enforces empty and maximum bounds")
+        for (before, after): (Int64?, Int64?) in [(-1, nil), (nil, -1), (1, 2)] {
+            do { _ = try store.activityPage(taskID: longTask, before: before, after: after); fatalError("Invalid activity cursors accepted") }
+            catch Store.Failure.invalidWatermark { checks += 1 }
+        }
+
     }
 
     static func migration(_ directory: URL) throws {

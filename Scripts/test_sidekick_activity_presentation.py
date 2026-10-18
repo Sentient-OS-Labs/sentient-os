@@ -41,6 +41,16 @@ typealias Presentation = SidekickActivityPresentation
     }
 
     static func main() async {
+        for (name, identifier) in [("Microsoft Edge", "com.microsoft.edgemac"),
+                                   ("Microsoft Word", "com.microsoft.Word"),
+                                   ("Microsoft Excel", "com.microsoft.Excel"),
+                                   ("Pixelmator Pro", "com.pixelmatorteam.pixelmator.x")] {
+            for tool in ["sentient_native.get_app_state", "mcp__sentient_native__get_app_state"] {
+                let step = one(tool, args: json(["app": name]))
+                check(step.appIdentifier == identifier && step.appName == name,
+                      "named app resolves the same brand icon across provider spellings")
+            }
+        }
         let started = record("sentient_native.get_app_state", sequence: 2, arguments: #"{"app":"com.apple.Safari"}"#)
         let other = record("Bash", sequence: 3, toolID: "stream-a:item_1", arguments: "echo fixture")
         let ended = record("sentient_native.get_app_state", sequence: 8, status: .completed,

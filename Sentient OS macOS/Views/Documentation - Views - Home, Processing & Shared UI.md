@@ -142,11 +142,12 @@ cycled by the card's order among its method-mates, so a morning of five computer
 different greens), with the gift envelope riding LAST (the bottom-right perch); the two demo decks
 (`jesai`, `launch`; Dev Tools → Proactive Cards) play scripted theater instead. Cards deal in with
 staggered springs into measured rows in the card zone, can be flick-dismissed with drag physics, and
-tap-expand into the letter. **Firing a real card** (`runReal`): pass the first-use permission gate,
-adopt Sidekick's shared run for any fireable method (so the notch lights and every other entry point
-locks), route through `ProactiveExecutor.fire` with codex's live lines streamed into the card (a per-card
-STOP cancels the codex process), fly the card away and remove it from the persisted set on success, or
-return it to the offer state for edit and retry on failure. Other fireable cards' CTAs dim while any
+tap-expand into the letter. **Firing a real card** (`runReal`): immediately adopt Sidekick's shared
+run and navigate to chat with the reviewed request. Evidence and permission checks run inside that
+cancellable task, followed by the existing `ProactiveExecutor.fire` with the exact live draft and
+recipient. All progress, questions, Stop and results belong to chat. An active card in the reopened
+dock offers **View in chat**, with no duplicate activity log. Success retires the card from both decks;
+failure or cancellation returns it to the offer state. Other fireable cards' CTAs dim while any
 task runs. Mid-uninstall the deck is cleared and never re-dealt (the defaults wipe re-publishes every
 `@AppStorage` key).
 
@@ -275,3 +276,22 @@ chat, nested activity state across collapse/reopen, Settings draft/reading reten
 unsaved-edit Cancel/Discard navigation with retained reader selection. Missing/restored synthetic vault
 states were captured, and no production data or provider calls were used. Debug and Release builds
 passed. Evidence: `/tmp/sentient-ux-refinements-20261017/progress.json`.
+
+## Live work and control polish
+
+Expanded active work follows a bounded latest activity page (40 records) and smoothly scrolls to
+its tail after layout. User scroll gestures, selection, search and explicit older-step paging
+take over reading position; content growth alone does not disable following. Returning to latest
+restores following. Per-task cursors survive the disclosure moving into the first response row.
+
+The transcript mounts one bounded page with stable measured rows. ScrollViewReader owns explicit
+navigation; native size-change anchoring keeps the bottom visible while following. Completion and
+window reactivation resume following only when the reader has not taken control. Once an answer is
+present, late activity targets the response bottom. Read-only native text views leave sizing to
+SwiftUI. The provider-free transcript stress lab checks hidden-window completion, notch attention,
+activity arriving after the answer, and visible response content after reactivation.
+
+The busy composer replaces Send with one Stop control and omits the redundant working helper line.
+Actual questions retain their answer controls. Enabled Send has a more visible spectrum rim and
+soft bloom. Settings menus keep their entire decorated label inside the native button-style Menu
+hit target, including padding and chevron; the open-source footer has the shared gold heart.

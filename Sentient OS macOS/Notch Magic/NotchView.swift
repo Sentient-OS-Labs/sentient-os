@@ -340,6 +340,10 @@ struct NotchContent: View {
         }
     }
 
+    /// The same brand mark drifts slowly while waiting for a prompt. Keep the larger
+    /// ambient effects paused during typing, and stop every clock when the notch is hidden.
+    private var identityAnimationPaused: Bool { reduceMotion || lowPowerMode || phase == .hidden }
+
     private var morph: Animation {
         // Longer + bouncier than a flat ease — fast out of the gate, then a gentle overshoot-and-settle
         // (the Dynamic Island "alive" curve). Lower damping = visible bounce; ~0.52 response = slightly slower.
@@ -376,7 +380,7 @@ struct NotchContent: View {
                     .accessibilityLabel(isTaskRunning ? "Stop this task and write a new request" : "Write a new request")
                 } else {
                     NotchIdentityMark(size: metrics.controlSlot, working: phase == .running || isTaskRunning,
-                        animated: !ambientAnimationPaused)
+                        animated: !identityAnimationPaused)
                 }
                 Spacer(minLength: metrics.centerGap)
                 HStack(spacing: 12) {
@@ -802,18 +806,7 @@ private struct NotchIdentityMark: View {
     private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
 
     var body: some View {
-        Group {
-            if reduceMotion || !animated {
-                Circle()
-                    .strokeBorder(AngularGradient(colors: GlowHalo.stops, center: .center), lineWidth: 2.5)
-                    .overlay(alignment: .top) {
-                        Circle().fill(.white).frame(width: 3, height: 3).offset(y: -0.5)
-                    }
-                    .frame(width: size, height: size)
-            } else {
-                SpinningLogo(size: size, fast: working)
-            }
-        }
+        SpinningLogo(size: size, fast: working, paused: reduceMotion || !animated)
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }
