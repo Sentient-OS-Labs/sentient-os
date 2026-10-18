@@ -1,625 +1,199 @@
-//
-//  OvernightScheduler.swift
-//  Sentient OS macOS  ·  Scheduling/
-//
-//  The in-app scheduler. Lives inside the running app (owned by AppState), so scheduled processing
-//  only ever happens while Sentient is open — force-quit it and nothing runs (and the root helper
-//  cancels the pending wake when the app's connection drops, so the Mac won't even wake).
-//
-//  Settings → System chooses the daily local wake time (3 AM by default). When enabled it: arms a wake for the chosen
-//  time → waits (the Task freezes with the Mac, thaws on the scheduled wake) → on wake keeps the Mac
-//  awake (root) + heartbeats → runs IterativeRun `.auto` (initial-if-fresh, iterative-if-caught-up,
-//  PER source) over the connectors selected in the app, plus the Gmail/Calendar legs → then runs the
-//  SAME shared tail the home's Analyze Now runs (`ProactiveCycle`: knowledge base create/update →
-//  MCP mirror push → proactive decide → research → prepare → wipe summaries) → releases → the Mac
-//  sleeps → re-arms for the next day. There is NO scheduler-specific processing path: source
-//  detection goes through the SAME `SourceSelection.current(...)`, the read leg is the SAME
-//  `IterativeRun`, and the tail is the SAME `ProactiveCycle` — so a 3am run and a hand-pressed
-//  Analyze Now do byte-for-byte the same work. Every night races a STALL WATCHDOG (`runNight`):
-//  a run that is alive and heartbeating but silently wedged — no error, no timeout — is ended
-//  after `stallSeconds` without progress, sleep restored, and the morning caution recorded.
-//  Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
-//
+// Arms the next local overnight wake and asks the shared analysis owner to run.
+// Scheduling never depends on first-analysis completion and never owns a second pipeline.
+// Doc: Documentation - Overnight Scheduler & Wake Helper.md
 
 import Foundation
-import ServiceManagement
+import AppKit
 
-@MainActor
-@Observable
+@MainActor @Observable
 final class OvernightScheduler {
-
-    /// One-line status for the dev UI ("off" / "armed for 4:00 PM" / "running…").
     var statusLine = "off"
     private(set) var nextWakeAt: Date?
-
-    /// Set true when the 14h auto-enable wants to arm but a prerequisite is missing: the root
-    /// helper isn't installed (onboarding's permissions step and Settings → Health own the
-    /// install), or launch-at-login is off. The setup UX reads this to prompt the user; it
-    /// clears itself once auto-enable succeeds.
     var needsSchedulerSetup = false
 
-    // The DEV toggle (testing) and the PRODUCTION flag are separate keys but either one runs the
-    // scheduler. The dev toggle is hand-flipped in DevToolsView; the production flag is what the 14h
-    // auto-enable (and a future Settings switch) writes. Keeping them apart means a dev testing the
-    // toggle never trips the production auto-enable latch, and vice-versa.
-    nonisolated static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
-    nonisolated static let prodEnabledKey = "scheduler.enabled"         // PRODUCTION flag (auto-enable / Settings)
-    // Keep the existing key so previously chosen times survive the public Settings control.
-    nonisolated static let minutesKey = "dbg.scheduler.minutes"        // daily local minutes since midnight
-    nonisolated static let allowBatteryKey = "scheduler.allowBattery"  // opt-in: battery nights above the charge floor
-                                                          // (the home's Analysis dropdown owns the toggle)
-
-    /// The stall watchdog's silence budget: 70 minutes deliberately sits just past the longest
-    /// single CLI timeout (1 h, the structured vault runs), so the watchdog can never kill a
-    /// healthy call that is about to finish or time out cleanly on its own.
-    nonisolated static let stallSeconds: TimeInterval = 4200
-    nonisolated static let defaultMinutes = 3 * 60                     // 3:00 AM unless changed in Settings
-
-    // 14h auto-enable state (all UserDefaults; survive restarts).
-    nonisolated static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
-    nonisolated static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
-    nonisolated static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 14h wait
-    nonisolated static let defaultAutoEnableDelay: TimeInterval = 14 * 3600      // 14 hours after initial finishes
-
-    /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
-    nonisolated static var configuredMinutes: Int {
-        validatedMinutes(UserDefaults.standard.object(forKey: minutesKey) as? Int ?? defaultMinutes)
+    static let enabledKey = "dbg.scheduler.enabled"
+    static let prodEnabledKey = "scheduler.enabled"
+    static let minutesKey = "dbg.scheduler.minutes"
+    static let allowBatteryKey = "scheduler.allowBattery"
+    static let setupEnabledKey = "scheduler.enabledAfterSetup"
+    // Read the old latch during migration to respect an existing user's explicit off choice.
+    static let autoEnableFiredKey = "scheduler.autoEnableFired"
+    static let firstCycleAtKey = ProcessingPlan.initialCompletedKey
+    static let stallSeconds: TimeInterval = 4200
+    static let defaultMinutes = 180
+    static var configuredMinutes: Int {
+        validatedMinutes((UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes)
     }
-    nonisolated static func validatedMinutes(_ minutes: Int) -> Int {
+    static func validatedMinutes(_ minutes: Int) -> Int {
         (0..<1440).contains(minutes) ? minutes : defaultMinutes
     }
+    static var firstCycleCompletedAt: Date? { ProcessingPlan.initialCompletedAt() }
 
-    /// The auto-enable wait (default 14h; a dev key shortens it for testing). (Pure UserDefaults read.)
-    nonisolated static var autoEnableDelay: TimeInterval {
-        let v = UserDefaults.standard.double(forKey: autoEnableDelayKey)
-        return v > 0 ? v : defaultAutoEnableDelay
+    @ObservationIgnored private var loopTask: Task<Void, Never>?
+    @ObservationIgnored private var loopEnabled = false
+    @ObservationIgnored private var clockObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var generation = UUID()
+    private var processing: ProcessingCoordinator { .shared }
+
+    var isEnabled: Bool {
+        guard !processing.isSuspended, UserDefaults.standard.bool(forKey: AppState.onboardingKey) else { return false }
+        return UserDefaults.standard.bool(forKey: Self.enabledKey)
+            || (UserDefaults.standard.bool(forKey: Self.prodEnabledKey) && !CodexAuth.knowledgeBaseOnly)
+            || processing.hasPendingFirstNight
     }
 
-    /// When the first full ProactiveCycle finished (nil until it has). Set once via `noteFirstCycleCompleted`.
-    nonisolated static var firstCycleCompletedAt: Date? {
-        let t = UserDefaults.standard.double(forKey: firstCycleAtKey)
-        return t > 0 ? Date(timeIntervalSince1970: t) : nil
-    }
-
-    /// The instant the scheduler should auto-enable (first-cycle-completion + the wait). Nil until initial done.
-    nonisolated static var autoEnableFireDate: Date? { firstCycleCompletedAt.map { $0.addingTimeInterval(autoEnableDelay) } }
-
-    /// Stamp "initial processing finished" exactly once — called from ProactiveCycle on the first full,
-    /// successful cycle (knowledge base now exists). Nonisolated: it's a single UserDefaults write, safe
-    /// from the cycle actor. Later calls are ignored, so the 14h clock starts at the TRUE first finish.
-    nonisolated static func noteFirstCycleCompleted() {
+    /// Called at setup completion and launch. No delay, implicit helper install, or login prompt.
+    /// Existing deliberately disabled schedulers stay disabled; first-night intent is separate.
+    func enableAfterSetup() {
         let d = UserDefaults.standard
-        guard d.double(forKey: firstCycleAtKey) == 0 else { return }
-        d.set(Date().timeIntervalSince1970, forKey: firstCycleAtKey)
-        Log("Scheduler: first full cycle done — 14h auto-enable clock started (fires \(Date().addingTimeInterval(autoEnableDelay)))")
-    }
-
-    private var loopTask: Task<Void, Never>?
-    private var autoEnableTask: Task<Void, Never>?
-    private var everArmed = false
-    private var scheduleRevision = 0
-    private var scheduleWaitTask: Task<Void, Never>?
-
-    /// Run if EITHER the dev toggle or the production flag is on. Call on launch and on any toggle.
-    func reevaluate() {
-        let on = UserDefaults.standard.bool(forKey: Self.enabledKey) || UserDefaults.standard.bool(forKey: Self.prodEnabledKey)
-        if on { start() } else { stop() }
-    }
-
-    /// Re-arm from the same loop, so an older in-flight helper call cannot overwrite a newer
-    /// choice. A time edit only interrupts the waiting timer, never an overnight run in progress.
-    /// Saving while disabled leaves the time ready for the next enable without turning it on.
-    func commit() {
-        guard UserDefaults.standard.bool(forKey: Self.enabledKey)
-                || UserDefaults.standard.bool(forKey: Self.prodEnabledKey) else { return }
-        scheduleRevision &+= 1
-        scheduleWaitTask?.cancel()
-        nextWakeAt = nil
-        if loopTask == nil { start() }
-    }
-
-    private func start() {
-        loopTask?.cancel()
-        scheduleWaitTask?.cancel()
-        nextWakeAt = nil
-        loopTask = Task { await loop() }
-    }
-
-    private func stop() {
-        loopTask?.cancel(); loopTask = nil
-        scheduleWaitTask?.cancel(); scheduleWaitTask = nil
-        statusLine = "off"
-        nextWakeAt = nil
-        if everArmed {   // only reach out to the helper if we actually scheduled something
-            everArmed = false
-            Task { _ = await WakeHelperClient.shared.cancelWake() }
+        guard d.bool(forKey: AppState.onboardingKey) else { return }
+        if !d.bool(forKey: Self.setupEnabledKey) {
+            if !d.bool(forKey: Self.autoEnableFiredKey),
+               d.object(forKey: Self.prodEnabledKey) == nil, !CodexAuth.knowledgeBaseOnly {
+                d.set(true, forKey: Self.prodEnabledKey)
+            }
+            d.set(true, forKey: Self.setupEnabledKey)
+            d.removeObject(forKey: "scheduler.autoEnableDelaySeconds")
         }
-        // NB: the auto-enable timer is deliberately NOT cancelled here — it must keep waiting to flip
-        // the scheduler ON even while it's currently off (that's the whole point of auto-enable).
-    }
-
-    // MARK: - 14h auto-enable
-
-    /// Decide whether to auto-enable the production scheduler. Idempotent + safe to call repeatedly —
-    /// from launch (AppState.init), right after any cycle finishes, and from the one-shot timer it arms.
-    /// Fires at most once (a latch), never fights a user who toggled the scheduler off, and only arms
-    /// when the prerequisites (installed root helper + launch-at-login) are in place — otherwise it
-    /// flags `needsSchedulerSetup` for the setup UX and retries on the next tick.
-    func maybeAutoEnable() {
-        // Free/go knowledge-base-only mode: no quota for nightly runs — auto-enable never fires.
-        // Deliberately NOT latched, so an upgrade (+ reset) later starts the 14h clock fresh.
-        guard !CodexAuth.knowledgeBaseOnly else { return }
-        let d = UserDefaults.standard
-        guard !d.bool(forKey: Self.autoEnableFiredKey) else { return }      // already handled once
-
-        // The production scheduler is already on — latch and never auto-touch it. ONLY the prod
-        // flag latches: the DEV toggle is a test arm, and burning the one-shot on it would kill
-        // auto-enable for the install (the exact drift the two-keys design exists to prevent).
-        if d.bool(forKey: Self.prodEnabledKey) {
-            d.set(true, forKey: Self.autoEnableFiredKey); return
-        }
-
-        guard let fireAt = Self.autoEnableFireDate else { return }          // initial not finished yet
-        if Date() < fireAt { armAutoEnableTimer(at: fireAt); return }       // not time yet — wait
-
-        // Native approval is required. The loop checks XPC readiness before arming a wake.
-        guard WakeHelperClient.shared.isReady else {
-            needsSchedulerSetup = true
-            Log("Scheduler: 14h elapsed but root helper not installed — awaiting setup")
-            // Consent can arrive after the setup window closes. Recheck without registering
-            // anything or prompting, so approval does not require an app restart.
-            armAutoEnableTimer(at: Date().addingTimeInterval(30))
-            return
-        }
-        // The app must be alive at 3am to host the run — enable launch-at-login, and treat a
-        // refusal (the user revoked it in System Settings; macOS won't let us silently re-enable)
-        // as a missing prerequisite. Enabling anyway would mean silent empty mornings with no
-        // caution banner: the run never starts, so nothing ever classifies as failed.
-        LoginItem.enable()
-        guard LoginItem.isEnabled else {
-            needsSchedulerSetup = true
-            Log("Scheduler: 14h elapsed but launch-at-login is off (revoked?) — awaiting setup")
-            return
-        }
-        d.set(true, forKey: Self.prodEnabledKey)
-        d.set(true, forKey: Self.autoEnableFiredKey)
-        needsSchedulerSetup = false
-        Log("Scheduler: 14h elapsed + prerequisites met — auto-enabled overnight processing")
-        Analytics.signal("Scheduler.autoEnabled")
         reevaluate()
     }
 
-    /// Arm a one-shot wake-up for the auto-enable moment (so it fires even if the app just sits open
-    /// past the 14h mark). Replaces any pending timer; the timer just re-invokes maybeAutoEnable().
-    private func armAutoEnableTimer(at fireAt: Date) {
-        autoEnableTask?.cancel()
-        let delay = max(1, fireAt.timeIntervalSinceNow)
-        autoEnableTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled else { return }
-            self?.maybeAutoEnable()
-        }
-    }
-
-    // MARK: - Helper readiness
-
-    /// Both Debug and Release require explicit setup. Background work never requests approval.
-    private func ensureHelperReady(log: SchedulerLog) async -> Bool {
-        let health = await WakeHelperClient.shared.healthProbe()
-        guard health == .ready else {
-            let message = health == .requiresApproval ? "approve overnight wake in settings" : "wake helper needs setup"
-            if !needsSchedulerSetup || statusLine != message {
-                log.line("helper is not ready; awaiting setup in Permissions & Health")
-            }
-            needsSchedulerSetup = true
-            statusLine = message
-            return false
-        }
-        needsSchedulerSetup = false
-        return true
-    }
-
-    private func loop() async {
-        let log = SchedulerLog()
-
-        // Stay available for approval even if the user closes Settings while approving it.
-        // These are passive checks: neither Debug nor Release installs from the scheduler.
-        while !Task.isCancelled {
-            if await ensureHelperReady(log: log) { break }
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
-        }
-        guard !Task.isCancelled else { return }
-
-        // Clean slate: wipe every existing scheduled wake (duplicates / stale), then arm exactly one.
-        everArmed = true
-        _ = await WakeHelperClient.shared.cancelAllWakes()
-
-        while !Task.isCancelled {
-            let revision = scheduleRevision
-            let minutes = Self.configuredMinutes
-            let target = Self.nextOccurrence(minutesSinceMidnight: minutes)
-            statusLine = "armed for \(Self.clock(target))"
-            log.line("arming wake for \(target)")
-            let armed = await WakeHelperClient.shared.armWake(at: target)
-            guard !Task.isCancelled else { return }
-            guard revision == scheduleRevision else { continue }
-            nextWakeAt = armed ? target : nil
-
-            // Wait for the target. Re-arm every ~5 min while awake (idempotent — keeps the helper's
-            // record fresh so its force-quit auto-cancel always knows what to cancel).
-            while Date() < target && !Task.isCancelled && revision == scheduleRevision {
-                let wait = Task<Void, Never> { try? await Task.sleep(for: .seconds(min(300, max(0, target.timeIntervalSinceNow)))) }
-                scheduleWaitTask = wait
-                await wait.value
-                guard !Task.isCancelled else { return }
-                scheduleWaitTask = nil
-                if revision != scheduleRevision { break }
-                if Date() < target {
-                    let rearmed = await WakeHelperClient.shared.armWake(at: target)
-                    guard !Task.isCancelled else { return }
-                    if revision != scheduleRevision { break }
-                    nextWakeAt = rearmed ? target : nil
-                }
-            }
-            if Task.isCancelled { break }
-            if revision != scheduleRevision { continue }
-
-            let lateness = Date().timeIntervalSince(target)
-            if armed, lateness > 900 {
-                Diagnostics.report(.wakeMissed, phase: .begin, reason: "armed_run_started_late",
-                                   counts: [.elapsedMS: Int(lateness * 1000)], cooldown: 86_400)
-            }
-            statusLine = "running…"
-            nextWakeAt = nil
-            await runNight(log: log)
-            statusLine = "armed (next \(Self.clock(Self.nextOccurrence(minutesSinceMidnight: Self.configuredMinutes))))"
-        }
-    }
-
-    /// One night, raced against the stall watchdog. The run rides its own Task so a silent wedge
-    /// (the app alive and heartbeating, no error thrown, no timeout fired — just nothing moving)
-    /// can't pin the loop: after `stallSeconds` without a progress pulse we cancel the run, restore
-    /// sleep ourselves, and record the morning caution; the loop then re-arms tomorrow's wake as
-    /// usual. A healthy night wins the race and none of this is visible.
-    private func runNight(log: SchedulerLog) async {
-        let diagnosticID = DiagnosticHistory.begin(.overnight, provider: ModelBackend.current.rawValue)
-        await Diagnostics.withOperation("overnight") {
-            let pulse = NightPulse()
-            // A task group would await every child at scope exit, including a child awaiting the
-            // wedged run. A one-shot stream lets the watchdog report without waiting for that run.
-            let (outcomes, result) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingOldest(1))
-            let run = Task {
-                await self.runProcessing(log: log, pulse: pulse, diagnosticID: diagnosticID)
-                result.yield(false)
-                result.finish()
-            }
-            let watchdog = Task {
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .seconds(60)) }
-                    catch { return }
-                    if pulse.secondsSinceProgress > Self.stallSeconds {
-                        result.yield(true)
-                        result.finish()
-                        return
+    func reevaluate() {
+        if clockObservers.isEmpty {
+            for name in [Notification.Name.NSSystemTimeZoneDidChange, Notification.Name.NSSystemClockDidChange] {
+                clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if self.processing.record.status == .scheduled {
+                            self.processing.deferNight(notice: self.processing.record.notice ?? "")
+                        }
+                        self.restart()
                     }
+                })
+            }
+        }
+        if isEnabled {
+            if loopTask == nil || !loopEnabled { restart() }
+        } else { restart() }
+    }
+
+    /// Saving a new clock time updates durable first-night/deferred intent too. It does
+    /// not enable an otherwise-disabled schedule or cancel app-owned analysis.
+    func commit() {
+        if processing.record.status == .scheduled && !processing.isSuspended {
+            processing.deferNight(notice: processing.record.notice ?? "")
+        }
+        if isEnabled { restart() }
+    }
+
+    private func restart() {
+        generation = UUID()
+        let id = generation, previous = loopTask
+        let enabled = isEnabled
+        loopEnabled = enabled
+        previous?.cancel()
+        nextWakeAt = nil
+        if !enabled { statusLine = "off" }
+        loopTask = Task {
+            // XPC wake requests cannot be recalled by Task cancellation. Drain the old
+            // scheduling owner before replacing its wake, so stale arms/cancels cannot
+            // overtake the latest choice. Analysis is a separate ProcessingCoordinator
+            // task; awaiting this cancelled scheduler never cancels that owned work.
+            await previous?.value
+            guard !Task.isCancelled, generation == id else { return }
+            if enabled && isEnabled { await loop(id: id) }
+            else if !isEnabled {
+                statusLine = "off"
+                _ = await WakeHelperClient.shared.cancelWake()
+            }
+            if generation == id { loopTask = nil }
+        }
+    }
+
+    private func loop(id: UUID) async {
+        let log = SchedulerLog()
+        while !Task.isCancelled && generation == id && isEnabled {
+            if processing.paused {
+                nextWakeAt = nil; statusLine = "Analysis paused"
+                _ = await WakeHelperClient.shared.cancelWake()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                continue
+            }
+            let health = await WakeHelperClient.shared.healthProbe()
+            guard !Task.isCancelled, generation == id else { return }
+            guard health == .ready && LoginItem.isEnabled else {
+                needsSchedulerSetup = true
+                statusLine = health == .ready ? "enable launch at login" : "overnight wake needs setup"
+                nextWakeAt = nil
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                continue
+            }
+            needsSchedulerSetup = false
+            var target = processing.record.status == .scheduled ? processing.record.due : nil
+            if let missed = target, missed <= Date() {
+                // Setup/health checks can straddle 3 AM by seconds. Honor that choice instead of
+                // postponing a whole day; an app relaunched much later gets the next night.
+                if Date().timeIntervalSince(missed) < 60 {
+                    await processing.runScheduled()
+                    continue
+                }
+                processing.deferNight(notice: "The scheduled analysis was missed. Keep Sentient open in the menu bar, or run it now.")
+                target = processing.record.due
+            }
+            let due = target ?? Self.nextOccurrence(minutesSinceMidnight: Self.configuredMinutes)
+            // armWake is idempotent at the SAME timestamp; it does not remove an older
+            // timestamp. Cancel only our previously owned wake before a new daily arm.
+            _ = await WakeHelperClient.shared.cancelWake()
+            guard !Task.isCancelled, generation == id, isEnabled else { return }
+            let armed = await WakeHelperClient.shared.armWake(at: due)
+            guard !Task.isCancelled, generation == id else { return }
+            guard armed else {
+                needsSchedulerSetup = true; statusLine = "couldn't schedule overnight wake"; nextWakeAt = nil
+                log.line("wake arm failed; retrying setup check")
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                continue
+            }
+            nextWakeAt = due
+            statusLine = "Scheduled for \(ProcessingCoordinator.scheduleLabel(due))"
+            log.line("armed for \(due)")
+            var lastArm = Date()
+            while Date() < due {
+                do { try await Task.sleep(for: .seconds(min(60, max(0.05, due.timeIntervalSinceNow)))) } catch { return }
+                guard generation == id, !Task.isCancelled else { return }
+                if !isEnabled || processing.paused {
+                    nextWakeAt = nil
+                    _ = await WakeHelperClient.shared.cancelWake()
+                    break
+                }
+                if Date() < due && Date().timeIntervalSince(lastArm) >= 300 {
+                    _ = await WakeHelperClient.shared.armWake(at: due)
+                    lastArm = Date()
                 }
             }
-            let stalled = await withTaskCancellationHandler {
-                var iterator = outcomes.makeAsyncIterator()
-                return await iterator.next() ?? false
-            } onCancel: {
-                run.cancel()
-                result.finish()
+            guard generation == id, !Task.isCancelled else { return }
+            nextWakeAt = nil
+            guard isEnabled else { statusLine = "off"; return }
+            if processing.paused { continue }
+            if Date().timeIntervalSince(due) > Double(WakeHelperConfig.maxAwakeSeconds) {
+                processing.deferNight(notice: "Your Mac missed the overnight run. Your next analysis is scheduled; you can also run it now.")
+                log.line("missed overnight window; retained pending work")
+                continue
             }
-            watchdog.cancel()
-            guard stalled, !Task.isCancelled else {
-                DiagnosticHistory.finish(.overnight, id: diagnosticID,
-                    outcome: Task.isCancelled ? .stopped : .interrupted, reason: "no_final_result")
-                return
-            }
-            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .stalled, reason: "no_progress",
-                measurements: ["stall_seconds": Int(Self.stallSeconds)])
-
-            // The silent-wedge net. Latch FIRST so every exit path the cancelled run might later thaw
-            // into knows sleep is already handled and leaves the helper alone (by then a NEXT night
-            // could legitimately be holding the Mac awake).
-            pulse.markSleepRestored()
-            run.cancel()
-            log.line("STALLED — no progress for \(Int(Self.stallSeconds / 60)) min; ending the night, restoring sleep.")
-            OvernightCaution.record(.stalled)
-            // A stall is defect-shaped (unlike the weather kinds), so Sentry hears about it too — structure only.
-            CrashReporting.captureEvent("overnight.stalled", level: .warning,
-                                        tags: ["trigger": "overnight"],
-                                        extra: ["stall_minutes": String(Int(Self.stallSeconds / 60))],
-                                        fingerprint: ["overnight", "stalled"])
-            let ended = await WakeHelperClient.shared.endAwake()
-            log.line("watchdog endAwake: \(ended ? "OK" : "FAILED — the helper's deadman/ceiling still net it")")
+            statusLine = "Analyzing in the background"
+            // The owner holds exclusivity through cancellation draining. A manual run already in
+            // progress satisfies this trigger; a user pause is never silently undone at 3 AM.
+            await processing.runScheduled()
+            guard generation == id, !Task.isCancelled else { return }
+            log.line("overnight result: \(processing.record.status.rawValue)")
+            if !isEnabled { statusLine = "off" }
         }
     }
 
-    /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
-    /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
-    private func runProcessing(log: SchedulerLog, pulse: NightPulse, diagnosticID: UUID) async {
-        // Every codex call under this run reports trigger=overnight (task-local, inherited by the
-        // child tasks the legs spawn) — the 3 AM failure population gets its own fingerprint.
-        await CodexTrigger.$current.withValue(.overnight) {
-            await runProcessingBody(log: log, pulse: pulse, diagnosticID: diagnosticID)
-        }
-    }
-
-    private func runProcessingBody(log: SchedulerLog, pulse: NightPulse, diagnosticID: UUID) async {
-        let woke = Date()
-        log.line("WOKE at \(woke) — beginning the run.")
-        Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
-
-        // DETECT — identical to the dev UI / Analyze Now (the shared SourceSelection reader).
-        // Custom roots are persistent now (CustomRoots), so the 3am run sees them too — the old
-        // "session-only customRoots" caveat is gone.
-        let fda = Permissions.hasFullDiskAccess()
-        let sources = SourceSelection.current(fdaGranted: fda)
-        let connectors = RunSource.connectors(from: sources)
-        // Connectors ride ChatGPT auth inside codex — a custom frontier backend has none.
-        let runGmail = ModelBackend.connectorsAvailable && ud("dbg.run.gmail")
-        let runCalendar = ModelBackend.connectorsAvailable && ud("dbg.run.calendar")
-        // KB-toggled connectors (the generic nightly reads) — backend-scoped like the chips.
-        let mcpSlugs = MCPSource.kbSlugs()
-        log.line("FDA=\(fda) · detected: \(sources.isEmpty ? "none" : sources.map(\.label).joined(separator: ", ")) · gmail=\(runGmail) calendar=\(runCalendar) · connectors=\(mcpSlugs.count)")
-        guard !connectors.isEmpty || runGmail || runCalendar || !mcpSlugs.isEmpty else {
-            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "no_sources")
-            log.line("nothing enabled — skipping run."); return
-        }
-        let modelPath = ModelLocator.resolve()
-        if !connectors.isEmpty && modelPath == nil {
-            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "model_missing")
-            log.line("model not found — skipping run."); return
-        }
-
-        // B6: go/no-go gate — a lid-shut 3am run holds the Mac fully awake + hammers the GPU, so only
-        // when it's safe: on AC (not Low Power, not thermally critical), or on battery above the
-        // charge floor when the user opted in (the home's Analysis dropdown). Skip otherwise; the
-        // wake is already re-armed for tomorrow by the loop, so we just try again next night.
-        let allowBattery = ud(Self.allowBatteryKey)
-        let battery = PowerState.batteryPercent().map { "\($0)%" } ?? "n/a"
-        log.line("power: ac=\(PowerState.onACPower()) battery=\(battery) allowBattery=\(allowBattery) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
-        if let blocked = PowerState.overnightBlockReason(allowBattery: allowBattery) {
-            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: blocked)
-            log.line("GATED — \(blocked); skipping this run (retry next night).")
-            // Telemetry, not a defect — TelemetryDeck counts it; Sentry stays quiet (2026-07-12).
-            Analytics.signal("Scheduler.gated", parameters: ["reason": blocked])
-            return
-        }
-
-        guard !Task.isCancelled else { return }
-        let began = await WakeHelperClient.shared.beginAwake(timeout: 1800)
-        log.line("beginAwake (disablesleep 1): \(began ? "OK" : "FAILED")")
-        // The night's diagnostics baseline: what the network and codex's login look like BEFORE
-        // any cloud call — so a dead cloud stage can be read against them in the morning
-        // (structure only; see CodexDiagnostics.swift).
-        await CodexCLI.shared.beginDiagnosticsRun()
-        let netAtStart = NetworkSnapshot.shared.current
-        log.line("network: \(netAtStart.status)/\(netAtStart.interface) \(Int(Date().timeIntervalSince(woke)))s since wake")
-        let signin = CodexAuthSnapshot.read()
-        log.line(signin.logLine)
-        var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "mcp": "skipped", "vault": "pending", "proactive": "skipped", "device": "skipped", "awake": began ? "ok" : "failed", "sleep": "pending"]
-        var unavailableConnectors: Set<String> = []
-        var firstCloudCallAt: Date?
-        var deviceItems = 0, deviceKept = 0, deviceFailed = 0, deviceExtractionFailed = 0, deviceSeconds = 0
-        let heart = Task {
-            while !Task.isCancelled && !pulse.sleepWasRestored {
-                _ = await WakeHelperClient.shared.heartbeat()
-                try? await Task.sleep(for: .seconds(60))
-            }
-        }
-
-        // The night's cloud legs deserve a current Codex CLI: the daily update runs here first
-        // (self-capped to once a day, a no-op when already newest; a failed update never blocks
-        // the run — the legs go on with the CLI they have).
-        await CodexSetup.shared.updateIfDue(trigger: "overnight")
-        if let v = CodexSetup.shared.version { log.line("codex CLI \(v)") }
-        await ClaudeSetup.shared.updateIfDue(trigger: "overnight")   // self-guards: Claude backend only
-        if ModelBackend.current == .claude, let v = ClaudeSetup.shared.version { log.line("claude CLI \(v)") }
-
-        /// Let the Mac sleep again — the one exit every path takes (normal end, the disk-full stop,
-        /// or a cancellation bail). If the stall watchdog already restored sleep, leave the helper
-        /// alone: by the time a wedged run thaws, a NEXT night could be legitimately holding awake.
-        func releaseAwake() async {
-            heart.cancel()
-            if pulse.sleepWasRestored {
-                log.line("night was ended by the watchdog — sleep already restored; leaving the helper alone.")
-                return
-            }
-            let ended = await WakeHelperClient.shared.endAwake()
-            legs["sleep"] = ended ? "ok" : "failed"
-            log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — processing ended.")
-        }
-
-        if Task.isCancelled { await releaseAwake(); return }
-        if !connectors.isEmpty, let modelPath {
-            log.line("IterativeRun .auto over \(connectors.count) connector(s)…")
-            let throttle = LogThrottle()
-            let p = await IterativeRun(modelPath: modelPath).run(connectors, mode: .auto) { pr in
-                pulse.touch()
-                throttle.maybe { log.line("  … \(pr.done)/\(pr.total)  kept=\(pr.survivors) junk=\(pr.junk) failed=\(pr.failed)") }
-            }
-            log.line("device DONE: \(p.survivors) kept · \(p.junk) junk · \(p.failed) failed of \(p.total)")
-            deviceItems = p.total; deviceKept = p.survivors; deviceFailed = p.failed; deviceExtractionFailed = p.extractionFailed
-            legs["device"] = deviceFailed > 0 || deviceExtractionFailed > 0 || p.mailIncomplete ? "partial" : "ok"
-            deviceSeconds = Int(Date().timeIntervalSince(woke))
-            // A full disk stopped the read (see IterativeRun): nothing more can be saved tonight, and
-            // the cloud legs write too (marks, the knowledge-base staging copy). Record the morning
-            // caution and end the night here; the marks are per-item atomic, so tomorrow resumes.
-            if p.diskFull {
-                DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .failed, reason: "disk_full")
-                log.line("disk full — stopping the night here; the morning caution says so.")
-                OvernightCaution.record(.diskFull)
-                await releaseAwake()
-                return
-            }
-        }
-        // Leg boundaries double as cancellation bails: a run the watchdog (or a mid-run stop)
-        // cancelled must not thaw hours later and start fresh cloud legs into someone's morning.
-        if Task.isCancelled { await releaseAwake(); return }
-        if runGmail {
-            firstCloudCallAt = firstCloudCallAt ?? Date()
-            legs["gmail"] = await cloudLeg("Gmail", log: log, pulse: pulse) { try await GmailConnect.runIterative { _ in pulse.touch() } }
-        }
-        if Task.isCancelled { await releaseAwake(); return }
-        if runCalendar {
-            firstCloudCallAt = firstCloudCallAt ?? Date()
-            legs["calendar"] = await cloudLeg("Calendar", log: log, pulse: pulse) { try await CalendarConnect.runIterative { _ in pulse.touch() } }
-        }
-        if legs["gmail"] == "connector_auth" { unavailableConnectors.insert("gmail") }
-        if legs["calendar"] == "connector_auth" { unavailableConnectors.insert("google-calendar") }
-        if Task.isCancelled { await releaseAwake(); return }
-        if !mcpSlugs.isEmpty {
-            firstCloudCallAt = firstCloudCallAt ?? Date()
-            log.line("Connector KB legs (\(mcpSlugs.count))…")
-            pulse.touch()
-            let (outcomes, limited) = await MCPSource.runAll { _, _, _, _ in pulse.touch() }
-            pulse.touch()
-            if Task.isCancelled { await releaseAwake(); return }
-            for o in outcomes { log.line("  \(o.slug): \(o.result)") }
-            legs["mcp"] = outcomes.first(where: { $0.result != "ok" })?.result ?? "ok"
-            unavailableConnectors.formUnion(outcomes.filter { $0.result == "connector_auth" }.map(\.slug))
-            if limited {
-                // The reads run the light tier, so their limit can trip while the heavier tail
-                // still succeeds — record the morning caution here rather than hoping the tail
-                // fails too. Marks didn't advance, so next night's iterative covers the gap.
-                log.line("usage limit during connector reads — remaining skipped, caution recorded")
-                OvernightCaution.record(.usageLimit)
-            }
-        }
-        if Task.isCancelled { await releaseAwake(); return }
-        firstCloudCallAt = firstCloudCallAt ?? Date()   // the ProactiveCycle tail is a cloud call too
-        if CodexAuth.knowledgeBaseOnly == false { legs["proactive"] = "ok" }   // provisional; a failure below overrides
-
-        // The shared post-read tail — knowledge base (create/update) → mirror push → proactive
-        // (decide → research → prepare) → wipe summaries. This is the EXACT chain the home's Analyze
-        // Now runs (ProcessingView → ProactiveCycle), so a scheduled run produces the morning's
-        // For-You cards too — there is no scheduler-specific knowledge-base path. Still held awake +
-        // heartbeating throughout (proactive uses codex, same as the KB step already does).
-        if let failure = await ProactiveCycle.shared.run(scheduled: true, unavailableConnectors: unavailableConnectors, progress: { phase in
-            pulse.touch()
-            Task { @MainActor in
-                switch phase {
-                case .knowledgeBase(let s): log.line("proactive: \(s)")
-                case .deciding:             log.line("proactive: deciding what's worth doing…")
-                case .researching(let n):   log.line("proactive: researching + preparing \(n) item(s)…")
-                case .done(let ready):      log.line("proactive: ✅ cycle done — \(ready) card(s) ready.")
-                case .failed:               log.line("proactive: FAILED")   // reason withheld — it can embed codex output, and every log line is a Release breadcrumb
-                }
-            }
-        }) {
-            // Detail withheld (can embed codex output); the morning caution + codex.failure carry the kind.
-            log.line("proactive cycle ended with a failure (summaries kept for retry)")
-            switch failure.stage {
-            case .vault:      legs["vault"] = failure.reason.rawValue; legs["proactive"] = "skipped"
-            case .deciding, .preparing: legs["vault"] = "ok"; legs["proactive"] = failure.reason.rawValue
-            }
-        } else { legs["vault"] = "ok" }
-
-        if Task.isCancelled { await releaseAwake(); return }
-        await releaseAwake()
-
-        // ONE row per user-night: did the cloud stage work, and if not, which leg failed why —
-        // read against the network + login baseline taken at wake. Replaces reading three
-        // scattered warnings per night. Structure only.
-        let diag = await CodexCLI.shared.diagnosticsRunSummary()
-        let failed = legs.values.filter { $0 != "ok" && $0 != "skipped" }
-        let ran = legs.values.filter { $0 != "skipped" }
-        let offlineReasons: Set<String> = ["dns", "connect_timeout", "tls"]
-        let outcome: String
-        if failed.isEmpty { outcome = Diagnostics.current?.hasFailure == true ? "degraded" : "ok" }
-        else if netAtStart.status != "satisfied" || failed.allSatisfy({ offlineReasons.contains($0) }) { outcome = "offline" }
-        else if failed.count < ran.count { outcome = "partial" }
-        else { outcome = "failed" }
-        DiagnosticHistory.finish(.overnight, id: diagnosticID,
-            outcome: outcome == "ok" ? .completed : (DiagnosticHistory.Outcome(rawValue: outcome) ?? .failed),
-            measurements: ["elapsed_ms": Int(Date().timeIntervalSince(woke) * 1000),
-                "device_items": deviceItems, "device_failed": deviceFailed,
-                "device_extraction_failed": deviceExtractionFailed], stages: legs)
-        if outcome == "ok" { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
-        var tags: [String: String] = [
-            "trigger": "overnight", "outcome": outcome,
-            "device": legs["device"]!, "awake": legs["awake"]!, "sleep": legs["sleep"]!,
-            "gmail": legs["gmail"]!, "calendar": legs["calendar"]!, "mcp": legs["mcp"]!,
-            "vault": legs["vault"]!, "proactive": legs["proactive"]!,
-            "network_at_start": netAtStart.status, "interface_at_start": netAtStart.interface,
-            "codex_version": diag.version ?? "unknown",
-        ]
-        tags.merge(signin.tags) { cur, _ in cur }
-        var extra: [String: String] = [
-            "device_items": String(deviceItems), "device_kept": String(deviceKept),
-            "device_failed": String(deviceFailed), "device_extraction_failed": String(deviceExtractionFailed), "secs_device_stage": String(deviceSeconds),
-            "mcp_connectors": String(mcpSlugs.count),
-            "pings": String(diag.pings), "ping_ms_first": diag.firstPingMS.map(String.init) ?? "n/a",
-            "secs_wake_to_first_cloud_call": String(Int((firstCloudCallAt ?? Date()).timeIntervalSince(woke))),
-        ]
-        extra.merge(signin.extras) { cur, _ in cur }
-        CrashReporting.captureEvent("overnight.cloud_stage", level: outcome == "ok" ? .info : .warning,
-                                    tags: tags, extra: extra,
-                                    fingerprint: ["overnight", "cloud_stage", outcome])
-    }
-
-    /// Runs one cloud leg and returns "ok" or the closed-vocabulary reason it failed with.
-    /// Leg start and end both count as progress for the stall watchdog (so a night of several
-    /// quick legs never reads as silence between them).
-    private func cloudLeg(_ name: String, log: SchedulerLog, pulse: NightPulse, _ body: () async throws -> Void) async -> String {
-        pulse.touch()
-        log.line("\(name) leg…")
-        do { try await body(); pulse.touch(); log.line("\(name) DONE"); return "ok" }
-        catch {
-            pulse.touch()
-            if Task.isCancelled || error is CancellationError { return "cancelled" }
-            if ConnectorReadFailure.isConnectionFailure(error) { return "connector_auth" }
-            let reason = CodexFailureReason.classify(error)
-            if !Diagnostics.isExpected(error) {
-                Diagnostics.report(.sourceReadFailed, phase: .read, reason: "scheduled_cloud_source", error: error, source: name.lowercased(), terminal: true)
-            }
-            log.line("\(name) FAILED: \(ErrorLabel(error)) — \(reason.rawValue)")
-            return reason.rawValue
-        }
-    }
-
-    // MARK: - Time helpers
-
-    nonisolated static func nextOccurrence(minutesSinceMidnight minutes: Int, after now: Date = Date(),
-                                          calendar: Calendar = .current) -> Date {
-        let m = validatedMinutes(minutes)
-        // A missing spring-forward time runs at the next valid time. A repeated fall-back
-        // time uses its first occurrence. Calendar matching preserves the chosen local hour.
-        return calendar.nextDate(after: now, matching: DateComponents(hour: m / 60, minute: m % 60, second: 0),
-            matchingPolicy: .nextTime, repeatedTimePolicy: .first, direction: .forward)
-            ?? now.addingTimeInterval(86_400)
-    }
-
-    static func clock(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "h:mm a"; return f.string(from: d) }
-
-    private func ud(_ key: String) -> Bool { UserDefaults.standard.bool(forKey: key) }
-}
-
-/// The night's progress pulse — shared between the run body (which touches it on every sign of
-/// life: device items, leg starts/ends, proactive phases) and the loop's stall watchdog (which
-/// reads it once a minute). Lock-guarded: touches arrive from whatever context the legs run in.
-/// Also carries the one-way "sleep already restored" latch the watchdog sets before cancelling a
-/// stalled run, so any exit path the wedged run later thaws into leaves the helper alone.
-private final class NightPulse: @unchecked Sendable {
-    private let lock = NSLock()
-    private var last = Date()
-    private var restored = false
-    func touch() { lock.lock(); last = Date(); lock.unlock() }
-    var secondsSinceProgress: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(last) }
-    func markSleepRestored() { lock.lock(); restored = true; lock.unlock() }
-    var sleepWasRestored: Bool { lock.lock(); defer { lock.unlock() }; return restored }
-}
-
-/// Throttles progress logging to ~once every 20s so a long run leaves a readable trail without spam.
-private final class LogThrottle: @unchecked Sendable {
-    private let lock = NSLock()
-    private var last = Date.distantPast
-    func maybe(_ body: () -> Void) {
-        lock.lock(); let go = Date().timeIntervalSince(last) > 20; if go { last = Date() }; lock.unlock()
-        if go { body() }
+    /// Calendar matching handles DST and local-time changes without adding fixed 24-hour spans.
+    static func nextOccurrence(minutesSinceMidnight minutes: Int, now: Date = Date(), calendar: Calendar = .current) -> Date {
+        let valid = validatedMinutes(minutes)
+        return calendar.nextDate(after: now, matching: DateComponents(hour: valid / 60, minute: valid % 60, second: 0),
+            matchingPolicy: .nextTime, repeatedTimePolicy: .first, direction: .forward) ?? now.addingTimeInterval(86400)
     }
 }
 

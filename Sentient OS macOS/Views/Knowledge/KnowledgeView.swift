@@ -105,6 +105,9 @@ struct KnowledgeView: View {
                   await HomePageEntrance.wait(animate: animateEntrance, reducedMotion: reducedMotion) else { return }
             entranceReady = true
         }
+        .onChange(of: ProcessingCoordinator.shared.knowledgeRevision) { _, _ in
+            if isPresented && !editing { Task { await loadVault() } }
+        }
         .onDisappear(perform: deactivate)
         .alert("You have unsaved edits", isPresented: $showDiscardPrompt) {
             Button("Save") { promptSave() }
@@ -753,7 +756,7 @@ struct KnowledgeView: View {
             }
         } else if loaded && vault == nil {
             emptyState(title: "No knowledge base yet",
-                       subtitle: "Once Sentient has read your life, your private knowledge base shows up here.")
+                       subtitle: "Your knowledge will appear here after analysis. You can use Sidekick while it is being built.")
         } else if loaded {
             emptyState(title: "Select a note", subtitle: nil)
         } else {

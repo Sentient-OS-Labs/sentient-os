@@ -113,8 +113,9 @@ enum DiagnosticExport {
         let developerEnabled: Bool
         let configuredMinutesAfterMidnight: Int
         let initialAnalysisCompletedAt: Date?
-        let autoEnableDueAt: Date?
-        let autoEnableFired: Bool
+        let enabledAfterSetup: Bool
+        let analysisState: String
+        let pendingAnalysisAt: Date?
         let nextArmedWakeAt: Date?
         let helperHealth: String
         let needsSetup: Bool
@@ -147,7 +148,7 @@ enum DiagnosticExport {
         let caution = OvernightCaution.latest()
         let prodEnabled = defaults.bool(forKey: OvernightScheduler.prodEnabledKey)
         let devEnabled = defaults.bool(forKey: OvernightScheduler.enabledKey)
-        let allowBattery = defaults.bool(forKey: OvernightScheduler.allowBatteryKey)
+        let allowBattery = (defaults.object(forKey: OvernightScheduler.allowBatteryKey) as? Bool) ?? true
         #if DEBUG
         let configuration = "Debug"
         #else
@@ -195,11 +196,12 @@ enum DiagnosticExport {
             promptHistory: prompts,
             doubleTap: DoubleTapInfo(enabled: DoubleTap.isEnabled, drafting: DoubleTap.shared.isDrafting,
                 provider: provider.rawValue, model: provider == .sentient ? nil : clean(provider.model), api: provider.api.rawValue),
-            overnight: OvernightInfo(enabled: prodEnabled || devEnabled, productionEnabled: prodEnabled,
+            overnight: OvernightInfo(enabled: scheduler.isEnabled, productionEnabled: prodEnabled,
                 developerEnabled: devEnabled, configuredMinutesAfterMidnight: OvernightScheduler.configuredMinutes,
                 initialAnalysisCompletedAt: OvernightScheduler.firstCycleCompletedAt,
-                autoEnableDueAt: OvernightScheduler.autoEnableFireDate,
-                autoEnableFired: defaults.bool(forKey: OvernightScheduler.autoEnableFiredKey),
+                enabledAfterSetup: defaults.bool(forKey: OvernightScheduler.setupEnabledKey),
+                analysisState: appState.processing.record.status.rawValue,
+                pendingAnalysisAt: appState.processing.record.due,
                 nextArmedWakeAt: scheduler.nextWakeAt, helperHealth: String(describing: helper),
                 needsSetup: scheduler.needsSchedulerSetup, allowBattery: allowBattery,
                 currentPowerBlockReason: PowerState.overnightBlockReason(allowBattery: allowBattery),

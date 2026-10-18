@@ -109,7 +109,7 @@ struct HealthPane: View {
         .onChange(of: wakeSetup.ready) { _, ready in
             if ready {
                 let needsSetup = appState?.scheduler.needsSchedulerSetup == true
-                appState?.scheduler.maybeAutoEnable()
+                appState?.scheduler.enableAfterSetup()
                 if needsSetup { appState?.scheduler.reevaluate() }
             }
         }

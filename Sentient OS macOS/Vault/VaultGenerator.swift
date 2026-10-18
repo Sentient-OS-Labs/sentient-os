@@ -48,9 +48,8 @@ actor VaultGenerator {
     struct ResumeToken: Sendable, Codable {
         let sessionID: String?
         let stagingPath: String
-        /// UPDATE only (B11 freshness check): the live vault's fingerprint captured when staging was
-        /// seeded, carried across a usage-limit resume so the swap can still detect a concurrent
-        /// editor edit made during the (possibly multi-attempt) run. nil for a build.
+        /// Live-vault fingerprint at the start of a build/update, carried across retries so
+        /// publishing can detect user edits made while analysis runs in the background.
         var vaultFingerprint: String? = nil
         /// Corpus slicing (1.0.1): the next UNFED slice of the staging dir's corpus snapshot.
         /// nil = a pre-slicing or single-slice token — session-resume only, nothing left to feed.
@@ -152,7 +151,10 @@ actor VaultGenerator {
     /// swap — the vault ends up with staging's contents and the old vault is removed as one operation;
     /// on ANY throw the existing vault is left intact (and staging survives for a retry). Falls back to
     /// a plain move when no vault exists yet (first build).
-    static func swapStagingIntoVault(_ staging: URL) throws {
+    static func swapStagingIntoVault(_ staging: URL, expectedFingerprint: String? = nil) throws {
+        if let expectedFingerprint, vaultFingerprint(vaultRoot) != expectedFingerprint {
+            throw VaultCloud.CloudError.vaultChanged
+        }
         let fm = FileManager.default
         let root = vaultRoot
         try WritingStyle.preserve(in: staging, from: root)
@@ -241,13 +243,23 @@ actor VaultGenerator {
     ) async throws -> Result {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await generatePinned(notes: notes, resume: resume?.matchingRuntime(backend),
-                                     onProgress: onProgress, onLine: onLine)
+            let matching = resume?.matchingRuntime(backend)
+            let baseline = matching?.vaultFingerprint ?? Self.vaultFingerprint(Self.vaultRoot)
+            do {
+                return try await generatePinned(notes: notes, resume: matching, baseline: baseline,
+                                                onProgress: onProgress, onLine: onLine)
+            } catch let VaultError.usageLimit(message, token) {
+                var token = token; token.vaultFingerprint = baseline
+                throw VaultError.usageLimit(message: message, resume: token)
+            } catch let VaultError.interrupted(token) {
+                var token = token; token.vaultFingerprint = baseline
+                throw VaultError.interrupted(resume: token)
+            }
         }
     }
 
     private func generatePinned(
-        notes: [CloudNote], resume: ResumeToken?,
+        notes: [CloudNote], resume: ResumeToken?, baseline: String,
         onProgress: @Sendable @escaping (Progress) -> Void,
         onLine: (@Sendable (String) -> Void)?
     ) async throws -> Result {
@@ -400,7 +412,7 @@ actor VaultGenerator {
         try Task.checkCancellation()
         CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
         do {
-            try Self.swapStagingIntoVault(staging)
+            try Self.swapStagingIntoVault(staging, expectedFingerprint: baseline)
         } catch {
             Log("VaultGenerator: ❌ swap failed, vault left intact — \(ErrorLabel(error))")
             // Structured event, not capture(error): a Cocoa move error embeds the failing note's

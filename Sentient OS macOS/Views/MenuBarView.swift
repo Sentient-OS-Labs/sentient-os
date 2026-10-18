@@ -17,12 +17,11 @@ struct MenuBarView: View {
         Button("Open Sentient OS") { openHome() }
 
         Divider()
-        switch appState.status {
-        case .idle:                            Text("Sentient OS · idle")
-        case .processing(let done, let total): Text("Processing \(done) / \(total)")
-        case .paused(let reason):              Text("Paused · \(reason)")
-        case .error(let message):              Text("Error · \(message)")
-        }
+        if appState.hasCompletedOnboarding {
+            Text(appState.processing.statusLine)
+            Button("View analysis progress") { openWindow(id: ProcessingWindowView.windowID) }
+                .disabled(ComputerUseUpgrade.shared.isBlockingInterface)
+        } else { Text("Finish setting up Sentient") }
 
         Divider()
         Button("Check for Updates…") {

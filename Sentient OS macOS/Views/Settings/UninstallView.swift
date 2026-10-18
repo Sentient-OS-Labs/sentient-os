@@ -18,7 +18,7 @@ struct UninstallView: View {
 
     fileprivate enum Phase { case farewell, working, helperPrompt, gone }
     @State private var phase: Phase = .farewell
-    @State private var stage: Uninstall.Stage = .helper
+    @State private var stage: Uninstall.Stage = .stopping
     /// Fulfilled by the interstitial's buttons while the teardown awaits a helper decision.
     @State private var helperResolver: ((Uninstall.HelperChoice) -> Void)?
     /// Feedback fallback: true briefly after the address was copied because no mail app answered.
@@ -77,6 +77,8 @@ struct UninstallView: View {
             .padding(.top, 12)
             prose("Saved contact addresses and invitation or lifetime-access records are retained.")
                 .padding(.top, 12)
+            prose("Any running analysis or Sidekick task will be stopped first.")
+                .padding(.top, 10)
 
             HStack(spacing: 10) {
                 FarewellPill(title: "Keep Sentient", style: .quiet) { dismiss() }
@@ -130,7 +132,9 @@ struct UninstallView: View {
             Text("Taking Sentient apart, gently.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
-            prose("Give us a moment. We’re removing Sentient’s local data and saved connections.")
+            prose(stage == .stopping
+                  ? "Stopping active work safely before removing Sentient’s data."
+                  : "Give us a moment. We’re removing Sentient’s local data and saved connections.")
                 .padding(.top, 14)
             ProgressView()
                 .controlSize(.small)
@@ -200,7 +204,7 @@ struct UninstallView: View {
 
     private func beginUninstall() {
         phase = .working
-        stage = .helper
+        stage = .stopping
         Task { @MainActor in
             let finished = await Uninstall.run(
                 appState: appState,

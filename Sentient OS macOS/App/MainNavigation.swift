@@ -61,10 +61,6 @@ final class MainNavigation {
         hasOpenedKnowledge = false
     }
 
-    /// Keep a notification's destination if one arrived during onboarding.
-    func finishOnboarding() {
-        if page == .home { show(.knowledge) }
-    }
 }
 
 /// The same prominent way home on every secondary page.

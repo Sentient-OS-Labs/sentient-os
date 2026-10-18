@@ -21,34 +21,90 @@ nonisolated enum Fixture {
     static let defaults = UserDefaults(suiteName: suite)!
 }
 nonisolated func Log(_ text: String) {}
-enum Analytics { static func signal(_ text: String) {} }
+enum Analytics { static func signal(_ text: String, parameters: [String: String] = [:]) {} }
 enum CodexAuth { static var knowledgeBaseOnly = false }
-enum LoginItem { static var isEnabled = true; static func enable() {} }
-enum Diagnostics {
-    enum Kind { case wakeMissed }
-    enum Phase { case begin }
-    enum Count { case elapsedMS }
-    static func report(_ kind: Kind, phase: Phase, reason: String, counts: [Count: Int], cooldown: Int) {}
+enum LoginItem { static var isEnabled = true }
+enum AppState { static let onboardingKey = "fixture.onboarded" }
+enum WakeHelperConfig { static let maxAwakeSeconds = 7200 }
+enum CodexTrigger { case onboarding, analyzeNow, overnight }
+enum ModelBackend: String { case chatgpt; static let current = Self.chatgpt }
+enum DiagnosticHistory {
+    enum Kind { case overnight }
+    enum Outcome { case blocked }
+    static func begin(_ kind: Kind, provider: String) -> UUID { UUID() }
+    static func finish(_ kind: Kind, id: UUID, outcome: Outcome, reason: String) {}
 }
 final class SchedulerLog { func line(_ text: String) {} }
 final class WakeHelperClient {
     enum Health { case ready, requiresApproval }
     static let shared = WakeHelperClient()
-    var isReady = true
     var armed: [Date] = []
+    var effectiveWakes = Set<Date>()
+    private var trackedWake: Date?
     var holdNextArm = false
     var pending: CheckedContinuation<Bool, Never>?
+    var broadCancels = 0
+    var awakeHeld = false
+    var endAwakeCalls = 0
     func healthProbe() async -> Health { .ready }
-    func cancelAllWakes() async -> Bool { true }
-    func cancelWake() async -> Bool { true }
-    func armWake(at date: Date) async -> Bool {
-        armed.append(date)
-        if holdNextArm {
-            holdNextArm = false
-            return await withCheckedContinuation { pending = $0 }
-        }
+    func cancelAllWakes() async -> Bool { broadCancels += 1; effectiveWakes.removeAll(); trackedWake = nil; return true }
+    func cancelWake() async -> Bool {
+        if let trackedWake { effectiveWakes.remove(trackedWake) }
+        trackedWake = nil
         return true
     }
+    func endAwake() async -> Bool { endAwakeCalls += 1; awakeHeld = false; return true }
+    func armWake(at date: Date) async -> Bool {
+        armed.append(date)
+        let result: Bool
+        if holdNextArm {
+            holdNextArm = false
+            // Like non-cancellable XPC, this can apply a wake after its caller is cancelled.
+            result = await withCheckedContinuation { pending = $0 }
+        } else { result = true }
+        if result { effectiveWakes.insert(date); trackedWake = date }
+        return result
+    }
+}
+struct ProcessingRequest { static func current() -> Self { Self() } }
+struct RunProgress {}
+final class ProcessingCoordinator {
+    static let shared = ProcessingCoordinator()
+    enum Timing { case now, overnight }
+    enum State { case idle, scheduled }
+    enum Block: String { case battery }
+    enum Wait { case power(Block), model, sources }
+    var record = ProcessingPlan.Record() { didSet { ProcessingPlan.save(record, to: Fixture.defaults) } }
+    var state = State.idle
+    var initialComplete = true
+    var isBusy = false
+    var isSuspended = false
+    var paused: Bool { record.status == .paused }
+    var hasPendingFirstNight: Bool { !initialComplete && record.status == .scheduled }
+    var requestOverride: ProcessingRequest?
+    var carried = RunProgress()
+    var task: Task<Void, Never>?
+    var finishContinuation: CheckedContinuation<Void, Never>?
+    var runsStarted = 0
+    static func scheduleLabel(_ date: Date) -> String { "fixture schedule" }
+    private func admission(_ request: ProcessingRequest, scheduled: Bool) -> Wait? { nil }
+    private func detail(for wait: Wait) -> String { "fixture admission" }
+    private func begin(_ request: ProcessingRequest) {
+        isBusy = true; record.status = .running; record.due = nil
+        WakeHelperClient.shared.awakeHeld = true
+        task = Task {
+            runsStarted += 1
+            await withCheckedContinuation { finishContinuation = $0 }
+            isBusy = false; record.status = .completed
+            WakeHelperClient.shared.awakeHeld = false
+            task = nil
+        }
+    }
+    func finishOwnedRun() {
+        let continuation = finishContinuation; finishContinuation = nil
+        continuation?.resume()
+    }
+    // PRODUCTION_PROCESSING_CONTROL_METHODS
 }
 
 // Replace screen geometry and panel IO, while compiling actual production hover/passthrough methods.
@@ -83,15 +139,6 @@ final class PointerProbe {
 '''
 
 TESTS = r'''
-extension OvernightScheduler {
-    // Pipeline replacement only: a controlled long-running job to detect accidental cancellation.
-    func runNight(log: SchedulerLog) async {}
-    func simulateRunningNight() {
-        loopTask = Task { try? await Task.sleep(for: .seconds(30)) }
-    }
-    var runWasCancelled: Bool { loopTask?.isCancelled ?? true }
-}
-
 @main enum Tests {
     static var checks = 0
     static func check(_ value: @autoclosure () -> Bool, _ label: String) {
@@ -147,7 +194,7 @@ extension OvernightScheduler {
             calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
         }
         func next(_ minutes: Int, _ now: Date) -> Date {
-            OvernightScheduler.nextOccurrence(minutesSinceMidnight: minutes, after: now, calendar: calendar)
+            OvernightScheduler.nextOccurrence(minutesSinceMidnight: minutes, now: now, calendar: calendar)
         }
         check(next(180, date(2026, 10, 18, 1)) == date(2026, 10, 18, 3), "later today")
         check(next(180, date(2026, 10, 18, 4)) == date(2026, 10, 19, 3), "passed time goes to tomorrow")
@@ -159,7 +206,9 @@ extension OvernightScheduler {
         check(calendar.timeZone.secondsFromGMT(for: firstFall) == -7 * 3600, "fall-back uses first occurrence")
         check(next(90, firstFall) == date(2026, 11, 2, 1, 30), "fall-back does not run twice")
 
+        d.set(true, forKey: AppState.onboardingKey)
         let helper = WakeHelperClient.shared
+        let processing = ProcessingCoordinator.shared
         let scheduler = OvernightScheduler()
         scheduler.commit()
         try await Task.sleep(for: .milliseconds(30))
@@ -174,12 +223,14 @@ extension OvernightScheduler {
         scheduler.commit()
         try await until { scheduler.nextWakeAt != nil }
         check(helper.armed.count == 1, "production-only enabled setting arms")
+        check(helper.effectiveWakes == [scheduler.nextWakeAt!], "exactly one owned wake initially armed")
         check(!d.bool(forKey: OvernightScheduler.enabledKey), "no developer toggle needed")
         d.set(second, forKey: OvernightScheduler.minutesKey)
         scheduler.commit()
         try await until { helper.armed.count == 2 && scheduler.nextWakeAt != nil }
         let selected = Calendar.current.dateComponents([.hour, .minute], from: scheduler.nextWakeAt!)
         check(selected.hour! * 60 + selected.minute! == second, "time edit interrupts waiting and re-arms promptly")
+        check(helper.effectiveWakes == [scheduler.nextWakeAt!], "changing time removes the previous physical wake")
 
         helper.holdNextArm = true
         d.set(first, forKey: OvernightScheduler.minutesKey)
@@ -187,53 +238,118 @@ extension OvernightScheduler {
         try await until { helper.pending != nil }
         d.set(third, forKey: OvernightScheduler.minutesKey)
         scheduler.commit()
+        try await Task.sleep(for: .milliseconds(30))
+        check(helper.armed.count == 3, "new arm waits for old in-flight XPC arm to drain")
         helper.pending!.resume(returning: true); helper.pending = nil
         try await until { helper.armed.count == 4 && scheduler.nextWakeAt != nil }
         let latest = Calendar.current.dateComponents([.hour, .minute], from: scheduler.nextWakeAt!)
         check(latest.hour! * 60 + latest.minute! == third, "edit during in-flight arm wins without stale wake")
+        check(helper.effectiveWakes == [scheduler.nextWakeAt!], "late old arm is removed before newest arm")
         d.set(false, forKey: OvernightScheduler.prodEnabledKey)
         scheduler.reevaluate()
         try await Task.sleep(for: .milliseconds(30))
         check(scheduler.nextWakeAt == nil && scheduler.statusLine == "off", "disable still clears scheduled state")
 
+
+        // Rapid off/on also drains old helper IO before cancel/re-arm can overlap.
         d.set(true, forKey: OvernightScheduler.prodEnabledKey)
+        helper.holdNextArm = true
+        scheduler.reevaluate()
+        try await until { helper.pending != nil }
+        let heldArms = helper.armed.count
+        d.set(false, forKey: OvernightScheduler.prodEnabledKey); scheduler.reevaluate()
+        d.set(third, forKey: OvernightScheduler.minutesKey)
+        d.set(true, forKey: OvernightScheduler.prodEnabledKey); scheduler.reevaluate()
+        try await Task.sleep(for: .milliseconds(30))
+        check(helper.armed.count == heldArms, "off/on cannot bypass previous arm drain")
+        helper.pending!.resume(returning: true); helper.pending = nil
+        try await until { scheduler.nextWakeAt != nil }
+        check(helper.effectiveWakes == [scheduler.nextWakeAt!], "off/on leaves only the current owned wake")
+        d.set(false, forKey: OvernightScheduler.prodEnabledKey); scheduler.reevaluate()
+        try await until { helper.effectiveWakes.isEmpty }
+
+        // The actual coordinator choice/defer methods honor the custom time, including
+        // pending first analysis for knowledge-base-only users with production toggle off.
+        processing.initialComplete = false
+        CodexAuth.knowledgeBaseOnly = true
+        d.set(first, forKey: OvernightScheduler.minutesKey)
+        processing.choose(.overnight)
+        let chosen = Calendar.current.dateComponents([.hour, .minute], from: processing.record.due!)
+        check(chosen.hour! * 60 + chosen.minute! == first, "first-night choice uses configured clock time")
+        processing.record.notice = "Preserve the existing notice"
+        let oldDue = processing.record.due
+        d.set(second, forKey: OvernightScheduler.minutesKey)
+        scheduler.commit()
+        try await until { scheduler.nextWakeAt != nil }
+        let pending = Calendar.current.dateComponents([.hour, .minute], from: processing.record.due!)
+        check(pending.hour! * 60 + pending.minute! == second && processing.record.due != oldDue,
+              "commit updates persisted pending first-night due before scheduler reads it")
+        check(ProcessingPlan.read(d).due == processing.record.due, "rescheduled due is durable")
+        check(processing.record.notice == "Preserve the existing notice", "reschedule retains pending notice")
+        check(!d.bool(forKey: OvernightScheduler.prodEnabledKey) && scheduler.nextWakeAt == processing.record.due,
+              "pending first night re-arms without enabling production toggle")
+        processing.record.status = .idle; scheduler.reevaluate()
+        try await until { helper.effectiveWakes.isEmpty }
+        processing.initialComplete = true; CodexAuth.knowledgeBaseOnly = false
+
+        // Use production runScheduled: the new owner creates and awaits independent work.
+        d.set(true, forKey: OvernightScheduler.prodEnabledKey)
+        processing.record = .init(status: .scheduled, trigger: .overnight, due: Date().addingTimeInterval(-0.1))
         let running = OvernightScheduler()
-        running.simulateRunningNight()
-        let count = helper.armed.count
+        running.reevaluate()
+        try await until { processing.finishContinuation != nil }
+        let owned = processing.task!
+        let started = processing.runsStarted, count = helper.armed.count
         d.set(first, forKey: OvernightScheduler.minutesKey)
         running.commit()
         try await Task.sleep(for: .milliseconds(30))
-        check(!running.runWasCancelled && helper.armed.count == count, "editing time never cancels active overnight work")
+        check(!owned.isCancelled && processing.isBusy && processing.runsStarted == started,
+              "editing schedule never cancels or duplicates ProcessingCoordinator work")
+        check(helper.awakeHeld && helper.endAwakeCalls == 0, "schedule edit preserves active analysis awake lease")
+        check(helper.armed.count == count, "replacement scheduler waits for its previous analysis await to drain")
+        processing.finishOwnedRun()
+        try await until { !processing.isBusy && running.nextWakeAt != nil }
+        let afterRun = Calendar.current.dateComponents([.hour, .minute], from: running.nextWakeAt!)
+        check(afterRun.hour! * 60 + afterRun.minute! == first, "new selected clock arms after ongoing analysis completes")
+        check(processing.runsStarted == started && !owned.isCancelled, "rescheduling retained one uncancelled analysis owner")
+        check(helper.effectiveWakes == [running.nextWakeAt!], "post-analysis scheduler owns one physical wake")
         d.set(false, forKey: OvernightScheduler.prodEnabledKey); running.reevaluate()
+        try await until { helper.effectiveWakes.isEmpty }
+        check(helper.broadCancels == 0, "rescheduling never clears other applications' wake events")
         print("PASS: \(checks) notch preferences, local/DST time, reschedule race, and active-run checks")
     }
 }
 '''
 
 
+def method(source: str, signature: str) -> str:
+    start = source.index(signature)
+    opening = source.index("{", start)
+    depth, end = 1, opening + 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
 def main():
     source = (APP / "Scheduling/OvernightScheduler.swift").read_text()
-    # Compile the entire production control half, including commit/start/stop/loop. The
-    # heavy analysis pipeline below runNight is outside this test's scope and replaced above.
-    control = source[:source.index("    /// One night, raced against the stall watchdog.")]
-    time_helpers = source[source.index("    // MARK: - Time helpers"):source.index("/// The night's progress pulse")]
-    source = (control + time_helpers).replace("UserDefaults.standard", "Fixture.defaults")
+    # Compile the full new scheduling owner, replacing only its log sink/defaults.
+    # ProcessingCoordinator's actual choice/defer/runScheduled methods are compiled too;
+    # heavy processing and the OS awake helper are inert independent owned-task fixtures.
+    source = source[:source.index("/// Persistent scheduler log")].replace("UserDefaults.standard", "Fixture.defaults")
+    plan = (APP / "Ingestion/ProcessingPlan.swift").read_text().replace("= .standard", "= Fixture.defaults")
+    owner = (APP / "Ingestion/ProcessingCoordinator.swift").read_text()
+    controls = [method(owner, signature) for signature in ["func choose(", "func runScheduled(", "func deferNight("]]
     notch = (APP / "Notch Magic/NotchWindowController.swift").read_text()
-    methods = []
-    for signature in ["private static func isInteractive(", "private func hoverMouseMoved(", "private func updateMousePassthrough("]:
-        start = notch.index(signature)
-        opening = notch.index("{", start)
-        depth = 1
-        end = opening + 1
-        while depth:
-            depth += (notch[end] == "{") - (notch[end] == "}")
-            end += 1
-        methods.append(notch[start:end].replace("private ", "", 1))
+    methods = [method(notch, signature).replace("private ", "", 1) for signature in [
+        "private static func isInteractive(", "private func hoverMouseMoved(", "private func updateMousePassthrough("]]
     support = SUPPORT.replace("// PRODUCTION_POINTER_METHODS", "\n".join(methods))
+    support = support.replace("// PRODUCTION_PROCESSING_CONTROL_METHODS", "\n".join(controls))
     with tempfile.TemporaryDirectory(prefix="sentient-wake-settings-") as temporary:
         root = Path(temporary)
         fixture = root / "SettingsTests.swift"
-        fixture.write_text(support + source + TESTS)
+        fixture.write_text(support + plan + source + TESTS)
         executable = root / "settings-tests"
         subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-default-isolation", "MainActor",
                         "-parse-as-library", str(APP / "Notch Magic/NotchPreferences.swift"),

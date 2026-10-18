@@ -66,6 +66,8 @@ import SwiftUI
         try await settle(750)
         let ready = elements(host)
         checks["ready_has_send"] = ready.contains { $0.identifier == "sidekick.send" }
+        checks["home_ready_before_initial_analysis"] = app.hasCompletedOnboarding && !app.processing.initialComplete
+        checks["double_tap_waits_for_initial_analysis"] = !DoubleTap.initialAnalysisComplete
         checks["ready_has_no_stop"] = !ready.contains { $0.identifier == "sidekick.stop" }
         captures.append(try await capture(host, name: "01-home-ready", directory: directory))
 

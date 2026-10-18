@@ -141,11 +141,12 @@ enum MCPSource {
     /// `onEvent` gets `(slug, index, count, event)` so the takeover can map windows onto its
     /// bar; the scheduler ignores it and reads the outcomes.
     static func runAll(
+        selectedSlugs: [String]? = nil,
         onEvent: @Sendable @escaping (String, Int, Int, Progress) -> Void = { _, _, _, _ in }
     ) async -> (outcomes: [LegOutcome], hitUsageLimit: Bool) {
         PipelineActivity.begin()
         defer { PipelineActivity.end() }
-        let slugs = kbSlugs()
+        let slugs = selectedSlugs ?? kbSlugs()
         var outcomes: [LegOutcome] = []
         var hitUsageLimit = false
         for (index, slug) in slugs.enumerated() {

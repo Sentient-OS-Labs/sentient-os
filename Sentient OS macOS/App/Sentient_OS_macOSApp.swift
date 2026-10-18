@@ -2,7 +2,7 @@
 //  Sentient_OS_macOSApp.swift
 //  Sentient OS macOS
 //
-//  @main app shell. The main window IS the proactive home (HomeView ⟷ processing takeover);
+//  @main app shell. The main window hosts onboarding and Home; analysis has its own window;
 //  Settings and Knowledge are pages in that same window. Connect-your-AIs is a guide; plus an
 //  always-present MenuBarExtra. The live store is CycleStore (Ingestion/CycleStore.swift),
 //  reached directly by the views — the app shell owns no store.
@@ -62,6 +62,17 @@ struct SentientOSApp: App {
             }
         }
 
+        Window("Analysis", id: ProcessingWindowView.windowID) {
+            ProcessingWindowView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+                .modifier(ComputerUseWindowGuard())
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 760, height: 800)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+
         // PROACTIVE · EXECUTE — the dev window for PART 3 (the executor). Lists the real
         // ready-to-fire actions from the latest research+prepare run, each with a working FIRE
         // button. Opened from DEV TOOLS; a normal titled window so it's obviously closable.
@@ -90,7 +101,7 @@ struct SentientOSApp: App {
         .defaultLaunchBehavior(.suppressed)
 
         // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
-        // login, 14h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
+        // login, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
         Window("Overnight Processing", id: OvernightDevView.windowID) {
             OvernightDevView()
                 .environment(appState)

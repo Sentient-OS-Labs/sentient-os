@@ -1,31 +1,30 @@
 # The Overnight Scheduler & the Wake Helper (Scheduling/)
 
-**Your Mac does the understanding while you sleep.** At 3 AM, with Sentient running in the menu bar
-and overnight wake configured, the Mac can wake with the lid closed, analyze new local sources,
-update knowledge with your chosen AI, prepare morning suggestions, and return to sleep.
-It runs plugged in by default; battery runs require the user's opt-in and the power/thermal gates
+**Your Mac does the understanding while you sleep.** With Sentient running in the menu bar,
+launch at login enabled, and overnight wake configured, the scheduler arms the next local wake
+(3:00 AM by default; editable in Settings → System). Analysis may run on battery within the limits
 below. Cloud models and connected services need their corresponding network access.
 
-The local model analyzes enabled files, messages, notes, Apple Mail and Apple Calendar. A supported
-larger local model can also handle knowledge organization and proactive preparation; a hosted model
-processes the context for those stages under the user's chosen provider. Overnight preparation does
-not send the proposed reply or execute the card's computer task. The user starts that action. This folder is the whole story: the in-app
-scheduler, the tiny root helper that can wake and hold the Mac awake, its installer and XPC client,
-the go/no-go gates, launch at login, and the classification of a failed night into an honest morning
-banner. There is no scheduler-specific processing path: the run uses the same source selection, the
-same `IterativeRun`, and the same `ProactiveCycle` as a hand-pressed Analyze Now.
+Scheduling owns the wake, not analysis. `ProcessingCoordinator` owns one analysis task for the app,
+independent of Home, onboarding, or the progress window. `ProcessingPlan` persists the user's timing
+choice and status; `ProcessingRun` executes the same selected-source and proactive pipeline for
+manual and scheduled work. Sidekick readiness does not depend on completing that initial analysis.
+Overnight preparation does not send proposed replies or execute card actions; the user starts those.
 
 ## Files
 
 | File | Job |
 |---|---|
-| `OvernightScheduler.swift` | The in-app scheduler (owned by `AppState`): the arm-wait-run loop, the 14 h auto-enable state machine, the night's stall watchdog (`runNight` + `NightPulse`), `runProcessing`, and `SchedulerLog`. |
-| `WakeHelper.swift` | The root side: the LaunchDaemon (the app binary relaunched with `--wake-helper`), its six XPC ops, the deadman timer and the absolute awake ceiling, the code-signing gate. |
+| `OvernightScheduler.swift` | The in-app arm-wait loop, setup enablement and migration, configurable local wake time, serialized schedule replacement, and `SchedulerLog`. Delegates analysis to the shared coordinator. |
+| `../Ingestion/ProcessingCoordinator.swift` | Owns the analysis task, admission checks, progress, pause/cancellation draining, awake lease, heartbeat, and stall/ceiling monitor. |
+| `../Ingestion/ProcessingPlan.swift` | Durable timing intent and status, relaunch recovery, and the initial-analysis milestone. |
+| `../Ingestion/ProcessingRun.swift` | Shared local, Gmail, Calendar, and curated MCP reads followed by `ProactiveCycle`. |
+| `WakeHelper.swift` | The root LaunchDaemon (the app binary relaunched with `--wake-helper-managed`), narrow XPC operations, deadman timer, absolute awake ceiling, and code-signing gate. |
 | `WakeHelperProtocol.swift` | The XPC contract and the shared names (`WakeHelperConfig`). |
-| `WakeHelperClient.swift` | The app side: the XPC calls (each reply/error/timeout-guarded), liveness probing (`isReachable`, `healthProbe`), and the SMAppService plumbing the dev cockpit uses. |
-| `WakeHelperInstaller.swift` | The production installer: one native password prompt writes the daemon plist into `/Library/LaunchDaemons` and bootstraps it. Also the uninstaller. |
+| `WakeHelperClient.swift` | App-side XPC calls (reply/error/timeout-guarded), `SMAppService` registration/removal, and readiness probes (`isReachable`, `healthProbe`). |
+| `WakeHelperMaintenance.swift` | Fixed-scope privileged cleanup: retires the legacy daemon after native approval and removes only Sentient helper state during uninstall. |
 | `OvernightCaution.swift` | Cycle-failure classification (signed out · no internet · usage limit · input too large · disk full · stalled) and the persisted morning-after caution. |
-| `PowerState.swift` | The go/no-go gates: on AC (or on battery above a 40% charge floor when the user opted in), not Low Power Mode, not thermally critical. Also the battery charge read. |
+| `PowerState.swift` | Shared thermal protection and unattended battery limits: 50% initial start, 30% update start, and 20% reserve. Also reads AC/battery state. |
 | `LoginItem.swift` | Launch at login via `SMAppService.mainApp`. |
 
 Logs: `~/Library/Logs/SentientOS/scheduler.log` (the app; flushed per line, the black box for an empty
@@ -33,108 +32,140 @@ morning) and `/Library/Logs/SentientOS-wakehelper.log` (root).
 
 ## The wake mechanism
 
-Established on real hardware: a userspace power assertion does NOT hold a closed lid (a clamshell
+Prior hardware testing of the wake mechanism established: a userspace power assertion does NOT hold a closed lid (a clamshell
 sleep overrides idle-sleep prevention; the Mac then self-wakes in ~43 s maintenance bursts). Root
 `pmset -a disablesleep 1` DOES hold it, continuously, and Gemma/Metal runs fine with the lid shut. A
 scheduled `pmset` wake fires reliably, and the running app process survives sleep: the scheduler's
-waiting Task simply freezes with the Mac and thaws at the wake.
+waiting Task simply freezes with the Mac and thaws at the wake. Those observations concern the wake
+mechanism; they are not a hardware validation claim for the current shared processing pipeline.
 
 ## The root helper
 
-The ONLY code that runs as root. It is the same app binary, relaunched by launchd with `--wake-helper`
-(`main.swift` branches before SwiftUI). Six XPC ops: `beginAwake` (disablesleep 1 + start the deadman),
+The ONLY code that runs as root. It is the same app binary, relaunched by launchd with
+`--wake-helper-managed` (`main.swift` branches before SwiftUI). Its wake operations are: `beginAwake` (disablesleep 1 + start the deadman),
 `heartbeat` (feed the deadman; the app calls it every 60 s during a run), `endAwake` (disablesleep 0;
 the deadman is stood down only if the pmset call succeeded), `armWake` (a `pmset schedule wake`,
 idempotent per time; the armed spec is persisted so a restarted helper can still cancel it),
-`cancelWake`, `cancelAllWakes`.
+`cancelWake`, and the retained `cancelAllWakes` API (not used for ordinary scheduling). Additional
+fixed-scope operations prepare readiness, remove helper state, cancel incomplete removal, and
+synchronize the signed GUI client's diagnostics consent; callers cannot supply arbitrary paths or commands.
 
 - **The deadman timer** lives in the helper, outside the app: if the app crashes mid-run and stops heartbeating, the helper restores normal sleep itself, so a bug can never leave a Mac awake all day. The helper also resets `disablesleep` defensively at launch.
 - **The awake ceiling** is the deadman's sibling for the opposite failure: armed once per `beginAwake` for `WakeHelperConfig.maxAwakeSeconds` (6 hours) and deliberately never fed by heartbeats. The deadman catches a dead app (heartbeats stopped); the ceiling catches an alive but stuck one (still heartbeating, making no progress): when it fires, the helper restores normal sleep unconditionally. A successful `endAwake` stands both down together, and either one firing cancels the other.
-- **Stale-wake hygiene:** when the app's XPC connection drops (quit, crash, force-quit) the helper cancels the armed wake, so a Mac with Sentient closed never wakes on a stale schedule; the loop wipes all wakes before arming exactly one.
-- **The client gate:** `setCodeSigningRequirement` with the daemon's OWN designated requirement ("signed exactly like me"; the app and the daemon are one binary), enforced by the system on every message in every build configuration. Signer-agnostic, so it holds for the Developer ID release, a dev's Apple Development build, and an OSS self-build alike. A static identifier + anchor requirement is the fallback if self-inspection fails.
+- **Stale-wake hygiene:** when the app's XPC connection drops (quit, crash, force-quit) the helper cancels the armed wake, so a Mac with Sentient closed never wakes on a stale schedule; the loop cancels only Sentient's tracked wake before arming its replacement. It never clears other applications' scheduled wakes.
+- **The client gate:** `setCodeSigningRequirement` with the daemon's OWN designated requirement ("signed exactly like me"; the app and the daemon are one binary), enforced by the system on every message in every build configuration. Signer-agnostic, so it holds for the Developer ID release, a dev's Apple Development build, and an OSS self-build alike. If self-inspection fails, the helper refuses all connections; there is no weaker fallback.
 
-## Installing the helper (`WakeHelperInstaller`)
+## Native helper setup and removal
 
-The decided production path: ONE native "enter your password" dialog (osascript admin) writes the plist
-into `/Library/LaunchDaemons`, `chown root:wheel`, `chmod 644`, `launchctl bootstrap`. Users are never
-sent into System Settings. Two hardening properties:
+`WakeHelperClient` registers the bundled LaunchDaemon through `SMAppService.daemon(plistName:)`.
+Only explicit setup actions register it. When macOS requires approval, setup opens the guided
+System Settings → Login Items flow. Registration is consent, not proof that the helper is running;
+setup returns ready only after the signed XPC endpoint answers. There is no custom privileged shell
+installer or `WakeHelperInstaller` in the current implementation.
 
-- **Verified launch.** The daemon does not point at the app binary directly (a drag-installed app is user-writable, which would let any same-user process get code run as root). Its `ProgramArguments` are `/bin/sh -c "codesign --verify -R='<app's designated requirement>' '<app>' && exec '<binary>' --wake-helper"`: root-owned `codesign` verifies the bundle is genuine and untampered before `exec`; any tamper or foreign signature blocks it. The requirement is captured at install via `WakeHelper.selfDesignatedRequirement()`, so it survives same-team Sparkle updates and rejects any other signer.
-- **No install-time race.** Root decodes the plist straight from an in-memory base64 blob embedded in the privileged command; there is no user-writable temp file to swap.
+The managed service has a distinct name from the legacy helper. After native approval, `prepare`
+retires the old launchd job and its plist through `WakeHelperMaintenance`, which uses fixed commands
+and paths. Cleanup verifies the old job is gone before removing its plist. Uninstall first asks the
+helper to restore sleep and remove its own wake/state, then unregisters the service. A cancelled
+incomplete uninstall can lift that removal fence through the explicit cancellation path.
 
-The plist carries `AssociatedBundleIdentifiers` so the System Settings background item reads "Sentient
-OS", not the signer's name. `isInstalledAndCurrent()` answers "are the files right for THIS binary and
-signature" (a moved app or a re-signed build reads stale and reinstalls); it does NOT answer "is it
-alive". `uninstallAsync()` is the mirror image behind the same one prompt.
+## Registration and liveness
 
-## Liveness is the only honest status
+`healthProbe()` reports **ready**, **requiresApproval**, **notSetUp**, or **unavailable**. It checks
+`SMAppService` status, calls `prepare` over XPC when enabled, and rechecks approval afterward.
+`isReachable()` uses that readiness operation rather than `heartbeat`, so passive health checks do
+not feed the awake deadman. Once legacy migration is complete, readiness probes are side-effect-free.
+Scheduling requires `.ready`; registration or files on disk alone are insufficient. Every XPC wake
+operation races its reply/error against a 30-second timeout and resumes its caller only once.
 
-System Settings' App Background Activity toggle boots a disabled daemon OUT of launchd while leaving
-its plist on disk, so every file check reads green on a dead helper (and unprivileged `launchctl print`
-cannot tell either). `WakeHelperClient.isReachable()` sends a real `heartbeat` over XPC (harmless in
-every state), and `healthProbe()` classifies: **ready** (answers) · **disabled** (unreachable, files
-correct → the toggle is off; only the user flipping it back on helps) · **notSetUp** (stale or missing
-plist → the installer fixes it). The scheduler, Settings → Health, onboarding's permissions step, and
-the home's health banner all gate on this probe, never on files alone.
+## Setup, enablement, and migration
+
+`enableAfterSetup()` runs at setup completion and launch. Once onboarding is complete, a new
+non-knowledge-base-only installation enables the production schedule immediately. It does not wait
+for initial analysis, install the helper implicitly, or open a login prompt. The one-time
+`scheduler.enabledAfterSetup` latch preserves existing explicit values of `scheduler.enabled` and
+respects the old `scheduler.autoEnableFired` latch. The obsolete auto-enable delay preference is
+removed; there is no 14-hour timer.
+
+The scheduler can run when `dbg.scheduler.enabled` is on, when `scheduler.enabled` is on outside
+knowledge-base-only mode, or when the coordinator has a pending first night. That explicit first-night
+choice works in knowledge-base-only mode without enabling recurring production scheduling.
+Onboarding completion is required, and Reset/Uninstall suspension disables scheduling. A user pause
+cancels the pending wake and is never silently undone by the next overnight trigger.
+
+## Local time and wake replacement
+
+`dbg.scheduler.minutes` retains the shipped preference key. Valid values are minutes since midnight
+from 0 through 1439; missing or invalid values use 180. `Calendar.nextDate` uses the current local
+calendar, `.nextTime` for a missing DST time, and the first occurrence of a repeated time. Clock and
+time-zone changes restart scheduling and recompute persisted scheduled intent.
+
+Saving a clock time recomputes a pending first-night/deferred `ProcessingPlan.Record.due` as well as
+the armed wake, preserving its notice. It does not enable a disabled schedule. Onboarding's overnight
+choice and its displayed date use the same configured time.
+
+Each restart cancels the previous scheduling task and waits for it to finish before touching the
+helper. An in-flight XPC arm cannot be recalled by Swift task cancellation; draining it prevents an
+old arm or cancellation from overtaking the latest choice. Before a new outer-loop arm, `cancelWake`
+removes only the previously tracked Sentient wake. `armWake` is idempotent at the same timestamp,
+not across different timestamps. A schedule edit never cancels `ProcessingCoordinator`'s separate
+analysis task or releases its awake lease; replacement scheduling waits for that owned work if needed.
 
 ## The nightly run
 
-The loop: ensure the helper is ready (`healthProbe`; DEBUG builds self-install via the password
-installer, Release flags `needsSchedulerSetup` for the setup UI) → `cancelAllWakes` → arm ONE wake for
-the configured time (3:00 AM by default; editable in Settings → System) → wait, re-arming every ~5 min so the
-helper's record stays fresh → run → re-arm for tomorrow.
+The loop checks `healthProbe()` and launch at login, surfaces `needsSchedulerSetup` when either is
+missing, and retries readiness checks. It does not install the helper itself. Once ready, it cancels
+the prior owned wake, arms the persisted due date or next configured local time, and waits. It refreshes
+the same wake approximately every five minutes. At the due time it calls
+`ProcessingCoordinator.runScheduled()` and then schedules the next wake.
 
-`runProcessing`: read the selected sources through the shared `SourceSelection.current` (persistent
-custom folders included) and the Gmail/Calendar flags and curated MCP KB selections for the active subscription engine → skip if nothing is
-enabled or the model is missing → **the go/no-go gates** (`PowerState.overnightBlockReason`: on battery
-without the opt-in, on battery below the 40% charge floor with it, Low Power Mode on AC, or thermally
-critical → log, `Scheduler.gated`, try again tomorrow; thermal is a start condition only) →
-`beginAwake(1800)` + a 60 s heartbeat task → `IterativeRun(.auto)` over the connectors → the Gmail,
-Calendar, and curated MCP iterative legs → **`ProactiveCycle.run(scheduled: true)`** → cancel the heartbeat → `endAwake`
-→ the Mac idle-sleeps.
+A pending first-night due date crossed during setup by less than a minute is honored immediately;
+a stale persisted date is deferred to the next configured time. A waiting loop that resumes beyond
+the helper's six-hour overnight window also defers the run and retains a notice. Manual work already
+in progress satisfies the trigger: the coordinator does not enqueue a second analysis or override a
+requested manual run or explicit pause.
 
-**Battery nights are an opt-in.** The default is AC-only. The home's Analysis dropdown carries a quiet
-"Run on battery too" switch (`scheduler.allowBattery`; hidden on desktop Macs). With it on, a night
-starts on battery when the charge is at or above `PowerState.batteryFloorPercent` (40%: a heavy night
-can drain 15 to 30 percent, and the floor keeps the morning Mac usable). An opted-in battery night also
-ignores Low Power Mode, which is commonly set to "Only on Battery" and would otherwise silently block
-every battery night; the run just goes slower. The power log line records the charge either way.
+The coordinator admits the current `ProcessingRequest` only when sources, required local model, and
+scheduled power conditions are ready. A blocked scheduled run records `Scheduler.gated` and an
+overnight diagnostic, then persists the next due date with a reason. Explicit Run now remains pending
+when its model or sources are unavailable; the coordinator monitors readiness independently of windows.
 
-**Every night races a stall watchdog** (`runNight`). The run rides its own Task and touches a shared
-`NightPulse` on every sign of progress (each device item, each leg start and end, MCP ingestion events, every proactive
-phase); the watchdog reads the pulse once a minute. After 70 minutes with no progress (the one failure
-no error, timeout, or crash covers: the app alive and heartbeating, but nothing moving) the watchdog
-cancels the run, restores sleep itself, records the `.stalled` morning caution, and sends a
-structure-only Sentry warning; the loop then re-arms tomorrow's wake as usual. The 70 minutes sits
-deliberately just past the longest single CLI timeout (1 hour), so the watchdog can never end a healthy
-call that is about to finish or time out cleanly on its own. Before cancelling, the watchdog latches
-"sleep already restored" on the pulse; every leg boundary checks for cancellation and exits through a
-latch-aware `releaseAwake`, so a stuck run that thaws hours later neither starts fresh cloud legs into
-the user's morning nor touches the helper while a later night may be holding the Mac awake.
+For admitted overnight work, the coordinator obtains `beginAwake(1800)`, feeds the helper roughly
+every 60 seconds, and holds an idle-system-sleep activity. `ProcessingRun` reads local sources through
+`IterativeRun`, then selected Gmail, Calendar, and curated MCP sources, followed by `ProactiveCycle`
+for a full cycle. Cancellation checks between legs prevent a draining read from starting a new leg.
+The coordinator retains exclusive ownership through task completion and helper cleanup.
 
-Full Disk Access can read false when the app is launched from Terminal (TCC attribution), which silently
-excludes the database sources; the run's log lines surface it.
+`ProcessingPlan` persists status and timing; ingestion checkpoints remain in `CycleStore`. On relaunch,
+interrupted manual work becomes requested and interrupted overnight work becomes scheduled. Only a
+successful complete full cycle marks initial analysis complete, using the existing
+`scheduler.firstCycleCompletedAt` key. Partial first nights remain pending, including in
+knowledge-base-only mode. Opening, closing, or hiding progress UI never starts or cancels analysis.
 
-The watchdog receives a one-shot outcome from the processing task or its timer. It never waits on a
-task-group child that is itself waiting for a wedged run. Parent cancellation cancels the owned run and
-ends the wait without recording a stall. The heartbeat stops after the watchdog releases sleep; late
-completion checks cancellation before another device/cloud leg or completion telemetry. MCP reads
-contribute progress pulses and retain connector-auth/usage-limit cautions alongside the stalled kind.
+## Power and interruption rules
 
-## The 14 h auto-enable
+Battery processing defaults to enabled when `scheduler.allowBattery` has no saved value; an existing
+false value remains respected. The Analysis control lets users change it. Actual admission and
+monitoring use `PowerState`:
 
-Right after the first big analysis, everything is caught up; a 3 AM run five hours later would find
-almost nothing and produce an empty morning. So the scheduler turns itself on **14 hours after the first
-full `ProactiveCycle` finishes** (`noteFirstCycleCompleted` stamps that once). `maybeAutoEnable()` runs
-at launch, after every cycle, and from a one-shot timer armed for the 14 h mark. It is idempotent,
-latches so it acts at most once, never fights a user who turned the scheduler off, returns early in
-knowledge-base-only mode (not latched, so an upgrade plus reset starts the clock fresh), and only flips
-the production flag on when the helper is installed and launch at login is on; otherwise it sets
-`needsSchedulerSetup` and retries on the next tick.
+- Thermal critical blocks or pauses every run, including explicit Run now.
+- Scheduled work may start on AC. On battery it requires permission plus at least **50%** for initial
+  analysis or **30%** after initial completion. An unreadable battery level blocks an unattended start.
+- During unattended work, battery at or below **20%**, or an unreadable battery while off AC, requests
+  a safe stop. Explicit Run now bypasses battery and AC requirements.
+- Low Power Mode is not an admission or pause condition in the current shared policy.
 
-Two enable keys, either one runs the loop: `dbg.scheduler.enabled` (the dev toggle) and
-`scheduler.enabled` (production, written by auto-enable). Only the production flag latches, so a dev
-testing the toggle never burns the one-shot.
+The coordinator checks active work approximately every five seconds. It requests cancellation after
+70 minutes without progress, and enforces a six-hour maximum for overnight work. Progress callbacks,
+phase changes, and model output refresh the progress timestamp. These checks live in the shared
+owner; there is no separate scheduler `runNight` or `NightPulse` implementation.
+
+A stop releases the idle-sleep activity and the owned helper awake hold promptly, while retaining
+analysis exclusivity until the worker drains. `releaseAwake()` clears ownership before awaiting the
+helper and coalesces concurrent cleanup, so a late completion cannot release a later run's hold.
+A user pause remains paused; a non-user overnight interruption is scheduled for the next configured
+time after draining. The helper's independent deadman and absolute ceiling remain the backstop if
+the app dies or stops monitoring.
 
 ## The morning-after caution (`OvernightCaution`)
 
@@ -144,7 +175,7 @@ on the ChatGPT backend a 401/unauthorized marker in codex's own output (a token 
 still reads logged-in locally) or a failing local `codex login status` → `loggedOut`; a failing network
 snapshot → `noInternet`; anything else → nil (the UI only ever states what was verified). Three kinds are
 recorded directly rather than classified: `.diskFull` (device storage failure), `.connectorAuth`
-(a selected connector needs sign-in), and `.stalled` (the watchdog ended a night without progress). The scheduled
+(a selected connector needs sign-in), and `.stalled` (the coordinator stopped a stalled or ceiling-limited night). The scheduled
 run persists the kind (`overnight.caution`, `Scheduler.caution` analytics) and the home shows a quiet
 amber capsule with a first-person message; a later fully successful cycle, or the banner's ✕, clears it.
 The watched takeover shows the same kind live on its failed screen instead.
@@ -154,9 +185,11 @@ The watched takeover shows the same kind live on its failed screen instead.
 - Never gate scheduler readiness on file checks; use `healthProbe`.
 - The helper's surface must stay tiny; nothing else may run as root.
 - Every XPC call must stay reply/error/timeout-guarded so nothing can hang at 3 AM.
-- Change the daemon plist only through the installer; both `WakeHelper.clientRequirement` and the plist's codesign requirement derive from the same designated requirement.
+- Register and remove the bundled daemon through `WakeHelperClient` and `SMAppService`; keep the per-message signing requirement fail-closed and privileged maintenance fixed-scope.
 - The awake ceiling must never be fed by heartbeats; feeding it would turn it back into the deadman and reopen the alive-but-stuck hole it exists to close.
-- Once the watchdog has restored sleep for a night, no exit path of that night may call `endAwake` again (the `NightPulse` latch enforces this): a later night could legitimately be holding the Mac awake.
+- Keep analysis ownership through cancellation and helper cleanup; scheduling or view changes must not create a second analysis task.
+- Replace only Sentient's tracked wake, and drain old scheduler requests before a new arm; do not use `cancelAllWakes` for ordinary scheduling.
+- Once a run releases its awake hold, late callbacks must not release it again or interfere with a later run.
 
 ## Related docs
 

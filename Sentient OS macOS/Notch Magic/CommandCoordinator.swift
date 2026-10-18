@@ -104,6 +104,7 @@ final class CommandCoordinator {
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
     private var hotkeyPair = ShortcutTapPair()
+    private var pendingSingleTap: Task<Void, Never>?
     private var returningFromRecovery = false
     private var deferredSubmission: (String, AgentMode, TriggerSource)?
 
@@ -317,6 +318,7 @@ final class CommandCoordinator {
     }
 
     private func interruptHotkeyGesture() {
+        pendingSingleTap?.cancel(); pendingSingleTap = nil
         hotkeyPair.reset()
         if phase == .opening { setPhase(.hidden) }
     }
@@ -328,10 +330,8 @@ final class CommandCoordinator {
         guard !ShortcutPreferences.isRecording, doubleTapDemoKeyChanged == nil,
               !DoubleTap.shared.isDrafting else { return }
         guard key == ShortcutPreferences.current else { return }
-        if run.recovery.isPending {
-            hotkeyPair.reset()
-            if run.recovery.isVisible { run.recovery.dismiss() }
-            else { run.recovery.reopen() }
+        if run.recovery.isPending, DoubleTap.initialAnalysisComplete {
+            handleSingleTap(activity: activity, waitForDoubleTap: false)
             return
         }
         if onboardingDemoArmed, phase == .hidden, !run.isRunning {
@@ -343,12 +343,39 @@ final class CommandCoordinator {
         if DoubleTap.isEnabled {
             if hotkeyPair.register(key, at: time, activity: activity, window: DoubleTap.window,
                                    lastInputTime: ShortcutActivity.lastInputTime) {
+                pendingSingleTap?.cancel(); pendingSingleTap = nil
+                guard DoubleTap.initialAnalysisComplete else { interruptHotkeyGesture(); return }
                 guard !interceptForOnboarding() else { return }
                 fireDoubleTap()
                 return
             }
         } else {
             hotkeyPair.reset()
+        }
+        pendingSingleTap?.cancel(); pendingSingleTap = nil
+        if DoubleTap.isEnabled && !DoubleTap.initialAnalysisComplete {
+            // Wait before any notch reveal, notice or setup check. Two early taps do nothing;
+            // one still opens Sidekick after the same gesture window as a completed install.
+            let token = phaseToken
+            pendingSingleTap = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(DoubleTap.window))
+                guard !Task.isCancelled, let self, self.phaseToken == token,
+                      ShortcutActivity.current == activity else { return }
+                self.pendingSingleTap = nil
+                self.handleSingleTap(activity: activity, waitForDoubleTap: false)
+            }
+            return
+        }
+        handleSingleTap(activity: activity, waitForDoubleTap: DoubleTap.isEnabled)
+    }
+
+    private func handleSingleTap(activity: ShortcutActivity, waitForDoubleTap: Bool) {
+        guard !run.isClearingChat else { return }
+        if run.recovery.isPending {
+            hotkeyPair.reset()
+            if run.recovery.isVisible { run.recovery.dismiss() }
+            else { run.recovery.reopen() }
+            return
         }
         // A single tap cannot stop a real task. Double Tap remains available beside that task.
         guard !run.isRunning else { return }
@@ -370,7 +397,7 @@ final class CommandCoordinator {
             return
         }
         ComputerUseGate.shared.refresh()
-        guard DoubleTap.isEnabled else {
+        guard waitForDoubleTap else {
             setPhase(.typing)
             return
         }

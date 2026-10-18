@@ -29,7 +29,7 @@ enum PrivacyCopy {
     static let conversationSources = "Analyzed on this Mac by Sentient’s on-device model. Your chosen AI uses the useful summaries. Double Tap’s one-time writing examples are prepared separately."
     static let emailSources = "Apple Mail and Apple Calendar are analyzed on this Mac. If you enable email reads for proactive suggestions, your chosen AI also receives actual Mail message text. Other services use the connections you choose; your selected AI puts their context to work."
     static let emailRecommendation = "Email and calendar give Sentient useful context for your day. Apple Mail and Apple Calendar are analyzed on this Mac and work with your chosen AI. You can also use supported connections through your ChatGPT or Claude account. Manage your choices in Settings."
-    static let overnight = "At your chosen wake time (3 AM by default), Sentient can wake your Mac to analyze new local sources, update your knowledge with your chosen AI, and prepare morning suggestions. Change the time in Settings → System. It runs while plugged in, or on battery if you’ve enabled that in the Analysis menu, with Sentient running in your menu bar. Changing the time takes effect for the next wake; any work already running continues."
+    static let overnight = "At your chosen wake time (3 AM by default), Sentient can wake your Mac to analyze new local sources, update your knowledge with your chosen AI, and prepare morning suggestions. Change the time in Settings → System. It runs while plugged in, or on battery when the Analysis menu allows it and there’s enough charge, with Sentient running in your menu bar. Changing the time takes effect for the next wake; any work already running continues."
 
     static let doubleTapCovered = "Low-latency drafts, covered by Sentient for our first users. OpenAI API with Zero Data Retention. No API key needed."
     static let doubleTapContext = "A screenshot of the display under your pointer, your knowledge base including selected one-time writing-style examples, and your instructions help Double Tap write an unsent draft in your voice."
@@ -46,7 +46,7 @@ enum PrivacyCopy {
     static let localKnowledge = "Your knowledge is a folder of plain Markdown files on this Mac. A compatible local AI can read it directly. Tools such as Claude Code can also use the folder with their chosen model; its processing settings still apply."
 
     static let reset = "Reset removes your local knowledge, summaries, and suggestions and requests deletion of the shared knowledge copy. Sentient returns to setup. Saved contact addresses and invitation or lifetime access are retained."
-    static let resetConfirmation = "Your local knowledge and analysis state will be removed, and Sentient will request deletion of the shared knowledge copy. Saved contact addresses and invitation access remain. Local knowledge removal cannot be undone."
+    static let resetConfirmation = "Any running analysis or Sidekick task will be stopped first. Your local knowledge and analysis state will be removed, and Sentient will request deletion of the shared knowledge copy. Saved contact addresses and invitation access remain. Local knowledge removal cannot be undone."
     static let uninstall = "Uninstall removes Sentient’s local knowledge, model, settings, and saved connection credentials, and requests deletion of the shared knowledge copy. Your own source files stay in place. Saved contact addresses and invitation or lifetime-access records are retained."
 
     static let sections: [Section] = [

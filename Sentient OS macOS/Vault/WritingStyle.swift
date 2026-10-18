@@ -14,6 +14,7 @@ import Darwin
 nonisolated enum WritingStyle {
     static let fileName = "writingstyle.md"
     @MainActor private static var generating = false
+    @MainActor private static var setupTask: Task<Void, Error>?
     #if DEBUG
     @TaskLocal static var acceptanceSources: Set<String>?
     #endif
@@ -76,12 +77,27 @@ nonisolated enum WritingStyle {
     /// setup and the introduction sheet. Initial processing calls the two halves itself, so the
     /// collection can run alongside the first build.
     @MainActor static func generateIfNeeded(progress: @escaping @Sendable (String) -> Void = { _ in }) async throws {
+        guard !ProcessingCoordinator.shared.isSuspended else { throw CancellationError() }
+        guard setupTask == nil else { throw Failure.busy }
         let root = VaultGenerator.vaultRoot
         guard !exists(in: root) else { return }
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent("README.md").path) else { throw Failure.noVault }
-        let content = try await collect(progress: progress)
-        progress("Saving your writing samples…")
-        try publishIfNeeded(content, in: root)
+        let task = Task { @MainActor in
+            try Task.checkCancellation()
+            let content = try await collect(progress: progress)
+            try Task.checkCancellation()
+            progress("Saving your writing samples…")
+            try publishIfNeeded(content, in: root)
+        }
+        setupTask = task
+        defer { setupTask = nil }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    /// The home's independent setup must also finish stopping before Reset or Uninstall wipes data.
+    @MainActor static func cancelSetupAndDrain() async {
+        setupTask?.cancel()
+        _ = try? await setupTask?.value
     }
 
     /// The samples, rendered, without touching the knowledge base: only landing the file needs a

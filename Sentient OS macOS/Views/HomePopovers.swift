@@ -4,7 +4,7 @@
 //
 //  Two glanceable, on-demand dropdowns for Home and Knowledge:
 //   · AnalysisPopover — the work glance: things understood, vault size, an Analyze Now control
-//     with the last/next-run footer, the overnight-on-battery opt-in, and the source chips
+//     with the last/next-run footer, the overnight-on-battery preference, and the source chips
 //     (sources are the INPUTS to analysis, so they live under "Analysis").
 //   · ShareKnowledgePopover — Knowledge's "Use with your AIs" entry opens optional connection
 //     setup. ConnectAIsView owns consent, sharing on/off, the link, and the prompt.
@@ -29,8 +29,11 @@ struct HomeSources {
 struct AnalysisPopover: View {
     let thingsUnderstood: Int
     let sources: HomeSources               // for whatsappAvailable (hide the chip when WhatsApp isn't installed)
-    let modelMissing: Bool
     let lastRun: String                    // last full cycle, pre-formatted by HomeView (deck-aware)
+    var nextWakeAt: Date? = nil
+    var schedulerEnabled = false
+    var schedulerNeedsSetup = false
+    @State private var processing = ProcessingCoordinator.shared
     var onAnalyze: () -> Void
     var onPickWhatsApp: () -> Void = {}    // tapping WhatsApp / iMessage opens the chat picker (in HomeView)
     var onPickIMessage: () -> Void = {}
@@ -51,10 +54,9 @@ struct AnalysisPopover: View {
     @AppStorage("dbg.run.gmail")          private var runGmail = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
-    // The overnight run's battery opt-in — the production scheduler key, so the 3 AM gate and this
-    // switch are one truth. Default off: AC-only unless the user says otherwise.
-    @AppStorage(OvernightScheduler.allowBatteryKey) private var overnightOnBattery = false
-    @AppStorage(OvernightScheduler.minutesKey) private var overnightMinutes = OvernightScheduler.defaultMinutes
+    // The overnight run's battery preference — the production scheduler key, so the 3 AM gate and this
+    // switch are one truth. Battery processing is on by default; an explicit off choice is retained.
+    @AppStorage(OvernightScheduler.allowBatteryKey) private var overnightOnBattery = true
 
     @State private var vault: (notes: Int, domains: Int)?
     @State private var hasBattery = false   // desktop Macs hide the battery row entirely
@@ -64,7 +66,7 @@ struct AnalysisPopover: View {
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
             || !appleMailAccounts.isEmpty || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
     }
-    private var armed: Bool { anyArmed && !modelMissing }
+    private var armed: Bool { anyArmed || processing.isBusy }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -136,32 +138,42 @@ struct AnalysisPopover: View {
         return "\(v.notes) notes · \(v.domains) domains in your knowledge"
     }
     /// Under the button: last run + when the next one comes, or the reason nothing can run.
-    @ViewBuilder private var runFooter: some View {
-        if modelMissing {
-            MonoCaps("The on-device model is missing; see Dev Tools", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-        } else if !armed {
-            MonoCaps("No sources armed", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-        } else {
-            // Labels whisper, values speak: tiny mono-caps labels, sentence-case sans values.
-            // The Grid gives wrapped value lines a hanging indent under the value column for free.
+    private var runFooter: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(processing.statusLine).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondary)
+            if case .waiting = processing.state {
+                Text(processing.waitingDetail).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.amber)
+            }
+            if let notice = processing.record.notice, !notice.isEmpty {
+                Text(notice).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.amber)
+            }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
                 GridRow {
                     MonoCaps("Last run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                    footerValue(String(lastRun.prefix(1)).uppercased() + lastRun.dropFirst())
+                    footerValue(lastRun)
                 }
                 GridRow {
                     MonoCaps("Next run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                    footerValue(overnightOnBattery
-                        ? "Tonight at \(overnightTime), if Sentient's open in the menu bar; battery's fine above \(PowerState.batteryFloorPercent)%"
-                        : "Tonight at \(overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
+                    footerValue(nextRunLine)
                 }
             }
+            if hasBattery {
+                footerValue("Overnight on battery: 50% for first analysis, 30% for updates. Pauses at 20% to save power. Run now has no battery requirement.")
+            }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The battery opt-in for the 3 AM run — one quiet line + a small switch, hidden on desktop
-    /// Macs. Flipping it rewords the "Next run" line above live; the 40% floor lives in that copy,
-    /// so this row stays one line.
+    private var nextRunLine: String {
+        if processing.paused { return "Paused until you resume" }
+        if schedulerNeedsSetup { return "Set up overnight wake in Settings" }
+        if let nextWakeAt { return ProcessingCoordinator.scheduleLabel(nextWakeAt) }
+        if schedulerEnabled { return "Scheduling the next overnight run…" }
+        return "Overnight processing is off"
+    }
+
+    /// The battery preference for the 3 AM run — one quiet line + a small switch, hidden on desktop
+    /// Macs. Both initial and iterative thresholds are shown above.
     private var batteryToggleLine: some View {
         HStack(spacing: 12) {
             Text("Run on battery too")
@@ -182,17 +194,9 @@ struct AnalysisPopover: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Matches the saved wake time, including edits while this popover is mounted.
-    private var overnightTime: String {
-        let minutes = OvernightScheduler.validatedMinutes(overnightMinutes)
-        var comps = DateComponents(); comps.hour = minutes / 60; comps.minute = minutes % 60
-        let f = DateFormatter(); f.dateFormat = minutes % 60 == 0 ? "h a" : "h:mm a"
-        return f.string(from: Calendar.current.date(from: comps) ?? Date())
-    }
-
     private var analyzeButton: some View {
         Button(action: onAnalyze) {
-            Text("Analyze Now")
+            Text(processing.isBusy || processing.record.status == .requested ? "View progress" : (processing.paused ? "Resume Analysis" : "Analyze Now"))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(armed ? .black : .white.opacity(0.35))
                 .frame(maxWidth: .infinity)
@@ -316,7 +320,7 @@ enum HomeStats {
 #Preview("Analysis") {
     ZStack { Theme.bg
         AnalysisPopover(thingsUnderstood: 3339, sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-                        modelMissing: false, lastRun: "3:41 AM", onAnalyze: {})
+                        lastRun: "3:41 AM", onAnalyze: {})
     }.frame(width: 380, height: 460).preferredColorScheme(.dark)
 }
 

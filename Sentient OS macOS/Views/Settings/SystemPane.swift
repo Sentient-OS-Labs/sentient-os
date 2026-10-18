@@ -34,7 +34,6 @@ struct SystemPane: View {
     @State private var exportingDiagnostics = false
     @State private var diagnosticFile: URL?
     @State private var diagnosticError: String?
-    @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
 
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
@@ -210,18 +209,30 @@ struct SystemPane: View {
 
     private static let dangerRed = Color(red: 1.0, green: 0.36, blue: 0.36)
 
+    // Running analysis is cancellable. Only another teardown blocks these actions.
+    private var maintenanceInProgress: Bool {
+        resetting || appState.processing.isSuspended || appState.isUninstalling
+    }
+
+    private var resetTitle: String {
+        guard resetting else { return "Reset Sentient…" }
+        return appState.processing.isBusy || appState.commandCoordinator.run.isRunning
+            ? "Stopping…" : "Erasing…"
+    }
+
     private var dangerGroup: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsRow(title: "Reset Sentient", subtitle: "Erase learned knowledge and return to setup.") {
-                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…", tint: Self.dangerRed) {
+                SettingsPillButton(title: resetTitle, tint: Self.dangerRed) {
                     confirmReset = true
                 }
-                .disabled(resetting || activity.isRunning)
+                .disabled(maintenanceInProgress)
             }
             SettingsDetails(title: "What gets removed?") { SettingsProse(PrivacyCopy.reset) }
                 .padding(.horizontal, 20).padding(.bottom, 20)
-            if activity.isRunning {
-                SettingsProse("Reset is available after the current run finishes.")
+            if appState.processing.isBusy {
+                SettingsProse(resetting ? "Stopping analysis safely before erasing your knowledge."
+                              : "Reset will stop analysis before erasing your knowledge.")
                     .padding(.horizontal, 20).padding(.bottom, 16)
             }
             if let resetError {
@@ -252,12 +263,12 @@ struct SystemPane: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsRow(title: "Uninstall Sentient", subtitle: "Remove Sentient and its local data from this Mac.") {
                 SettingsPillButton(title: "Uninstall…", tint: Self.dangerRed) { showUninstall = true }
-                    .disabled(activity.isRunning)
+                    .disabled(maintenanceInProgress)
             }
             SettingsDetails(title: "What gets removed?") { SettingsProse(PrivacyCopy.uninstall) }
                 .padding(.horizontal, 20).padding(.bottom, 20)
-            if activity.isRunning {
-                SettingsProse("Uninstall is available after the current run finishes.")
+            if appState.processing.isBusy {
+                SettingsProse("Uninstall will stop analysis before removing Sentient’s data.")
                     .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }

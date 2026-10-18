@@ -32,9 +32,10 @@ enum Uninstall {
     /// (the mono-caps voice) while its stage runs. The helper goes FIRST: it's the only stage that
     /// can need approval in System Settings. Cancellation there preserves the app’s data.
     enum Stage: CaseIterable {
-        case helper, cloud, keychain, knowledge, model, traces
+        case stopping, helper, cloud, keychain, knowledge, model, traces
         var whisper: String {
             switch self {
+            case .stopping:  return "STOPPING ACTIVE WORK"
             case .helper:    return "STANDING DOWN THE WAKE HELPER"
             case .cloud:     return "REMOVING THE CLOUD COPY"
             case .keychain:  return "CLEARING YOUR KEYCHAIN KEY"
@@ -69,6 +70,16 @@ enum Uninstall {
             lastFailure = "Sidekick is already updating its data. Try again in a moment."
             appState?.isUninstalling = false
             return false
+        }
+        let processing = appState?.processing ?? ProcessingCoordinator.shared
+        progress(.stopping)
+        await processing.suspend()
+        appState?.scheduler.reevaluate()
+        defer {
+            if appState?.isUninstalling == false {
+                processing.resumeMonitoring()
+                appState?.scheduler.reevaluate()
+            }
         }
         SidekickInstructionStore.beginTeardown()
         defer {
