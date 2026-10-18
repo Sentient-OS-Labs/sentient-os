@@ -26,6 +26,13 @@ enum FactoryReset {
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
         guard conversation.beginMaintenance() else { return false }
         defer { conversation.endMaintenance() }
+        let processing = appState?.processing ?? ProcessingCoordinator.shared
+        await processing.suspend()
+        appState?.scheduler.reevaluate()
+        defer {
+            processing.resumeMonitoring()
+            appState?.scheduler.reevaluate()
+        }
         appState?.commandCoordinator.run.stop()
         do { try conversation.reset(defaults: defaults) }
         catch {
@@ -48,6 +55,7 @@ enum FactoryReset {
             Diagnostics.report(.cleanupFailed, phase: .reset, reason: "connector_credentials", error: error)
             Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false
         }
+        await processing.reset()
         await CycleStore.shared.wipeEverything()
         Diagnostics.removeForCleanup(VaultGenerator.vaultRoot, phase: .reset, reason: "vault")
         ProactiveCycle.resetAll()
@@ -77,11 +85,10 @@ enum FactoryReset {
         for key in [SourceHealth.readStatusKey, AppleMailHealth.key, AppleMailHealth.needsRetryKey, AppleCalendarSource.issueKey] {
             d.removeObject(forKey: key)
         }
-        // The overnight scheduler starts over too: the 14h clock re-stamps at the REBUILD's first
-        // cycle (not the wiped one's), the auto-enable one-shot is re-armed, and the production
-        // flag comes off — otherwise a 3am run could fire mid-onboarding, racing the user's own
-        // first analysis on an empty store. (The dev toggle and the installed helper survive —
-        // one is a dev choice, the other a grant, not a learning.)
+        // Clear pending analysis and scheduling intent before the next onboarding. The helper
+        // grant and developer preferences survive; no scheduler runs during setup.
+        d.removeObject(forKey: ProcessingPlan.key)
+        d.removeObject(forKey: OvernightScheduler.setupEnabledKey)
         d.removeObject(forKey: OvernightScheduler.firstCycleAtKey)
         d.removeObject(forKey: OvernightScheduler.autoEnableFiredKey)
         d.removeObject(forKey: OvernightScheduler.prodEnabledKey)

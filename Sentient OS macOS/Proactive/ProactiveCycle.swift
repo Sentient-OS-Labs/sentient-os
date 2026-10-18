@@ -84,12 +84,14 @@ actor ProactiveCycle {
             defer { PipelineActivity.end() }
             let pending = await CycleStore.shared.notes()
             let notes = await AppleMailEvidence.validated(pending).map(CloudNote.init)
+            guard !Task.isCancelled else { return nil }
             // Initial processing can finish an interrupted Double Tap setup even without new summaries.
             if notes.isEmpty, FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
                 await Self.publishWritingStyle(await Self.collectWritingStyle())
             }
             // No new summaries is a completed no-op. Otherwise delivery waits for the atomic KB swap.
             if notes.isEmpty { await Notify.connectorsUnavailable(unavailableConnectors) }
+            guard !Task.isCancelled else { return nil }
             var calendarContext: CalendarContext.Result?
             if notes.isEmpty, CalendarContext.outlookEnabled,
                FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
@@ -98,6 +100,7 @@ actor ProactiveCycle {
                                                stage: .deciding, scheduled: scheduled, progress: progress) }
             }
             guard !notes.isEmpty || calendarContext?.hasOutlookEvents == true else {
+                guard !Task.isCancelled else { return nil }
                 if GiftLetter.needsWelcome(), FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
                     progress(.knowledgeBase("Writing your welcome…"))
                     do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
@@ -110,6 +113,7 @@ actor ProactiveCycle {
                 if Diagnostics.current?.hasFailure == true {
                     Diagnostics.report(.cycleIncomplete, phase: .complete, reason: "empty_after_diagnostics", flags: [.partial: true])
                 }
+                guard !Task.isCancelled else { return nil }
                 UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
                 progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
                 return nil
@@ -150,7 +154,9 @@ actor ProactiveCycle {
                     return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
                                            scheduled: scheduled, progress: progress)
                 }
+                guard !Task.isCancelled else { return nil }
                 await Self.publishWritingStyle(await writingStyle)
+                guard !Task.isCancelled else { return nil }
                 await Notify.connectorsUnavailable(unavailableConnectors)
                 await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
@@ -159,7 +165,7 @@ actor ProactiveCycle {
                 //      A gift that ALREADY existed before this cycle has had its day-one morning — it retires
                 //      when this cycle's proactive stage replaces the deck (kb-only mode has no replace, so
                 //      the free home's lone envelope lives on).
-                if needsWelcome {
+                if needsWelcome && !Task.isCancelled {
                     progress(.knowledgeBase("Writing your welcome…"))
                     do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
                     catch { Log("GiftLetter: welcome skipped — \(ErrorLabel(error))") }   // type only: msg() embeds raw codex output → Sentry breadcrumb
@@ -170,6 +176,7 @@ actor ProactiveCycle {
             // 3) Proactive — decide, then research + prepare. Inject the live calendar when connected.
             //    Knowledge-base-only mode (free/go plan) skips the whole stage: no quota for it, and
             //    no Gmail/Calendar to ground it — the knowledge base + mirror + gift ARE the product.
+            guard !Task.isCancelled else { return nil }
             if CodexAuth.knowledgeBaseOnly {
                 ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // never leave stale cards
             } else {
@@ -177,6 +184,7 @@ actor ProactiveCycle {
                     if calendarContext == nil { calendarContext = try await CalendarContext.fetch(excluding: unavailableConnectors) }
                 } catch { return await Self.fail("Calendar context: \(Self.msg(error))", error: error,
                                                 stage: .deciding, scheduled: scheduled, progress: progress) }
+                guard !Task.isCancelled else { return nil }
                 let calCtx = calendarContext?.text
                 let calendarOnly = calendarContext?.includesOutlook == true && Proactive.recent(from: notes).isEmpty
                 if !calendarOnly || calendarContext?.hasOutlookEvents == true {
@@ -190,6 +198,7 @@ actor ProactiveCycle {
                         return await Self.fail("Deciding: \(Self.msg(error))", error: error, stage: .deciding,
                                                scheduled: scheduled, progress: progress)
                     }
+                    guard !Task.isCancelled else { return nil }
                     Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
 
                     if items.isEmpty {
@@ -218,13 +227,13 @@ actor ProactiveCycle {
             }
 
             // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
+            guard !Task.isCancelled else { return nil }
             await CycleStore.shared.wipeNotes(sourceIDs: consumedSourceIDs)
             if Diagnostics.current?.hasFailure == true {
                 Diagnostics.report(.cycleIncomplete, phase: .complete, reason: "completed_with_diagnostics", flags: [.partial: true])
             }
             OvernightCaution.clear()                             // a full success retires any morning-after banner
             UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
-            OvernightScheduler.noteFirstCycleCompleted()   // "initial processing ended" → start the 14h auto-enable clock (once)
             progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
             return nil
         }
@@ -255,15 +264,15 @@ actor ProactiveCycle {
     /// takeover, and best-effort like the welcome gift: a failure never discards a completed
     /// knowledge base; it is logged, and the absent file keeps the home's setup eligible to retry.
     static func collectWritingStyle() async -> String? {
-        let onboarding = await MainActor.run { !UserDefaults.standard.bool(forKey: AppState.onboardingKey) }
-        guard onboarding, !WritingStyle.exists() else { return nil }
+        let initial = await MainActor.run { ProcessingPlan.initialCompletedAt() == nil }
+        guard initial, !WritingStyle.exists() else { return nil }
         do { return try await WritingStyle.collect() }
         catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
     }
 
     /// Land collected samples in the knowledge base, which exists by the time this is called.
     @MainActor static func publishWritingStyle(_ content: String?) {
-        guard let content else { return }
+        guard !Task.isCancelled, let content else { return }
         do { try WritingStyle.publishIfNeeded(content) }
         catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
     }
@@ -272,6 +281,10 @@ actor ProactiveCycle {
     /// unattended run, surface it to the live UI, and hand it back for the caller's return.
     private static func fail(_ message: String, error: Error, stage: CycleFailure.Stage, scheduled: Bool,
                              progress: @Sendable (ProactiveCyclePhase) -> Void) async -> CycleFailure {
+        // The app owner presents a pause. Cancellation must not create an overnight error banner.
+        if Task.isCancelled || error is CancellationError {
+            return CycleFailure(message: "Analysis paused", kind: nil, stage: stage, reason: .unknown)
+        }
         if !Diagnostics.isExpected(error) {
             let phase: Diagnostics.Phase = stage == .vault ? .publish : (stage == .deciding ? .judge : .prepare)
             Diagnostics.report(stage == .vault ? .vaultFailed : .modelOutputInvalid, phase: phase, reason: "cycle_stage", error: error, terminal: true)

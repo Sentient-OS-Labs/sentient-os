@@ -346,7 +346,7 @@ actor VaultCloud {
                     "files_after": String(staged.files), "bytes_before": String(previous.bytes), "bytes_after": String(staged.bytes),
                     "changed": String(VaultGenerator.vaultFingerprint(staging) != baseline)])
             }
-            try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
+            try VaultGenerator.swapStagingIntoVault(staging, expectedFingerprint: baseline)
             setUpdateResume(nil)
             lastConsumedSourceIDs = Set(inputIDs)
             await markDirty()

@@ -9,50 +9,40 @@
 import SwiftUI
 
 struct OnboardingReadyView: View {
-    let onStart: () -> Void
+    let onStart: (ProcessingCoordinator.Timing) -> Void
 
     @AppStorage("onboarding.emailSubmitted") private var emailSubmitted = false
     @State private var showEmailPrompt = false
     @State private var selectionCount = SourceSelection.selectionCount
-    @State private var showConnectorRecommendation = false
-    @State private var startAfterRecommendation = false
-    @State private var focusConnectors = false
+    @State private var showTiming = false
+    @State private var chosenTiming: ProcessingCoordinator.Timing?
     private var canStart: Bool { selectionCount >= SourceSelection.minimumSelections }
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 24) {
-                        VStack(spacing: 10) {
-                            Text("Connect your world")
-                                .display(29).foregroundStyle(.white)
-                            Text("Sentient privately understands your world to make life easier.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Theme.secondary)
-                                .multilineTextAlignment(.center)
-                                .lineSpacing(4)
-                        }
+            ScrollView {
+                VStack(spacing: 24) {
+                    VStack(spacing: 10) {
+                        Text("Connect your world")
+                            .display(29).foregroundStyle(.white)
+                        Text("Sentient privately understands your world to make life easier.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineSpacing(4)
+                    }
 
-                        KnowledgeSourcesPicker(context: .onboarding) { count in
-                            selectionCount = count
-                        }
+                    KnowledgeSourcesPicker(context: .onboarding) { count in
+                        selectionCount = count
                     }
-                    .frame(maxWidth: 660)
-                    .padding(.horizontal, 40)
-                    .padding(.top, 28)
-                    .padding(.bottom, 20)
-                    .frame(maxWidth: .infinity)
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                .onChange(of: focusConnectors) { _, focus in
-                    guard focus else { return }
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(KnowledgeSourcesPicker.Section.connectors, anchor: .center)
-                    }
-                    focusConnectors = false
-                }
+                .frame(maxWidth: 660)
+                .padding(.horizontal, 40)
+                .padding(.top, 28)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
             }
+            .scrollBounceBehavior(.basedOnSize)
 
             VStack(spacing: 18) {
                 MonoCaps(canStart ? "\(selectionCount) sources selected"
@@ -64,15 +54,11 @@ struct OnboardingReadyView: View {
                     guard emailSubmitted else { showEmailPrompt = true; return }
                     // Recheck the persisted selection in case a connection changed this turn.
                     guard SourceSelection.selectionCount >= SourceSelection.minimumSelections else { return }
-                    if !CodexAuth.connectorsLocked && !SourceSelection.hasEmailAndCalendar {
-                        showConnectorRecommendation = true
-                    } else {
-                        onStart()
-                    }
+                    showTiming = true
                 }
                 .frame(maxWidth: 380)
 
-                Text("This initial analysis can take a few hours. We recommend you run this overnight.")
+                Text(CodexAuth.knowledgeBaseOnly ? "Choose when to build your knowledge." : "Choose when to build your knowledge. Sidekick is ready either way.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.faint)
                     .multilineTextAlignment(.center)
@@ -91,98 +77,20 @@ struct OnboardingReadyView: View {
                 showEmailPrompt = false
             }
         }
-        .sheet(isPresented: $showConnectorRecommendation, onDismiss: {
-            if startAfterRecommendation {
-                startAfterRecommendation = false
-                // A sheet or another window may have changed the source selection meanwhile.
-                guard SourceSelection.selectionCount >= SourceSelection.minimumSelections else { return }
-                onStart()
-            } else {
-                focusConnectors = true
+        .sheet(isPresented: $showTiming, onDismiss: {
+            if let chosenTiming {
+                self.chosenTiming = nil
+                onStart(chosenTiming)
             }
         }) {
-            OnboardingConnectorRecommendation(onConnect: {
-                showConnectorRecommendation = false
-            }, onSkip: {
-                startAfterRecommendation = true
-                showConnectorRecommendation = false
-            })
-        }
-    }
-}
-
-/// A recommendation, not another prerequisite. Only the explicit orange action starts
-/// analysis; accepting or dismissing returns to the existing connector choices.
-private struct OnboardingConnectorRecommendation: View {
-    let onConnect: () -> Void
-    let onSkip: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 14) {
-                Image(systemName: "envelope")
-                Image(systemName: "calendar")
+            AnalysisTimingSheet { timing in
+                chosenTiming = timing
+                showTiming = false
             }
-            .font(.system(size: 23, weight: .light))
-            .foregroundStyle(Theme.Ink.green)
-
-            Text("We recommend you connect Email and Calendar")
-                .display(23)
-                .foregroundStyle(.white)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(PrivacyCopy.emailRecommendation)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Ink.body)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 12) {
-                choice("Sure!", color: Theme.Ink.green, action: onConnect)
-                    .keyboardShortcut(.defaultAction)
-                choice("Don't connect", color: .orange, action: onSkip)
-            }
-            .padding(.top, 6)
         }
-        .padding(32)
-        .frame(width: 500)
-        .background(Theme.bg)
-        .preferredColorScheme(.dark)
-        .onExitCommand(perform: onConnect)
-    }
-
-    private func choice(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(color, in: Capsule())
-                .contentShape(Capsule())
-        }
-        .buttonStyle(PressScaleStyle())
     }
 }
 
-#Preview("Onboarding — recommend Email and Calendar") {
-    OnboardingConnectorRecommendation(onConnect: {}, onSkip: {})
-}
-
-#Preview("Onboarding — ready to process") {
-    ZStack {
-        Theme.bg.ignoresSafeArea()
-        OnboardingReadyView(onStart: {})
-    }
-    .frame(width: 1180, height: 880)
-    .preferredColorScheme(.dark)
-}
-
-#Preview("Onboarding — compact window") {
-    ZStack {
-        Theme.bg.ignoresSafeArea()
-        OnboardingReadyView(onStart: {})
-    }
-    .frame(width: 900, height: 620)
-    .preferredColorScheme(.dark)
+#Preview("Analysis setup") {
+    OnboardingReadyView(onStart: { _ in }).frame(width: 1040, height: 800)
 }

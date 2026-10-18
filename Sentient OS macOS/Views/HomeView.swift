@@ -36,7 +36,6 @@ struct HomeView: View {
     var thingsUnderstood: Int = 0
     var sources: HomeSources = .init()
     var customRoots: [URL] = []        // session folders from RootView — shown in the Analysis popover, like Dev Tools
-    var modelMissing: Bool = false
     var deck: BriefingDeck = .jesai    // .real → real proactive cards from latest(); .jesai/.launch → a demo deck
     var previewKBOnly = false          // preview-only: force the knowledge-base-only state
     var onAnalyze: () -> Void = {}
@@ -359,7 +358,7 @@ struct HomeView: View {
                     .keyboardShortcut("f", modifiers: .command)
                 SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
             }
-            NavItem(title: "Analysis", icon: "waveform.path", dot: Theme.Ink.green) { showAnalysis = true }
+            NavItem(title: appState.processing.isBusy ? "Analyzing" : "Analysis", icon: "waveform.path", dot: appState.processing.paused ? Theme.Ink.amber : Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
             NavItem(title: "Knowledge", icon: "books.vertical") { HomeWindowOpening.open(.knowledge) }
                 .anchorPreference(key: KnowledgeButtonBoundsKey.self, value: .bounds) { $0 }
@@ -410,8 +409,19 @@ struct HomeView: View {
             Text(greeting)
                 .display(27)
                 .foregroundStyle(Theme.Ink.statusInk)
-            Text(model.entries.isEmpty ? "A little help, whenever you need it." : "A few things to make your day easier.")
-                .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
+            if !appState.processing.initialComplete || appState.processing.isBusy || appState.processing.needsAttention {
+                Button { openWindow(id: ProcessingWindowView.windowID) } label: {
+                    HStack(spacing: 6) {
+                        Text(appState.processing.statusLine)
+                        Image(systemName: "arrow.up.right").font(.system(size: 9))
+                    }
+                    .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("analysis.home.status")
+            } else {
+                Text(model.entries.isEmpty ? "A little help, whenever you need it." : "A few things to make your day easier.")
+                    .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
+            }
         }
     }
 
@@ -597,8 +607,10 @@ struct HomeView: View {
 
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
-                        modelMissing: modelMissing,
                         lastRun: lastRunLabel,
+                        nextWakeAt: appState.scheduler.nextWakeAt,
+                        schedulerEnabled: appState.scheduler.isEnabled,
+                        schedulerNeedsSetup: appState.scheduler.needsSchedulerSetup,
                         onAnalyze: { showAnalysis = false; onAnalyze() },
                         onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
                         onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
@@ -1764,15 +1776,13 @@ private enum Demo {
 
 #Preview("Home — the suggestions") {
     HomeView(thingsUnderstood: 3339,
-             sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-             modelMissing: false)
+             sources: .init(files: true, whatsapp: true, imessage: true, notes: true))
         .frame(width: 1180, height: 880)
 }
 
 #Preview("Home — launch demo deck") {
     HomeView(thingsUnderstood: 3339,
              sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-             modelMissing: false,
              deck: .launch)
         .frame(width: 1180, height: 880)
 }
@@ -1780,7 +1790,6 @@ private enum Demo {
 #Preview("Home — knowledge-base-only (free plan)") {
     HomeView(thingsUnderstood: 1704,
              sources: .init(files: true),
-             modelMissing: false,
              deck: .real,
              previewKBOnly: true,
              previewUpgraded: false)
@@ -1790,7 +1799,6 @@ private enum Demo {
 #Preview("Home — kb-only, upgrade detected") {
     HomeView(thingsUnderstood: 1704,
              sources: .init(files: true),
-             modelMissing: false,
              deck: .real,
              previewKBOnly: true,
              previewUpgraded: true)

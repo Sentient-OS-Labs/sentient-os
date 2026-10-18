@@ -46,7 +46,7 @@ enum PrivacyCopy {
     static let localKnowledge = "Your knowledge is a folder of plain Markdown files on this Mac. A compatible local AI can read it directly. Tools such as Claude Code can also use the folder with their chosen model; its processing settings still apply."
 
     static let reset = "Reset removes your local knowledge, summaries, and suggestions and requests deletion of the shared knowledge copy. Sentient returns to setup. Saved contact addresses and invitation or lifetime access are retained."
-    static let resetConfirmation = "Your local knowledge and analysis state will be removed, and Sentient will request deletion of the shared knowledge copy. Saved contact addresses and invitation access remain. Local knowledge removal cannot be undone."
+    static let resetConfirmation = "Any running analysis or Sidekick task will be stopped first. Your local knowledge and analysis state will be removed, and Sentient will request deletion of the shared knowledge copy. Saved contact addresses and invitation access remain. Local knowledge removal cannot be undone."
     static let uninstall = "Uninstall removes Sentient’s local knowledge, model, settings, and saved connection credentials, and requests deletion of the shared knowledge copy. Your own source files stay in place. Saved contact addresses and invitation or lifetime-access records are retained."
 
     static let sections: [Section] = [

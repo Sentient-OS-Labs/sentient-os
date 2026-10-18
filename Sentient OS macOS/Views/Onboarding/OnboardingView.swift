@@ -1,28 +1,12 @@
-//
-//  OnboardingView.swift
-//  Sentient OS macOS
-//
-//  First-launch onboarding: the film slide (OnboardingFilmView — the website's self-scrolling
-//  film in a webview, parking on the morning home),
-//  then the frontier-model step (OnboardingFrontierModelView — the engine pills over the
-//  Settings panels, with the codex login embedded as the ChatGPT panel),
-//  then the plan crossroads (OnboardingPlanView — free/go ChatGPT accounts only; full plans
-//  and custom engines skip it; it rides directly behind the login that triggers it),
-//  then permissions (OnboardingPermissionsView),
-//  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
-//  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
-//  the home. If the on-device model hasn't finished downloading (ModelDownload — AppState kicks
-//  it 2s after the post-FDA-relaunch launch), Start Analysis shows the downloading-model screen
-//  first and the analysis takes over by itself the moment the model verifies. The current step
-//  persists (UserDefaults "onboarding.step") so a quit-and-relaunch mid-onboarding — which
-//  granting Full Disk Access requires — resumes exactly where the user left. AppState starts
-//  shared Codex CLI and native computer-use setup at launch while onboarding continues.
-//
+// First-launch setup: intro, model choice, plan, permissions and sources. Choosing analysis
+// timing finishes setup and reveals Home; the app-owned analysis task runs independently.
+// The persisted step resumes setup after the Full Disk Access relaunch.
+// Doc: Documentation - Onboarding.md
 
 import SwiftUI
 
 struct OnboardingView: View {
-    let onFinished: () -> Void
+    let onFinished: (ProcessingCoordinator.Timing) -> Void
 
     /// For the DEBUG skip handle only — the quiet flag flip, no finale.
     @Environment(AppState.self) private var appState
@@ -30,37 +14,13 @@ struct OnboardingView: View {
     /// Persisted so a relaunch mid-onboarding (the FDA grant needs one) resumes at the same step.
     @AppStorage("onboarding.step") private var step = 0
 
-    /// Start Analysis pressed — the ProcessingView takeover is up. Not persisted: a quit
-    /// mid-run relaunches to the ready screen, and the durable marks resume the analysis.
-    @State private var analyzing = false
     @State private var isPresentingInviteGift = false
-
     #if DEBUG
     @State private var introFilm: FilmDriver?
     #endif
 
-    // The same run flags the home's Analyze Now reads (RootView).
-    @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
-    @AppStorage("dbg.run.gmail")           private var runGmail = false
-    @AppStorage("dbg.run.calendar")        private var runCalendar = false
-
-    /// The onboarding model download (AppState kicks it post-FDA-relaunch; the downloading
-    /// screen renders it). Held here so this body observes its phase.
-    @State private var download = ModelDownload.shared
-
-    /// Keeps the screen on for ALL of onboarding — the model download runs behind the slides
-    /// and the first analysis takes hours; idle-sleep would kill both. Held for this view's
-    /// whole lifetime (see body), released when the home replaces onboarding.
+    /// Keep setup visible; the analysis owner separately holds system sleep while it works.
     @State private var awake = DisplayAwake()
-
-    /// Live model path (env → bundle → App Support → repo root); nil = not on this Mac YET.
-    /// Reading the download phase first makes SwiftUI re-evaluate this body when the download
-    /// verifies, so the path flips non-nil in place and the analysis takes over by itself (the
-    /// old `static let` would have needed an app relaunch to notice the freshly-landed model).
-    private var modelPath: String? {
-        _ = download.phase
-        return ModelLocator.resolve()
-    }
 
     var body: some View {
         ZStack {
@@ -85,50 +45,19 @@ struct OnboardingView: View {
             case 3:
                 OnboardingPermissionsView(onContinue: advance).transition(.opacity)
             default:
-                if analyzing, let modelPath {
-                    // The REAL first analysis — the same engine + takeover as the home's Analyze
-                    // Now, in pausable onboarding dress. Home appears only when this finishes.
-                    ProcessingView(modelPath: modelPath,
-                                   connectors: RunSource.connectors(from:
-                                       SourceSelection.current(fdaGranted: Permissions.hasFullDiskAccess())),
-                                   mode: .auto,
-                                   runGmail: ModelBackend.connectorsAvailable && runGmail,
-                                   runCalendar: ModelBackend.connectorsAvailable && runCalendar,
-                                   mcpSlugs: MCPSource.kbSlugs(),
-                                   fullCycle: BriefingDeck(rawValue: deckRaw) == .real,
-                                   pausable: true,
-                                   onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },
-                                   onDone: onFinished)
-                        .transition(.opacity)
-                } else if analyzing {
-                    // Start Analysis outran the model download — the honest wait, never a dead
-                    // button. The `modelPath` read above re-resolves when the phase flips, so
-                    // this hands off to the analysis on its own.
-                    OnboardingModelDownloadView(download: download)
-                        .transition(.opacity)
-                } else {
-                    OnboardingReadyView {
-                        withAnimation(.easeInOut(duration: 0.3)) { analyzing = true }
-                    }
-                    .transition(.opacity)
-                }
+                OnboardingReadyView(onStart: onFinished).transition(.opacity)
             }
         }
-        // The whole-onboarding display hold: slides → permissions → codex login → downloads →
-        // analysis → finale, pauses included. The FDA quit-and-relaunch re-begins on remount;
-        // the DEBUG skip and the real finish both release via onDisappear when RootView swaps
-        // to home. (ProcessingView's own hold covers home-launched first ingests; during
-        // onboarding the two overlap harmlessly — independent tokens.)
+        // Setup ends as soon as timing is selected; the display can then sleep normally.
         .onAppear { awake.begin(reason: "Onboarding — keeping the screen on") }
         .onDisappear { awake.end() }
         // No right-clicks anywhere in onboarding — the film's webview would offer a browser
         // context menu (Reload…), and no onboarding surface has a legitimate right-click.
         // Window-scoped, gone with this view.
         .background(RightClickBlocker())
-        // A shared back button on every screen but the first (and never over the analysis takeover,
-        // which owns its own pause/exit). One shared code path, so every step gets it for free.
+        // A shared back button on every screen except the intro.
         .overlay(alignment: .topLeading) {
-            if step > 0 && !analyzing {
+            if step > 0 {
                 OnboardingBackButton(action: goBack)
                     .padding(.top, 24)
                     .padding(.leading, 24)
@@ -136,26 +65,20 @@ struct OnboardingView: View {
             }
         }
         // The GitHub mark in the window's absolute top-right corner — the open-source receipt on
-        // every onboarding screen, the film included; only the takeover is kept clean. The
+        // every onboarding screen, the film included. The
         // flexible frame + ignoresSafeArea pins it past the title-bar inset to the true corner.
         .overlay(alignment: .topTrailing) {
-            if !analyzing {
-                OnboardingGitHubButton()
-                    .padding(.top, 12)
-                    .padding(.trailing, 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-            }
+            OnboardingGitHubButton()
+                .padding(.top, 12)
+                .padding(.trailing, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .ignoresSafeArea()
+                .transition(.opacity)
         }
-        // DEV-ONLY: skip straight to the home (testing relaunches land back in onboarding until
-        // a full first analysis flips the flag). Quietly marks onboarding complete — deliberately
-        // NOT onFinished, so the Constellation finale stays reserved for the real finish.
-        // Compile-gated out of Release entirely. On EVERY step including the film (step 0) — a dev
-        // relaunching into onboarding shouldn't have to sit through the film to reach the handle.
+        // Developer shortcut: enter Home without submitting an analysis plan.
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
-            if !analyzing {
+            if step >= 0 {
                 HStack(spacing: 10) {
                     if step == 0, let introFilm {
                         OnboardingDevButton(
@@ -177,7 +100,7 @@ struct OnboardingView: View {
         .disabled(isPresentingInviteGift)
         .accessibilityHidden(isPresentingInviteGift)
         .overlay {
-            if step == 1 && !analyzing {
+            if step == 1 {
                 OnboardingInviteView(isPresentingGift: $isPresentingInviteGift)
             }
         }
@@ -326,7 +249,7 @@ struct OnboardingTrustFooter: View {
 }
 
 #Preview("Onboarding") {
-    OnboardingView(onFinished: {})
+    OnboardingView(onFinished: { _ in })
         .frame(width: 1180, height: 880)
         .preferredColorScheme(.dark)
 }

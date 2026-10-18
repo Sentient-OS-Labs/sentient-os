@@ -15,16 +15,6 @@ import UserNotifications
 @Observable
 final class AppState {
 
-    /// High-level what's-happening-right-now, surfaced in the window + menu bar.
-    enum Status: Equatable {
-        case idle
-        case processing(done: Int, total: Int)
-        case paused(reason: String)
-        case error(String)
-    }
-
-    var status: Status = .idle
-
     /// True while Uninstall.run is tearing the app down (flipped back only by a cancel). The
     /// home reads it to keep the deck empty: the teardown's defaults wipe re-publishes every
     /// @AppStorage (including the card deck's), and without this gate the home re-deals a
@@ -34,8 +24,10 @@ final class AppState {
     /// Offer the missing ChatGPT login once per launch; the home action can always reopen it.
     var hasOfferedCodexSignIn = false
 
-    /// The in-app scheduler — only ever runs while the app is alive (DEV TOOLS "Scheduled run").
+    /// One analysis owner and one overnight clock, independent of the app's windows.
+    let processing = ProcessingCoordinator.shared
     let scheduler = OvernightScheduler()
+    var returnHomeAfterOpeningAnalysis = false
 
     /// The "do this for me" brain: the right-⌘ tap-to-type hotkey (two taps → a reply draft) + the
     /// notch's mic + the one shared codex run + the notch's status phase. Both the home command bar
@@ -60,7 +52,10 @@ final class AppState {
         didSet {
             if !hasCompletedOnboarding { MainNavigation.shared.reset() }
             UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
-            if hasCompletedOnboarding, !oldValue { Analytics.signal("Onboarding.completed") }
+            if hasCompletedOnboarding, !oldValue {
+                Analytics.signal("Onboarding.completed")
+                if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil { startAfterSetup() }
+            }
         }
     }
 
@@ -87,7 +82,7 @@ final class AppState {
         // Register the installation now so Settings, first use and Uninstall share its lifetime.
         ComputerUseSetup.current.prepareForLaunch()
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
-        scheduler.maybeAutoEnable()   // 14h after initial: flip the overnight scheduler on (or arm the timer)
+        if hasCompletedOnboarding { startAfterSetup() }
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
         // the coordinator: the notch experience still plays, the codex run just never fires.
         startInterfaceIfReady()      // the upgrade must finish before Sidekick or its notch can appear
@@ -104,45 +99,13 @@ final class AppState {
             // lifeline EOF would otherwise hold its screen-capture stream (and CPU) forever.
             await CuaDriverHost.sweepOrphans()
         }
-        // Keep the managed Codex CLI current (CodexSetup.updateIfDue): a 15-minute tick that only
-        // acts when the user is away, the pipeline is idle, and the Sidekick/card run lock is free,
-        // at most one update a day. Initial dependency setup starts above for every user.
-        // Read the codex doc's "Keeping the CLI current" before touching this.
-        if hasCompletedOnboarding {
-            CodexSetup.shared.startKeepingCurrent { [weak self] in
-                self?.commandCoordinator.run.isRunning ?? true
-            }
-        }
-
-        // Updated Macs complete the computer-use upgrade before their regular UI is available.
-
-        // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
-        // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
-        // user sees at most the passive "Sentient OS can send you notifications" notice). Asked
-        // lazily after onboarding so that notice never lands mid-flow; the explicit alerts
-        // upgrade stays in Settings → Health's "Allow…". Only fires while status is untouched —
-        // a real Allow/Deny is never overridden.
-        if hasCompletedOnboarding {
-            Task {
-                let center = UNUserNotificationCenter.current()
-                let status = await center.notificationSettings().authorizationStatus
-                let names = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"]
-                let label = names.indices.contains(status.rawValue) ? names[status.rawValue] : "\(status.rawValue)"
-                Log("Notifications: launch status = \(label)")
-                if status == .notDetermined {
-                    _ = try? await center.requestAuthorization(options: [.provisional])
-                    Log("Notifications: banked provisional (quiet) permission")
-                }
-            }
-        }
-
         // Onboarding model download: the on-device model (3.66 GB) starts pulling 2s after the
         // launch that follows the Full Disk Access grant — FDA is the one onboarding step that
         // forces a relaunch, and it lands minutes before Start Analysis needs the model, so the
         // downloading screen usually only covers the tail. Strictly an onboarding affair, and a
         // no-op whenever ModelLocator already finds a model (dev checkouts, a finished download).
         // A quit-and-relaunch mid-download resumes from the finished byte ranges, not from zero.
-        if !hasCompletedOnboarding {
+        if !hasCompletedOnboarding || !processing.initialComplete {
             Task {
                 try? await Task.sleep(for: .seconds(2))
                 if Permissions.hasFullDiskAccess() {
@@ -160,5 +123,21 @@ final class AppState {
         hasStartedInterface = true
         commandCoordinator.start()
         notch.start()
+    }
+
+    /// Start the analysis monitor, overnight clock, idle-only CLI updates and quiet notification
+    /// permission on the first Home visit as well as subsequent launches.
+    private func startAfterSetup() {
+        processing.resumeMonitoring()
+        scheduler.enableAfterSetup()
+        CodexSetup.shared.startKeepingCurrent { [weak self] in
+            self?.commandCoordinator.run.isRunning ?? true
+        }
+        Task {
+            let center = UNUserNotificationCenter.current()
+            if await center.notificationSettings().authorizationStatus == .notDetermined {
+                _ = try? await center.requestAuthorization(options: [.provisional])
+            }
+        }
     }
 }

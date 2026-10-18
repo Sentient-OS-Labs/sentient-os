@@ -126,6 +126,7 @@ struct IterativeRun {
             // batch does nothing). Escalate to an event — error TYPE only, plus whether the model
             // file resolved (never the path).
             Log("IterativeRun: engine load failed — \(ErrorLabel(error))")
+            p.failSourceRead(name: "On-device sources", message: "The on-device model could not load. Try analysis again.")
             CrashReporting.captureEvent("engine.load_failed", level: .error,
                 tags: ["error": String(describing: type(of: error))],
                 extra: ["model_present": String(ModelLocator.resolve() != nil)],

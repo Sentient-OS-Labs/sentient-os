@@ -909,7 +909,7 @@ final class CommandRunModel {
     /// bare-pointer fallback pre-first-analysis. Shared by both prompts.
     nonisolated static func knowledgeBlock(_ kbContext: String) -> String {
         kbContext.isEmpty
-            ? "For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it."
+            ? "My personal knowledge base is not available yet; initial analysis may be pending or still running. You can help now using this request, our conversation, my Sidekick memory, the current screen and available connected tools. Do not assume you know personal facts that are absent from that context. Do not read analysis staging files or create a placeholder knowledge base. Ask me for missing context when needed."
             : kbContext
     }
 
