@@ -120,6 +120,8 @@ struct HomeView: View {
                             emptyState.opacity(inConversation ? 0 : 1)
                                 .blur(radius: inConversation && !reducedMotion ? 9 : 0)
                                 .scaleEffect(inConversation && !reducedMotion ? 0.94 : 1)
+                                .allowsHitTesting(!inConversation)
+                                .accessibilityHidden(inConversation)
                         }
                         VStack(spacing: 0) {
                             Color.clear.frame(height: kbOnly ? 130 : (inConversation && hasCriticalCaution ? max(128, chromeHeight + 8) : 86))
@@ -358,7 +360,14 @@ struct HomeView: View {
                     .keyboardShortcut("f", modifiers: .command)
                 SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
             }
-            NavItem(title: appState.processing.isBusy ? "Analyzing" : "Analysis", icon: "waveform.path", dot: appState.processing.paused ? Theme.Ink.amber : Theme.Ink.green) { showAnalysis = true }
+            NavItem(title: appState.processing.isBusy ? "Analyzing" : "Analysis", icon: "waveform.path",
+                    dot: appState.processing.needsAttention ? Theme.Ink.amber
+                        : (appState.processing.initialComplete ? Theme.Ink.green : GlowHalo.stops[4]),
+                    emphasized: !appState.processing.initialComplete,
+                    animateEmphasis: isPresented && presentation.windowActive && !inConversation
+                        && !showAnalysis && !letterShown && !reducedMotion) { showAnalysis = true }
+                .accessibilityIdentifier("navigation.analysis")
+                .help("Check analysis status")
                 .popover(isPresented: $showAnalysis) { analysisPopover }
             NavItem(title: "Knowledge", icon: "books.vertical") { HomeWindowOpening.open(.knowledge) }
                 .anchorPreference(key: KnowledgeButtonBoundsKey.self, value: .bounds) { $0 }
@@ -715,12 +724,33 @@ struct HomeView: View {
                 .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(Theme.Ink.statusInk)
                 .offset(y: -8)
-            Text("Your context is already here. Pick up anywhere.")
-                .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
+            if appState.processing.initialComplete {
+                Text("Your context is already here. Pick up anywhere.")
+                    .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
+            } else {
+                VStack(spacing: 9) {
+                    Text("Sidekick will get your personal context soon.\nDouble Tap will be ready after your first analysis.")
+                        .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
+                        .multilineTextAlignment(.center).lineSpacing(4)
+                    analysisStatusLink
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .offset(y: -35)
-        .allowsHitTesting(false)
+    }
+
+    private var analysisStatusLink: some View {
+        Button { showAnalysis = true } label: {
+            Text("Check analysis status")
+                .underline().font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.Ink.bright)
+                .padding(.horizontal, 8).frame(minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SidekickPressStyle())
+        .accessibilityIdentifier("analysis.home.checkStatus")
+        .accessibilityHint("Opens the Analysis popover")
     }
 
     // MARK: The knowledge-base-only preview state (free/go plans)
@@ -747,12 +777,15 @@ struct HomeView: View {
             .display(24)
             .foregroundStyle(Theme.Ink.statusInk)
             .padding(.top, 16)
-        Text("Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:")
+        Text(appState.processing.initialComplete
+             ? "Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:"
+             : "Your first analysis will build your private knowledge base.\nThe living Sentient uses your ChatGPT Plus:")
             .font(.system(size: 13.5))
             .foregroundStyle(Theme.secondary)
             .multilineTextAlignment(.center)
             .lineSpacing(4)
             .padding(.top, 10)
+        if !appState.processing.initialComplete { analysisStatusLink.padding(.top, 4) }
         if !compact {   // the feature rows return once the envelope is gone
             VStack(alignment: .leading, spacing: 11) {
                 previewRow("sunrise", "Mornings where things worth doing arrive already done")
@@ -972,6 +1005,8 @@ private struct NavItem: View {
     var title: String? = nil
     var icon: String? = nil
     var dot: Color? = nil
+    var emphasized = false
+    var animateEmphasis = false
     var action: () -> Void
     @State private var hover = false
 
@@ -991,12 +1026,28 @@ private struct NavItem: View {
                 }
                 if let title { Text(title).font(.system(size: 13.5, weight: .medium)) }
             }
-            .foregroundStyle(hover ? .white : Theme.Ink.bright)
+            .foregroundStyle(hover || emphasized ? .white : Theme.Ink.bright)
             .padding(.horizontal, 11).frame(minHeight: 40)
+            .background {
+                if emphasized { Capsule().fill(GlowHalo.stops[4].opacity(0.16)) }
+            }
             .background(Capsule().fill(.white.opacity(hover ? 0.07 : (title == nil ? 0.035 : 0))))
+            .overlay {
+                if emphasized {
+                    Capsule().strokeBorder(LinearGradient(
+                        colors: [GlowHalo.stops[4].opacity(0.55), GlowHalo.stops[5].opacity(0.3)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                }
+            }
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .background {
+            if emphasized {
+                GlowHalo(active: true, colors: [GlowHalo.stops[4], GlowHalo.stops[5], GlowHalo.stops[4]],
+                         intensity: 0.28, period: 12, animating: animateEmphasis)
+            }
+        }
         .onHover { hover = $0 }
     }
 }

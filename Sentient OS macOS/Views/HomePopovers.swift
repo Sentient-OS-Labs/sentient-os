@@ -158,7 +158,7 @@ struct AnalysisPopover: View {
                 }
             }
             if hasBattery {
-                footerValue("On battery: 50% for first analysis, 30% for updates. Pauses at 20% to save power.")
+                footerValue("Overnight on battery: 50% for first analysis, 30% for updates. Pauses at 20% to save power. Run now has no battery requirement.")
             }
         }
         .fixedSize(horizontal: false, vertical: true)

@@ -58,10 +58,20 @@ struct OnboardingReadyView: View {
                 }
                 .frame(maxWidth: 380)
 
-                Text(CodexAuth.knowledgeBaseOnly ? "Choose when to build your knowledge." : "Choose when to build your knowledge. Sidekick is ready either way.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.faint)
-                    .multilineTextAlignment(.center)
+                VStack(spacing: 6) {
+                    if CodexAuth.knowledgeBaseOnly {
+                        Text("Choose when to build your knowledge.")
+                            .font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    } else {
+                        Text("Sidekick is ready as soon as you finish setup.")
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.Ink.bright)
+                        Text("Analysis runs in the background to give Sidekick personal context and unlock Double Tap.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    }
+                }
+                .multilineTextAlignment(.center).lineSpacing(3)
+                .frame(maxWidth: 540)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 40)
             .padding(.top, 16)

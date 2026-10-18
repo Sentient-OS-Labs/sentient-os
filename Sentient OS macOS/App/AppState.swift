@@ -27,7 +27,6 @@ final class AppState {
     /// One analysis owner and one overnight clock, independent of the app's windows.
     let processing = ProcessingCoordinator.shared
     let scheduler = OvernightScheduler()
-    var returnHomeAfterOpeningAnalysis = false
 
     /// The "do this for me" brain: the right-⌘ tap-to-type hotkey (two taps → a reply draft) + the
     /// notch's mic + the one shared codex run + the notch's status phase. Both the home command bar

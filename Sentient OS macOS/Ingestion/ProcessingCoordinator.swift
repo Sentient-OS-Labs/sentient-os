@@ -231,8 +231,9 @@ final class ProcessingCoordinator {
 
     private func admission(_ request: ProcessingRequest, scheduled: Bool) -> Wait? {
         guard request.hasSources else { return .sources }
-        let allowBattery = !scheduled || ((defaults.object(forKey: OvernightScheduler.allowBatteryKey) as? Bool) ?? true)
-        if let block = PowerState.block(power, initial: !initialComplete, allowBattery: allowBattery) { return .power(block) }
+        let allowBattery = (defaults.object(forKey: OvernightScheduler.allowBatteryKey) as? Bool) ?? true
+        if let block = PowerState.block(power, initial: !initialComplete, allowBattery: allowBattery,
+                                        scheduled: scheduled) { return .power(block) }
         if !request.connectors.isEmpty && request.modelPath == nil { return .model }
         return nil
     }
@@ -431,7 +432,7 @@ final class ProcessingCoordinator {
 
     private func checkRunningWork() async {
         guard isBusy, stopReason == nil, record.status == .running else { return }
-        if PowerState.shouldPause(power) { stop(.power); return }
+        if PowerState.shouldPause(power, scheduled: record.trigger == .overnight) { stop(.power); return }
         if Date().timeIntervalSince(lastProgressAt) > OvernightScheduler.stallSeconds { stop(.stalled); return }
         if record.trigger == .overnight {
             if Date().timeIntervalSince(startedAt) >= Double(WakeHelperConfig.maxAwakeSeconds) { stop(.ceiling); return }

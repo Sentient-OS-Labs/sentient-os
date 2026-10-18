@@ -1,5 +1,5 @@
 // Reads Mac power and thermal state and applies shared analysis admission/stop rules.
-// Initial work starts at 50%, updates at 30%; AC is eligible at any charge.
+// Overnight work starts at 50% initially and 30% for updates; manual runs ignore battery level.
 // Doc: Documentation - Overnight Scheduler & Wake Helper.md
 
 import Foundation
@@ -65,19 +65,19 @@ enum PowerState {
         case thermal = "thermal_critical"
     }
 
-    /// Admission is shared by manual and scheduled runs. Low Power Mode may slow analysis;
-    /// it does not contradict the promise that plugging in makes a low-charge Mac eligible.
-    static func block(_ power: Snapshot, initial: Bool, allowBattery: Bool = true) -> Block? {
+    /// Explicit Run now bypasses power requirements. Thermal protection applies to every run.
+    static func block(_ power: Snapshot, initial: Bool, allowBattery: Bool = true, scheduled: Bool = true) -> Block? {
         if power.critical { return .thermal }
+        guard scheduled else { return nil }
         if power.onAC { return nil }
         if !allowBattery { return .onBattery }
         guard let percent = power.percent else { return .unknown }
         return percent < (initial ? initialBatteryFloor : iterativeBatteryFloor) ? .batteryLow : nil
     }
 
-    /// Start thresholds are not stop thresholds: a run admitted at 50% must be able to continue.
-    static func shouldPause(_ power: Snapshot) -> Bool {
-        power.critical || (!power.onAC && (power.percent.map { $0 <= reserveBatteryFloor } ?? true))
+    /// Only unattended runs pause at the battery reserve; manual work continues at any charge.
+    static func shouldPause(_ power: Snapshot, scheduled: Bool = true) -> Bool {
+        power.critical || (scheduled && !power.onAC && (power.percent.map { $0 <= reserveBatteryFloor } ?? true))
     }
 
     /// Diagnostic compatibility for callers that need a stable blocking reason.

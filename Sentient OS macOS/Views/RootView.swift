@@ -41,7 +41,6 @@ struct RootView: View {
                     appState.processing.choose(timing)
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
                     if timing == .now {
-                        appState.returnHomeAfterOpeningAnalysis = true
                         openWindow(id: ProcessingWindowView.windowID)
                     }
                 }
