@@ -6,6 +6,7 @@ import AppKit
 import Foundation
 import ScreenCaptureKit
 import SwiftUI
+import WebKit
 
 @MainActor enum SidekickPolishLab {
     enum Failure: String, Error { case isolation, screenLocked, unavailable, capture, accessibility, foreground }
@@ -640,17 +641,25 @@ import SwiftUI
 
         let host = NSHostingView(rootView: AnyView(Color.black))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 880, height: 650),
-            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Small-screen onboarding · isolated preview"
+        window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
+        window.backgroundColor = .black
         window.appearance = NSAppearance(named: .darkAqua); window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.close() }
+        func setViewport(_ size: CGSize) {
+            // SwiftUI's scene size describes usable content. This AppKit fixture uses a
+            // full-size content view, so explicitly add its titlebar to match that proposal.
+            let titlebar = window.frame.height - window.contentLayoutRect.height
+            window.setContentSize(CGSize(width: size.width, height: size.height + titlebar))
+        }
         var continued = 0
         for (index, visibleSize) in [CGSize(width: 1280, height: 704), CGSize(width: 1366, height: 660)].enumerated() {
             let scale = OnboardingWindowLayout.scale(visibleSize: visibleSize)
             let size = OnboardingWindowLayout.initialSize(visibleSize: visibleSize)
             let demo = OnboardingDoubleTapDemo.preview(sample: index == 0 ? .email : .message, completed: true)
-            window.setContentSize(size)
+            setViewport(size)
             host.rootView = AnyView(OnboardingCanvas(scale: scale) {
                 OnboardingDoubleTapView(onContinue: { continued += 1 }, demo: demo)
             }.id(index).preferredColorScheme(.dark))
@@ -673,6 +682,52 @@ import SwiftUI
             try await settle(200)
             checks["scaled_action_receives_click_\(index)"] = index == 0 ? demo.phase == .switching : continued == 1
             demo.stop()
+        }
+        // The production hidden-titlebar window allows the film and GitHub mark to paint
+        // above the safe-area boundary. A canvas clip used to cut both in half, even at 100%.
+        UserDefaults.standard.set(0, forKey: "onboarding.step")
+        UserDefaults.standard.set("https://sentient-os.ai/onboarding?end=0.42&duration=1&delay=0", forKey: "dev.film.url")
+        func filmWebView(_ view: NSView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            return view.subviews.lazy.compactMap { filmWebView($0) }.first
+        }
+        for (index, visibleSize) in [CGSize(width: 1512, height: 874), CGSize(width: 1280, height: 704)].enumerated() {
+            let scale = OnboardingWindowLayout.scale(visibleSize: visibleSize)
+            setViewport(OnboardingWindowLayout.initialSize(visibleSize: visibleSize))
+            host.rootView = AnyView(ZStack {
+                Color.black.ignoresSafeArea()
+                OnboardingCanvas(scale: scale) { OnboardingView(onFinished: { _ in }) }
+            }.environment(app).id("film-\(index)").preferredColorScheme(.dark))
+            window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            var ready = false
+            for _ in 0..<60 {
+                try await settle(250)
+                if let web = filmWebView(host), !web.isLoading,
+                   (try? await web.evaluateJavaScript("document.querySelector('.film-logo-link') !== null")) as? Bool == true,
+                   elements(host).contains(where: { $0.label == "Continue" }) { ready = true; break }
+            }
+            guard ready else { throw Failure.unavailable }
+            try await settle(1400)
+            let shot = try await capture(host, name: index == 0 ? "small-03-film-14inch" : "small-04-film-13inch", directory: directory)
+            captures.append(shot)
+            let path = directory.appendingPathComponent((shot["name"] as! String) + ".png")
+            guard let bitmap = NSBitmapImageRep(data: try Data(contentsOf: path)) else { throw Failure.capture }
+            let pixelsPerPoint = CGFloat(bitmap.pixelsWide) / window.frame.width
+            let titlebarHeight = host.bounds.maxY - window.contentLayoutRect.maxY
+            var headerPixels = 0
+            // Only the centered brand lives in this titlebar strip. Window borders and
+            // traffic lights are excluded, so clipped header ink cannot pass this check.
+            for y in Int(4 * pixelsPerPoint)..<max(Int(4 * pixelsPerPoint), Int(titlebarHeight * pixelsPerPoint)) {
+                for x in Int(CGFloat(bitmap.pixelsWide) * 0.4)..<Int(CGFloat(bitmap.pixelsWide) * 0.6) {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       min(color.redComponent, color.greenComponent, color.blueComponent) > 0.7 { headerPixels += 1 }
+                }
+            }
+            checks["film_brand_renders_in_titlebar_\(index)"] = titlebarHeight > 0 && headerPixels > 12
+            Log("Onboarding header fixture: scale=\(scale), titlebar=\(titlebarHeight), visible brand pixels=\(headerPixels)")
+            if let button = elements(host).first(where: { $0.label == "Continue" && $0.role == NSAccessibility.Role.button.rawValue }) {
+                checks["film_continue_visible_\(index)"] = window.convertToScreen(host.bounds).contains(button.frame)
+            } else { checks["film_continue_visible_\(index)"] = false }
         }
         // The physical-notch overlay must remain in screen points while its CTA scales.
         UserDefaults.standard.set(true, forKey: NotchPreferences.clickEnabledKey)

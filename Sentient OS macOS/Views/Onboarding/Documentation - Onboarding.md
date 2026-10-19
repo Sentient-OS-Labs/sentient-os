@@ -28,6 +28,8 @@ The main window's initial size follows the same policy. `OnboardingWindowFit` re
 Dock, and window-size changes; moving to a larger display restores 100%. Home and Settings retain
 their existing sizing after setup. The notch pointer converts its measured margins to the current
 canvas scale, so it still points at physical screen coordinates.
+The canvas must not clip its safe-area bounds: the film header and GitHub mark deliberately
+render into the transparent title bar. The native window supplies the outer clipping boundary.
 
 **0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native` in
 a webview that is a movie, not a page (hit-testing off, off-host navigation blocked, fades in only after

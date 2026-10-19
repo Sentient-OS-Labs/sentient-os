@@ -42,7 +42,8 @@ struct OnboardingCanvas<Content: View>: View {
                 .scaleEffect(scale, anchor: .topLeading)
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
-        .clipped()
+        // The film and GitHub mark intentionally extend into the transparent title bar.
+        // Clip only at the native window boundary, not this safe-area-sized canvas.
     }
 }
 

@@ -35,7 +35,7 @@ def main() -> int:
         receipt = app.run_stage(executable, root, fixture, runtime, stage, 90)
         manifest = app.read_json(root / ("small-onboarding-manifest.json" if args.small_onboarding else "invitation-manifest.json" if args.invitation else "discovery-manifest.json" if args.discovery else "polish-manifest.json"))
         captures = manifest.get("captures", [])
-        app.require(len(captures) == (2 if args.small_onboarding else 4 if args.invitation else 6 if args.discovery else 5) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
+        app.require(len(captures) == (4 if args.small_onboarding else 4 if args.invitation else 6 if args.discovery else 5) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
         for capture in captures:
             path = (root / capture["file"]).resolve()
             app.require(path.parent == root / "polish-snapshots", "Capture escaped owned fixture")
