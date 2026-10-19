@@ -372,7 +372,7 @@ declare
     invitation uuid;
     missing_code text := 'unregistered-' || gen_random_uuid()::text;
 begin
-    foreach gift in array array['WAITLIST_OGs', 'MACAPPS_1000', 'FINAL_1000'] loop
+    foreach gift in array array['WAITLIST_OGs', 'MACAPPS_1000'] loop
         recipient := gen_random_uuid();
         insert into auth.users(id, aud, role, is_anonymous)
         values (recipient, 'authenticated', 'authenticated', true);
@@ -424,3 +424,83 @@ begin
 end;
 $$;
 select 'PASS: founder gifts, generated referrals, explicit confirmation, validation before saved-access replay, revocation, closure, expiry and throttling' as verified_invitation_checks;
+
+-- Late FINAL_1000 use is a private acknowledgement, never a lifetime grant/count.
+do $$
+declare
+    recipient uuid := gen_random_uuid();
+    other_user uuid := gen_random_uuid();
+    old_user uuid := gen_random_uuid();
+    invitation uuid;
+    count_before bigint;
+    receipt jsonb;
+    repeated jsonb;
+    original_grant jsonb;
+begin
+    insert into auth.users(id, aud, role, is_anonymous)
+        values (recipient, 'authenticated', 'authenticated', true),
+               (other_user, 'authenticated', 'authenticated', true),
+               (old_user, 'authenticated', 'authenticated', true);
+    select id into invitation from public.invite_codes where public.normalize_invite_code(code) = 'FINAL_1000';
+    -- Stand in for a real, previously issued FINAL_1000 grant.
+    insert into public.invite_redemptions(recipient_id, invite_id, campaign_id)
+        values (old_user, invitation, 'launch-lifetime');
+    select to_jsonb(r) into original_grant from public.invite_redemptions r where recipient_id = old_user;
+    select count(*) into count_before from public.invite_redemptions;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    if public.redeem_invite(' final_1000 ')->>'error' is distinct from 'offer_ended' then
+        raise exception 'Old-client endpoint still granted FINAL_1000';
+    end if;
+    if public.record_late_invite_use('invalid')->>'error' is distinct from 'email_required' then
+        raise exception 'Invalid gift email accepted';
+    end if;
+    receipt := public.record_late_invite_use(' Late-User@Example.Invalid ');
+    repeated := public.record_late_invite_use('late-user@example.invalid');
+    if receipt->>'redeemedAt' is not null or receipt->>'validatedCode' is distinct from 'FINAL_1000'
+        or receipt->'lateUse'->>'email' is distinct from 'late-user@example.invalid'
+        or receipt->'lateUse'->>'code' is distinct from 'FINAL_1000'
+        or receipt->'lateUse'->>'recordedAt' is null then raise exception 'Late-use receipt incorrect'; end if;
+    if receipt->'lateUse' is distinct from repeated->'lateUse' then raise exception 'Retry changed first-use receipt'; end if;
+    if public.invite_status()->'lateUse' is distinct from receipt->'lateUse' then raise exception 'Refresh lost late use'; end if;
+    begin
+        perform * from public.invite_code_late_uses;
+        raise exception 'Client could read gift email table';
+    exception when insufficient_privilege then null; end;
+    begin
+        perform public.redeem_invite_before_final_capacity('FINAL_1000');
+        raise exception 'Client bypassed closed-code wrapper';
+    exception when insufficient_privilege then null; end;
+    reset role;
+    if (select count(*) from public.invite_redemptions) <> count_before then raise exception 'Late use counted as redemption'; end if;
+    if (select count(*) from public.invite_code_late_uses where user_id = recipient) <> 1 then raise exception 'Late-use replay duplicated row'; end if;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', other_user, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    if public.invite_status()->'lateUse' <> 'null'::jsonb then raise exception 'Another identity saw gift details'; end if;
+    reset role;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', old_user, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    repeated := public.record_late_invite_use('existing-user@example.invalid');
+    if repeated->>'redeemedAt' is null then raise exception 'Late use erased existing lifetime access'; end if;
+    if public.redeem_invite('FINAL_1000')->>'redeemedAt' is null then raise exception 'Existing lifetime replay failed'; end if;
+    reset role;
+    if (select to_jsonb(r) from public.invite_redemptions r where recipient_id = old_user) is distinct from original_grant then
+        raise exception 'Previous lifetime grant was changed';
+    end if;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    repeated := public.redeem_invite('MACAPPS_1000');
+    if repeated->>'redeemedAt' is null or repeated->'lateUse' is distinct from receipt->'lateUse' then
+        raise exception 'Late use consumed the lifetime slot or lost its history';
+    end if;
+    reset role;
+    perform set_config('request.jwt.claims', '{}', true);
+    set local role anon;
+    begin
+        perform public.record_late_invite_use('anonymous@example.invalid');
+        raise exception 'Unauthenticated gift use accepted';
+    exception when insufficient_privilege then null; end;
+    reset role;
+end;
+$$;
+select 'PASS: late-use receipt and email, replay, no redemption/count, grandfathered lifetime preservation, old-client closure, and private data access' as late_invite_checks;

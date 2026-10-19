@@ -64,7 +64,7 @@ try {
   const senderAfter = await rpc(sender, 'invite_status');
   const friendAfter = await rpc(friend, 'invite_status');
   assert.equal(senderAfter.redemptionCount + friendAfter.redemptionCount, 2, 'A recipient was counted twice');
-  for (const code of ['WAITLIST_OGs', 'MACAPPS_1000', 'FINAL_1000']) {
+  for (const code of ['WAITLIST_OGs', 'MACAPPS_1000']) {
     const recipient = await newUser();
     const gift = await rpc(recipient, 'redeem_invite', { p_code: ` ${code.toLowerCase()} ` });
     assert.ok(gift.redeemedAt > 0);
@@ -74,6 +74,24 @@ try {
     assert.equal((await rpc(recipient, 'redeem_invite', { p_code: unknown })).error, 'invalid_code');
     assert.equal((await rpc(recipient, 'invite_status')).redeemedAt, gift.redeemedAt);
   }
+  const lateUser = await newUser();
+  assert.equal((await rpc(lateUser, 'redeem_invite', { p_code: 'FINAL_1000' })).error, 'offer_ended');
+  assert.equal((await rpc(lateUser, 'record_late_invite_use', { p_email: 'invalid' })).error, 'email_required');
+  const giftEmail = `gift-test-${crypto.randomUUID()}@example.invalid`;
+  const lateUse = await rpc(lateUser, 'record_late_invite_use', { p_email: giftEmail });
+  assert.equal(lateUse.redeemedAt, null, 'Late use became a redemption');
+  assert.equal(lateUse.validatedCode, 'FINAL_1000');
+  assert.equal(lateUse.lateUse.email, giftEmail);
+  assert.equal(lateUse.lateUse.code, 'FINAL_1000');
+  assert.ok(lateUse.lateUse.recordedAt > 0);
+  assert.deepEqual((await rpc(lateUser, 'record_late_invite_use', { p_email: giftEmail })).lateUse, lateUse.lateUse);
+  assert.deepEqual((await rpc(lateUser, 'invite_status')).lateUse, lateUse.lateUse);
+  assert.equal((await rpc(sender, 'invite_status')).lateUse, null, 'Late-use receipt leaked to another user');
+  const lateGrants = await request('rest/v1/invite_redemptions?select=recipient_id', { user: lateUser, method: 'GET' });
+  assert.deepEqual(lateGrants.data, [], 'Late use counted as a lifetime grant');
+  const lateTable = await request('rest/v1/invite_code_late_uses?select=email', { user: lateUser, method: 'GET' });
+  assert.equal(lateTable.status, 403, 'Gift email list exposed to clients');
+  console.log('PASS: late-use acknowledgement, email association, retries, no redemption, and privacy');
   const rows = await request('rest/v1/invite_redemptions?select=recipient_id', { user: friend, method: 'GET' });
   assert.deepEqual(rows.data.map(x => x.recipient_id), [friend.user.id]);
   const forged = await request('rest/v1/invite_redemptions', {

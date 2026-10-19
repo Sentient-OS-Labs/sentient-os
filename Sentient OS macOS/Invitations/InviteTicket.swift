@@ -13,17 +13,18 @@ enum InvitePaper {
 
 struct InviteTicketFace: View {
     var claimed = false
+    var lateGift = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 7) {
                     if claimed {
-                        Text("YOUR LIFETIME PASS")
+                        Text(lateGift ? "A GIFT FROM US" : "YOUR LIFETIME PASS")
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .tracking(1.8).opacity(0.65)
                     }
-                    Text(claimed ? "Yours. For life." : "Have a gift code?")
+                    Text(claimed ? (lateGift ? "Enjoy Sidekick." : "Yours. For life.") : "Have a gift code?")
                         .font(.system(size: 26, weight: .medium))
                 }
                 Spacer(minLength: 10)
@@ -34,7 +35,7 @@ struct InviteTicketFace: View {
             InvitePerforation()
 
             HStack(spacing: 8) {
-                Text(claimed ? "Sentient OS · Lifetime access" : "Enter your code")
+                Text(claimed ? (lateGift ? "Your Sidekick gift is saved" : "Sentient OS · Lifetime access") : "Enter your code")
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
                 Image(systemName: claimed ? "checkmark" : "arrow.up.right")

@@ -12,8 +12,11 @@ nonisolated struct InviteSnapshot: Codable, Equatable, Sendable {
     let endsAt: Double?
     let redeemedAt: Double?
     let redemptionCount: Int
+    var lateUse: InviteLateUse? = nil
 
     var hasLifetimeAccess: Bool { redeemedAt != nil }
+    var hasRecordedGift: Bool { hasLifetimeAccess || lateUse != nil }
+    var showsLateGift: Bool { !hasLifetimeAccess && lateUse != nil }
     var canShare: Bool {
         campaignActive && code != nil && (endsAt.map { $0 > Date().timeIntervalSince1970 } ?? true)
     }
@@ -26,6 +29,21 @@ nonisolated struct InviteSnapshot: Codable, Equatable, Sendable {
 
     static func isValidCode(_ code: String) -> Bool {
         !normalize(code).isEmpty
+    }
+}
+
+/// An acknowledgement of using a closed code, deliberately separate from an access grant.
+nonisolated struct InviteLateUse: Codable, Equatable, Sendable {
+    static let code = "FINAL_1000"
+    static let message = "This code is at capacity, unfortunately. But we're still happy to give you a couple of weeks of free unlimited Sidekick :)"
+    let code: String
+    let recordedAt: Double
+    let email: String
+
+    static func matches(_ code: String) -> Bool { InviteSnapshot.normalize(code).uppercased() == Self.code }
+    var isValid: Bool {
+        code == Self.code && recordedAt.isFinite && recordedAt > 0
+            && MailAccount.normalizedEmail(email) == email
     }
 }
 
@@ -48,6 +66,7 @@ actor InviteCloud {
                 case "invalid_code": return "That invite code wasn't found. Check it and try again."
                 case "own_code": return "That's your own invite code. Share it with a friend."
                 case "offer_ended": return "This invite offer has ended."
+                case "email_required": return "Enter a valid email so we can save your gift."
                 case "rate_limited": return "Too many attempts. Please try again in an hour."
                 default: return "Couldn't redeem this invite. Please try again."
                 }
@@ -77,10 +96,14 @@ actor InviteCloud {
     }()
 
     // Main-actor InviteProgram serializes operations, including token rotation.
-    func fetch(redeeming code: String? = nil) async throws -> InviteSnapshot {
+    func fetch(redeeming code: String? = nil, email: String? = nil) async throws -> InviteSnapshot {
+        let late = code.map(InviteLateUse.matches) == true
+        let address = email.flatMap(MailAccount.normalizedEmail)
+        if late && address == nil { throw Failure.rejected("email_required") }
         var session = try await authenticatedSession()
-        let path = code == nil ? "rest/v1/rpc/invite_status" : "rest/v1/rpc/redeem_invite"
-        let body = code.map { ["p_code": InviteSnapshot.normalize($0)] } ?? [:]
+        let path = late ? "rest/v1/rpc/record_late_invite_use"
+            : code == nil ? "rest/v1/rpc/invite_status" : "rest/v1/rpc/redeem_invite"
+        let body = late ? ["p_email": address!] : code.map { ["p_code": InviteSnapshot.normalize($0)] } ?? [:]
         var result = try await request(path, body: body, token: session.accessToken)
         if result.1 == 401 {
             session = try await authenticatedSession(forceRefresh: true)
@@ -90,15 +113,18 @@ actor InviteCloud {
         if let error = try? JSONDecoder().decode(RPCError.self, from: result.0) {
             throw Failure.rejected(error.error)
         }
-        return try Self.verifiedSnapshot(from: result.0, redeeming: code)
+        let snapshot = try Self.verifiedSnapshot(from: result.0, redeeming: code)
+        if late && snapshot.lateUse?.email != address { throw Failure.response }
+        return snapshot
     }
 
     nonisolated static func verifiedSnapshot(from data: Data, redeeming code: String?) throws -> InviteSnapshot {
         guard let snapshot = try? JSONDecoder().decode(InviteSnapshot.self, from: data) else { throw Failure.response }
+        if let late = snapshot.lateUse, !late.isValid { throw Failure.response }
         if let code {
             // An existing grant alone does not validate the code just entered. The RPC
             // must confirm that exact code before onboarding can reveal its gift.
-            guard snapshot.hasLifetimeAccess,
+            guard InviteLateUse.matches(code) ? snapshot.lateUse != nil : snapshot.hasLifetimeAccess,
                   let confirmation = try? JSONDecoder().decode(RedemptionConfirmation.self, from: data),
                   confirmation.validatedCode == InviteSnapshot.normalize(code).uppercased()
             else { throw Failure.response }

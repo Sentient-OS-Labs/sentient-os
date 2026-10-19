@@ -106,7 +106,10 @@ struct OnboardingEmailPrompt: View {
         }
         .padding(32)
         .frame(width: 460)
-        .onAppear { emailFocused = true }
+        .onAppear {
+            if email.isEmpty { email = InviteProgram.shared.snapshot?.lateUse?.email ?? "" }
+            emailFocused = true
+        }
     }
 
     private func submit() {
