@@ -17,8 +17,9 @@ this is the wiring.
 
 `Sentient_OS_macOSApp` declares:
 
-- **Home** (`WindowGroup`, id `home`): `RootView`, dark only, hidden title bar, 1180×880 default. Guarded and hidden during pending computer-use setup. Otherwise presented at launch, with one exception: the relaunch right after a silent auto-update stays windowless (`UpdateNotice.suppressHomeThisLaunch`), so a menu-bar user is not interrupted.
-- **Knowledge** (id `knowledge`), **Settings** (id `settings`), **Connect your AIs** (id `connect-ais`): each its own resizable window. All auxiliary windows carry `.restorationBehavior(.disabled)` so macOS state restoration never reopens them at launch; the home is the only launch surface.
+- **Home** (`Window`, id `home`): `RootView`, dark only, hidden title bar, 1100×820 default. Guarded and hidden during pending computer-use setup. Otherwise presented at launch, with one exception: the relaunch right after a silent auto-update stays windowless (`UpdateNotice.suppressHomeThisLaunch`), so a menu-bar user is not interrupted.
+- **Knowledge** and **Settings** are pages in that same window, routed by `MainNavigation` and `HomeWindowOpening`. Home stays mounted behind secondary pages. Both expand from their corresponding Home navigation control and retract into it. Knowledge retains reader/sky state, starts its Constellation entrance after the page reveal, and preserves its unsaved-edit navigation guard. Direct secondary-page routes are immediate; hidden clocks and input pause.
+- **Connect your AIs** (id `connect-ais`) remains its own resizable window. Auxiliary windows carry `.restorationBehavior(.disabled)` so macOS state restoration never reopens them at launch; the home is the only launch surface.
 - **Proactive · Execute** and **Overnight Processing**: dev-only windows opened from Dev Tools.
 - **MenuBarExtra**: `MenuBarView` with the orb mark as a template icon.
 

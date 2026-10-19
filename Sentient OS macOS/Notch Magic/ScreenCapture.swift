@@ -29,20 +29,21 @@ enum ScreenCapture {
     /// without screenshots). Never prompts.
     static func grab() async -> [URL] {
         guard Permissions.hasScreenRecording() else {
+            CaptureDiagnostics(source: .display).record(.skipped, failure: .init(kind: .permission, code: nil, detail: .permissionDenied, stage: .appState), fields: ["sentient_screen_preflight": "false"])
             Log("📸 screenshot skipped — no Screen Recording grant")
             return []
         }
         let tag = UUID().uuidString
         var shots: [URL] = []
         for display in 1...max(NSScreen.screens.count, 1) {
+            if Task.isCancelled { break }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("sentient-shot-\(tag)-\(display).jpg")
             //  -x : silent (no camera sound)   -t jpg : compact vs a multi-MB Retina PNG
-            let ok = await runCapture(["-x", "-t", "jpg", "-D", "\(display)", url.path])
+            let ok = await capture(display: display, to: url)
             if ok, FileManager.default.fileExists(atPath: url.path) {
                 shots.append(url)
             } else {
-                if ok { Diagnostics.report(.inputFailed, phase: .capture, reason: "missing_output", source: "screen_capture") }
                 try? FileManager.default.removeItem(at: url)
             }
         }
@@ -60,6 +61,7 @@ enum ScreenCapture {
     /// order is only guaranteed to match `-D` for the main display (index 0 ↔ `-D 1`).
     static func grabDisplayUnderCursor() async -> URL? {
         guard Permissions.hasScreenRecording() else {
+            CaptureDiagnostics(source: .display).record(.skipped, failure: .init(kind: .permission, code: nil, detail: .permissionDenied, stage: .appState), fields: ["sentient_screen_preflight": "false"])
             Log("📸 screenshot skipped — no Screen Recording grant")
             return nil
         }
@@ -67,9 +69,8 @@ enum ScreenCapture {
         let display = (NSScreen.screens.firstIndex { $0.frame.contains(mouse) } ?? 0) + 1
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("sentient-shot-\(UUID().uuidString).jpg")
-        let ok = await runCapture(["-x", "-t", "jpg", "-D", "\(display)", url.path])
+        let ok = await capture(display: display, to: url)
         guard ok, FileManager.default.fileExists(atPath: url.path) else {
-            if ok { Diagnostics.report(.inputFailed, phase: .capture, reason: "missing_output", source: "screen_capture") }
             try? FileManager.default.removeItem(at: url)
             Log("📸 screenshot capture failed (display \(display))")
             return nil
@@ -81,17 +82,22 @@ enum ScreenCapture {
     /// frame is never decoded. A model downscales past ~2000 px anyway; shrinking first only saves
     /// upload time (a Retina capture is multi-MB; this is a few hundred KB).
     static func downscaledJPEG(_ url: URL, maxLongEdge: Int, quality: Double = 0.8) -> Data? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        func failed(_ detail: NativeComputerUseFailure.Detail) -> Data? {
+            CaptureDiagnostics(source: .display).record(.failed,
+                failure: .init(kind: .capture, code: nil, detail: detail, stage: .imageDecode))
+            return nil
+        }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return failed(.invalidImage) }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxLongEdge,
         ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return failed(.invalidImage) }
         let out = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { return failed(.imageEncodingFailed) }
         CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        guard CGImageDestinationFinalize(dest) else { return nil }
+        guard CGImageDestinationFinalize(dest) else { return failed(.imageEncodingFailed) }
         return out as Data
     }
 
@@ -100,37 +106,48 @@ enum ScreenCapture {
         for url in urls { try? FileManager.default.removeItem(at: url) }
     }
 
-    /// Run `screencapture` off the main actor; true iff it exited cleanly. A 5s watchdog kills a
-    /// wedged capture (house rule: no un-watchdogged Process) — the run start awaits this, so a hang
-    /// here would freeze the command where STOP can't reach; on timeout the command just runs text-only.
-    private static func runCapture(_ args: [String]) async -> Bool {
-        let operation = Diagnostics.current
-        return await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                p.arguments = args
-                p.standardOutput = FileHandle.nullDevice
-                p.standardError = FileHandle.nullDevice
-                do {
-                    try p.run()
-                    let watchdog = DispatchWorkItem { [weak p] in p?.terminate() }
-                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5, execute: watchdog)
-                    p.waitUntilExit()
-                    watchdog.cancel()
-                    if p.terminationStatus != 0 { Diagnostics.$current.withValue(operation) {
-                        Diagnostics.report(.inputFailed, phase: .capture, reason: "screencapture_exit", source: "screen_capture",
-                                           counts: [.exitCode: Int(p.terminationStatus)], flags: [.permissionGranted: true])
-                    } }
-                    cont.resume(returning: p.terminationStatus == 0)
-                } catch {
-                    Diagnostics.$current.withValue(operation) {
-                        Diagnostics.report(.inputFailed, phase: .capture, reason: "screencapture_launch", error: error, source: "screen_capture")
-                    }
-                    Log("📸 screencapture launch failed — \(ErrorLabel(error))")
-                    cont.resume(returning: false)
-                }
+    /// A cancellable process with bounded termination, followed by actual image validation.
+    /// Exit status zero or a file's existence alone does not establish a usable screenshot.
+    private static func capture(display: Int, to url: URL) async -> Bool {
+        let diagnostics = CaptureDiagnostics(source: .display)
+        let started = Date()
+        var fields = ["display_index": String(display), "display_count": String(NSScreen.screens.count),
+                      "sentient_screen_preflight": String(Permissions.hasScreenRecording())]
+        do {
+            let out = try await CodexCLI.executeAsync(binary: "/usr/sbin/screencapture",
+                args: ["-x", "-t", "jpg", "-D", String(display), url.path], stdinText: nil, cwd: nil,
+                timeout: 5, includeCustomProviderKey: false)
+            try Task.checkCancellation()
+            fields["duration_ms"] = String(Int(Date().timeIntervalSince(started) * 1000))
+            guard out.status == 0 else {
+                var failure = NativeComputerUseFailure.classify(out.stderr, stage: .appState)
+                failure.exitCode = Int(out.status)
+                diagnostics.record(.failed, failure: failure, fields: fields)
+                return false
             }
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                diagnostics.record(.failed, failure: .init(kind: .capture, code: nil, detail: .missingImage, stage: .imageDecode), fields: fields)
+                return false
+            }
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil), image.width > 0, image.height > 0 else {
+                diagnostics.record(.failed, failure: .init(kind: .capture, code: nil, detail: .invalidImage, stage: .imageDecode), fields: fields)
+                return false
+            }
+            fields["image_valid"] = "true"
+            fields["image_width"] = String(image.width); fields["image_height"] = String(image.height)
+            diagnostics.record(.passed, fields: fields)
+            return true
+        } catch {
+            fields["duration_ms"] = String(Int(Date().timeIntervalSince(started) * 1000))
+            let timedOut: Bool
+            if case CodexCLI.CLIError.timedOut = error { timedOut = true } else { timedOut = false }
+            fields["watchdog_fired"] = String(timedOut)
+            var failure = NativeComputerUseFailure(kind: timedOut ? .timeout : .connection, code: nil,
+                detail: timedOut ? .requestTimedOut : .launchFailed, stage: .transport)
+            failure.recordSystemError(error)
+            diagnostics.record(error is CancellationError || Task.isCancelled ? .cancelled : .failed, failure: failure, fields: fields)
+            return false
         }
     }
 }

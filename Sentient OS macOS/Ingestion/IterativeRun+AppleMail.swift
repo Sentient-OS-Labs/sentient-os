@@ -244,6 +244,7 @@ extension IterativeRun {
 /// Structural health only; no message identifiers, subjects, paths or bodies in preferences.
 nonisolated enum AppleMailHealth {
     static let key = "sources.appleMail.health"
+    static let needsRetryKey = "sources.appleMail.needsRetry"
     enum Issue { case read, model, storage }
     static func save(deferred: Int, incomplete: Bool, failed: Bool, issue: Issue = .read) {
         let failureText: String
@@ -257,5 +258,7 @@ nonisolated enum AppleMailHealth {
             : incomplete ? "Apple Mail has more history to read. Analysis will resume next time."
             : "Downloaded mail is up to date. Junk previews are not saved; attachments are not analyzed."
         UserDefaults.standard.set(text, forKey: key)
+        UserDefaults.standard.set(failed || incomplete || deferred > 0, forKey: needsRetryKey)
+        SourceHealth.recordReadOutcome(source: "apple_mail", outcome: failed || incomplete || deferred > 0 ? "incomplete" : "ok")
     }
 }

@@ -59,8 +59,12 @@ nonisolated struct SidekickRecoveryTiming {
     private(set) var deadline: TimeInterval?
     private var remaining: TimeInterval = 8
     private var interacting = false
+    private let expiresWhenHidden: Bool
 
-    init(now: TimeInterval) { deadline = now + 8 }
+    init(now: TimeInterval, expiresWhenHidden: Bool = true) {
+        self.expiresWhenHidden = expiresWhenHidden
+        deadline = now + 8
+    }
     mutating func interact(_ active: Bool, now: TimeInterval) {
         guard visibility == .visible, active != interacting else { return }
         interacting = active
@@ -69,7 +73,7 @@ nonisolated struct SidekickRecoveryTiming {
     }
     mutating func dismiss(now: TimeInterval) {
         guard visibility == .visible else { return }
-        visibility = .hidden; interacting = false; deadline = now + 7
+        visibility = .hidden; interacting = false; deadline = expiresWhenHidden ? now + 7 : nil
     }
     mutating func reopen(now: TimeInterval) -> Bool {
         advance(now: now)
@@ -88,40 +92,42 @@ nonisolated struct SidekickRecoveryTiming {
 
 @MainActor @Observable
 final class SidekickRecovery {
+    enum Cancellation { case user, expired, interrupted }
+    enum Resolution { case answered(SidekickAnswer), cancelled(Cancellation) }
     private(set) var content: SidekickRecoveryContent?
-    var draft = "Try again"
+    var draft = ""
     private(set) var isVisible = false
     @ObservationIgnored var onChange: (() -> Void)?
-    @ObservationIgnored private var resolve: ((SidekickAnswer?) -> Void)?
+    @ObservationIgnored private var resolve: ((Resolution) -> Void)?
     @ObservationIgnored private var timing: SidekickRecoveryTiming?
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var hovering = false
     @ObservationIgnored private var focused = false
     @ObservationIgnored private var timerGeneration = 0
-    @ObservationIgnored private var taskAborted = false
     @ObservationIgnored private var interruptedDraft: String?
 
     var isPending: Bool { content != nil }
 
     func present(_ content: SidekickRecoveryContent,
-                 resolve: @escaping (SidekickAnswer?) -> Void) {
+                 resolve: @escaping (Resolution) -> Void) {
         if let old = self.content { interrupt(id: old.id) }
         self.content = content
-        draft = content.question == nil ? (interruptedDraft ?? "Try again") : "Try again"
+        draft = content.question == nil ? (interruptedDraft ?? "") : ""
         interruptedDraft = nil; isVisible = true
-        hovering = false; focused = false; timing = .init(now: Self.now)
+        hovering = false; focused = false; timing = .init(now: Self.now, expiresWhenHidden: content.question == nil)
         self.resolve = resolve
         onChange?(); schedule()
     }
 
-    func ask(_ question: SidekickQuestion, onCancel: @escaping () -> Void) async throws -> SidekickAnswer {
+    func ask(_ question: SidekickQuestion, onCancel: @escaping (Cancellation) -> Void) async throws -> SidekickAnswer {
         try Task.checkCancellation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                present(.clarification(question)) { answer in
-                    if let answer { continuation.resume(returning: answer) }
-                    else {
-                        if !self.taskAborted { onCancel() }
+                present(.clarification(question)) { resolution in
+                    switch resolution {
+                    case .answered(let answer): continuation.resume(returning: answer)
+                    case .cancelled(let cause):
+                        if cause != .interrupted { onCancel(cause) }
                         continuation.resume(throwing: CancellationError())
                     }
                 }
@@ -133,33 +139,33 @@ final class SidekickRecovery {
 
     func answer(id: UUID, choice: Int? = nil, text: String? = nil) {
         expireIfNeeded()
-        guard let content, content.id == id, isVisible else { return }
+        guard let content, content.id == id else { return }
         let value: String
         if let choice {
             guard let question = content.question, question.answers.indices.contains(choice) else { return }
             value = question.answers[choice]
         } else { value = text ?? draft }
         guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        consume(SidekickAnswer(text: value, selectedAnswer: choice))
+        consume(.answered(SidekickAnswer(text: value, selectedAnswer: choice)))
     }
 
-    func cancel(id: UUID? = nil) {
+    func cancel(id: UUID? = nil, cause: Cancellation = .user) {
         if content == nil, id == nil { interruptedDraft = nil }
         guard let content, id == nil || content.id == id else { return }
-        interruptedDraft = nil; consume(nil)
+        interruptedDraft = nil; consume(.cancelled(cause))
     }
     private func interrupt(id: UUID) {
         guard content?.id == id else { return }
-        interruptedDraft = draft; taskAborted = true; consume(nil); taskAborted = false
+        interruptedDraft = draft; consume(.cancelled(.interrupted))
     }
 
-    private func consume(_ answer: SidekickAnswer?) {
+    private func consume(_ resolution: Resolution) {
         let callback = resolve
-        resolve = nil; content = nil; timing = nil; draft = "Try again"
+        resolve = nil; content = nil; timing = nil; draft = ""
         isVisible = false; hovering = false; focused = false; timer?.cancel(); timer = nil
         timerGeneration &+= 1
         onChange?()
-        callback?(answer)
+        callback?(resolution)
     }
 
     func dismiss() {
@@ -183,7 +189,7 @@ final class SidekickRecovery {
     }
     private func expireIfNeeded() {
         timing?.advance(now: Self.now)
-        if timing?.visibility == .expired { cancel() }
+        if timing?.visibility == .expired { cancel(cause: .expired) }
         else if isVisible && timing?.visibility == .hidden {
             isVisible = false; onChange?(); schedule()
         }
@@ -196,7 +202,7 @@ final class SidekickRecovery {
             do { try await Task.sleep(for: .seconds(max(0, deadline - Self.now))) } catch { return }
             guard let self, self.timerGeneration == generation else { return }
             self.timing?.advance(now: Self.now)
-            if self.timing?.visibility == .expired { self.cancel() }
+            if self.timing?.visibility == .expired { self.cancel(cause: .expired) }
             else {
                 self.isVisible = self.timing?.visibility == .visible
                 self.onChange?(); self.schedule()

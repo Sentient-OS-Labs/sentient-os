@@ -1,100 +1,43 @@
-//
-//  ProcessingView.swift
-//  Sentient OS macOS
-//
-//  THE one on-device analysis takeover — a dim, OLED-friendly screen shared by BOTH the home
-//  "Analyze Now" button and the dev "start on device" buttons. It drives the connector-agnostic
-//  IterativeRun (synchronous generate() + GPU-wedge recovery — NO streaming) over the selected
-//  connectors, optionally followed by the cloud Gmail leg, and shows a breathing sparkle, an
-//  source-aware analysis title, a glowing progress bar, live verdict counts, and a
-//  "just processed" preview (thumbnail + verdict + title + summary). The real-mode cloud tail
-//  (knowledge base → gift → proactive) is the living orb over the phase line, with codex's live
-//  play-by-play as a fading three-line mono "thought" trail (liveThought — ProactiveCycle's
-//  onLine hook).
-//
-//  The ONLY dev/prod difference is `showPrompt`: the dev buttons pass `true`, which adds a left
-//  pane showing the EXACT prompt fed to the model for the item currently on the card. Same engine,
-//  same UI, everywhere — there is no separate dev processing view.
-//
+// Passive presentation of app-owned analysis: progress, waiting, pause/resume and retry.
+// Production windows never start work on appearance or cancel it on disappearance.
+// Developer callers can submit a selected request through the same coordinator.
+// Doc: Documentation - Views - Home, Processing & Shared UI.md
 
 import SwiftUI
 
-/// One thing the user picked to analyze — a file root or a database/chat source. `RunSource` is the
-/// selection model (the dev picker + the home satellites speak it); `connectors(from:)` turns a
-/// selection into the iterative-core connectors both run paths share.
-enum RunSource: Hashable {
-    case files(FileRoot)
-    case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
-    case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
-    case notes                              // all notes (newest-1000 cap inside the source)
-    case siyuan                             // every open notebook (newest-1000 cap inside the source)
-    case appleMail(accounts: Set<String>)
-    case appleCalendar(calendarIDs: Set<String>)
-
-    var label: String {
-        switch self {
-        case .files(let root): return root.label
-        case .whatsapp:        return "WhatsApp"
-        case .imessage:        return "iMessage"
-        case .notes:           return "Apple Notes"
-        case .siyuan:          return "SiYuan"
-        case .appleMail:       return "Apple Mail"
-        case .appleCalendar:   return "Apple Calendar"
-        }
-    }
-
-    /// Map a source selection to the iterative-core connectors. File roots collapse into ONE
-    /// FilesConnector (it pages each root itself); chats/Notes each become their own connector.
-    /// Shared by the home "Analyze Now" and the dev "start on device" buttons so both run the exact
-    /// same engine over the same picks.
-    static func connectors(from sources: [RunSource]) -> [any Connector] {
-        let roots: [FileRoot] = sources.compactMap { if case .files(let r) = $0 { return r } else { return nil } }
-        var connectors: [any Connector] = roots.isEmpty ? [] : [FilesConnector(roots: roots)]
-        for s in sources {
-            switch s {
-            case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
-            case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
-            case .notes:               connectors.append(NotesConnector())
-            case .siyuan:              connectors.append(SiYuanConnector())
-            case .appleMail(let accounts): connectors.append(AppleMailConnector(accounts: accounts))
-            case .appleCalendar(let ids): connectors.append(AppleCalendarConnector(calendarIDs: ids))
-            case .files:               break   // rolled into FilesConnector(roots:)
-            }
-        }
-        return connectors
-    }
-}
-
 struct ProcessingView: View {
-    let modelPath: String
-    let connectors: [any Connector]   // the on-device sources to analyze (empty = cloud-only)
-    let mode: IterativeRun.Mode       // home → .auto · dev INITIAL/ITERATIVE buttons → .initial/.iterative
-    let runGmail: Bool                // append the cloud Gmail leg (shown in this same takeover)
-    let runCalendar: Bool             // append the cloud Google Calendar leg (same takeover)
-    let mcpSlugs: [String]            // KB-toggled connectors to read (the generic MCP legs, same takeover)
-    let showPrompt: Bool              // dev: add the left-side prompt pane
-    let fullCycle: Bool               // real-mode Analyze Now: after the read, run ProactiveCycle (KB + proactive + wipe)
-    let pausable: Bool                // onboarding: the footer button is Pause/Resume (freeze in place) instead of Stop (exit)
-    let onExitEarly: (() -> Void)?    // onboarding: where "Back" on a failure returns (nil = onDone, the home behavior)
+    private let request: ProcessingRequest?
+    let showPrompt: Bool
+    let onExitEarly: (() -> Void)?
     var onDone: () -> Void
+    @State private var session: ProcessingCoordinator
+    private var connectors: [any Connector] { (session.activeRequest ?? request)?.connectors ?? [] }
+    private var runGmail: Bool { (session.activeRequest ?? request)?.runGmail ?? false }
+    private var runCalendar: Bool { (session.activeRequest ?? request)?.runCalendar ?? false }
 
+    /// Production windows only observe. Creating or closing one never starts or stops work.
+    init(onDone: @escaping () -> Void = {}) {
+        self.init(session: .shared, onDone: onDone)
+    }
+
+    private init(session: ProcessingCoordinator, onDone: @escaping () -> Void = {}) {
+        request = nil; showPrompt = false; onExitEarly = nil; self.onDone = onDone
+        _session = State(initialValue: session)
+    }
+
+    /// Developer callers retain their selected fixture/source configuration, using the same owner.
     init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
          runGmail: Bool = false, runCalendar: Bool = false, mcpSlugs: [String] = [],
-         showPrompt: Bool = false, fullCycle: Bool = false, pausable: Bool = false,
+         showPrompt: Bool = false, fullCycle: Bool = false,
          onExitEarly: (() -> Void)? = nil, onDone: @escaping () -> Void) {
-        self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
-        self.runGmail = runGmail; self.runCalendar = runCalendar; self.mcpSlugs = mcpSlugs
-        self.showPrompt = showPrompt
-        self.fullCycle = fullCycle; self.pausable = pausable; self.onExitEarly = onExitEarly
-        self.onDone = onDone
+        request = ProcessingRequest(modelPath: modelPath, connectors: connectors, mode: mode,
+            runGmail: runGmail, runCalendar: runCalendar, mcpSlugs: mcpSlugs, fullCycle: fullCycle)
+        self.showPrompt = showPrompt; self.onExitEarly = onExitEarly; self.onDone = onDone
+        _session = State(initialValue: .shared)
     }
 
-    /// Dev Tools → "Resizable analysis window (demo)". While ON, the home's takeover loses its
-    /// window min size (RootView reads this same key) and this footer's Stop control, so a website
-    /// screen recording can frame just the analysis content. Home runs only — onboarding keeps
-    /// Pause, dev prompt-pane runs keep Stop.
+    /// Developer recordings can resize the production analysis window freely.
     static let resizableDemoKey = "dev.processing.resizableDemo"
-    @AppStorage(ProcessingView.resizableDemoKey) private var resizableDemo = false
 
     /// Dev Tools → "Demo bar baseline". While `total` > 0, the bar RENDERS as if a big run were
     /// already mid-flight — `baseDone + real done` of `baseTotal`, with the kept/junk tags seeded
@@ -112,24 +55,22 @@ struct ProcessingView: View {
     private var shownSurvivors: Int { progress.survivors + (demoBaseTotal > 0 ? demoBaseDone * 58 / 100 : 0) }
     private var shownJunk: Int { progress.junk + (demoBaseTotal > 0 ? demoBaseDone * 36 / 100 : 0) }
 
-    private enum UIState: Equatable {
-        case loadingModel, processing, preparing, completed
-        case failed(CycleFailure)   // the cloud tail errored (classified when it could be)
-        case diskFull               // the on-device read stopped: the Mac's disk is full (IterativeRun)
-    }
-    @State private var state: UIState = .loadingModel
+    private var state: ProcessingCoordinator.State { session.state }
+    private var progress: RunProgress { session.progress }
+    private var prepStatus: String { session.prepStatus }
+    private var prepSubtext: String? { session.prepSubtext }
+    private var updatingExistingKnowledge: Bool { session.updatingExistingKnowledge }
+    private var paused: Bool { state == .paused }
     /// The failed screen's inline engine login (the "isn't logged in" fix) — the same shared
     /// setup engines Settings drives, picked by the live backend; `loginStarted` scopes the
     /// auto-notice poll + auto-retry to a login WE opened from that screen.
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
     @State private var loginStarted = false
-    @State private var prepStatus = "Preparing your suggestions…"
     /// The 10-minute patience flip for the cloud tail's bottom line (see `patienceLine`).
     @State private var patienceLong = false
     /// Phase-appropriate caption under the phase line (nil = none) — the proactive stages get
     /// the "things worth doing" promise; the knowledge-base/welcome phases speak for themselves.
-    @State private var prepSubtext: String?
     /// The cloud tail's live "thoughts" — codex's reasoning/action lines (humanized by
     /// CodexCLI). `pending` updates freely as lines stream in; `trail` is what's actually on
     /// screen — the last three promoted lines, newest brightest — advanced at a readable
@@ -140,24 +81,6 @@ struct ProcessingView: View {
     /// One promoted thought line. The counter id keeps the trail's ForEach stable even when
     /// codex repeats itself minutes apart.
     private struct Thought: Identifiable, Equatable { let id: Int; let text: String }
-    @State private var progress = RunProgress()
-    @State private var started = false
-    @State private var paused = false           // pausable only: frozen at the last item, awaiting Resume
-    @State private var runTask: Task<RunProgress, Never>?
-    /// Generation token — pause/stop/disappear bump it, making the (cancelled, still-draining)
-    /// run() invocation STALE: it may finish whenever it likes, but it can no longer touch the
-    /// UI or fall into the proactive tail. `paused` alone couldn't guarantee that: a quick
-    /// pause→resume flipped it back to false before the old run drained, and the stale run
-    /// then fired the knowledge-base build mid-read.
-    @State private var runGeneration = 0
-    /// Counts carried across pause→resume WITHIN this takeover. The resumed engine correctly
-    /// plans only the REMAINING items (the marks are the truth), so its numbers restart — the
-    /// display composes carried + live instead, and the bar picks up where it froze (6 of 50,
-    /// never 1 of 45). In-session only: a relaunch shows the honest remaining count, exactly
-    /// like the crash-recovery resume always has.
-    @State private var carried = RunProgress()
-    @State private var awake = DisplayAwake()   // keeps the screen on during the long first ingest
-
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -165,6 +88,7 @@ struct ProcessingView: View {
                 Spacer(minLength: 0)
                 Group {
                     switch state {
+                    case .idle, .scheduled, .waiting, .paused, .stopping: waitingView
                     case .loadingModel:   loadingView
                     case .processing:     processingContent
                     case .preparing:      preparingView
@@ -177,17 +101,20 @@ struct ProcessingView: View {
                 if !progress.sourceReadFailures.isEmpty {
                     sourceFailuresView.padding(.bottom, 20)
                 }
-                if state == .loadingModel || state == .processing {
+                if session.isBusy || paused || isWaiting {
                     footer.padding(.bottom, 30)
-                } else if state == .preparing {
-                    patienceLine.padding(.bottom, 30)
                 }
             }
             .padding(.horizontal, 28)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task { await startIfNeeded() }
-        .onDisappear { runGeneration += 1; runTask?.cancel() }   // stale: no tail after the view is gone
+        .task {
+            if let request, session === ProcessingCoordinator.shared { session.requestNow(request, trigger: .developer) }
+        }
+        .onChange(of: session.thought) { _, line in
+            if let line, let text = Self.thought(line) { thoughtPending = text }
+        }
+        .onChange(of: session.prepStatus) { _, _ in thoughtPending = nil; thoughtTrail = [] }
     }
 
     // MARK: States
@@ -237,7 +164,7 @@ struct ProcessingView: View {
             VStack(spacing: 10) {
                 GlowProgressBar(value: shownTotal > 0 ? Double(shownDone) / Double(shownTotal) : 0)
                 HStack {
-                    Text("\(shownDone) of \(shownTotal)\(connectors.isEmpty && !runGmail && !runCalendar ? (shownTotal == 1 ? " source" : " sources") : "")")
+                    Text("\(shownDone) of \(shownTotal)")
                         .fontWeight(.bold).monospacedDigit()
                     Spacer()
                     Text("\(percent)%").monospacedDigit()
@@ -394,6 +321,7 @@ struct ProcessingView: View {
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
             liveThought.padding(.top, 6)
+            patienceLine.padding(.top, 12)
         }
     }
 
@@ -472,18 +400,21 @@ struct ProcessingView: View {
     /// themselves (the root wake helper).
     private var patienceLine: some View {
         VStack(spacing: 12) {
-            Text(patienceLong ? "STILL WORKING · ANOTHER 15 MINUTES OR SO" : "FIRST RUN · ABOUT 15 MINUTES")
+            Text(patienceLong ? "STILL WORKING · KEEP SENTIENT OPEN"
+                 : (updatingExistingKnowledge ? "UPDATING YOUR KNOWLEDGE" : "BUILDING YOUR KNOWLEDGE"))
                 .font(.caption2).tracking(1.5)
                 .foregroundStyle(.white.opacity(0.3))
             HStack(spacing: 9) {
                 Image(systemName: "macbook")
                     .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.6))
-                Text("Leave Sentient open and don't shut the lid of your Mac.")
+                Text("Keep Sentient open in your menu bar.")
                     .display(17)
                     .foregroundStyle(.white.opacity(0.92))
             }
-            Text("Just this once. In the future, Sentient can update your knowledge base at 3 AM even if your Mac's asleep with its lid closed, as long as it's plugged in and Sentient's alive in your menu bar.")
+            Text(updatingExistingKnowledge
+                 ? "Your existing knowledge stays in place while this update is prepared. Large libraries can take several passes; completed work is kept."
+                 : "The first analysis can take several passes for a large library. Completed work is kept, and future updates can run overnight while Sentient stays open in your menu bar.")
                 .font(.callout).foregroundStyle(.white.opacity(0.45))
                 .lineSpacing(2)
                 .padding(.top, 2)
@@ -509,20 +440,30 @@ struct ProcessingView: View {
         .frame(maxWidth: 460, alignment: .leading)
     }
 
+    private var needsAnotherPass: Bool {
+        session.record.notice != nil || !progress.sourceReadFailures.isEmpty
+            || progress.mailIncomplete || progress.mailDeferred > 0
+    }
+
     private var completedView: some View {
         VStack(spacing: 22) {
-            Image(systemName: progress.sourceReadFailures.isEmpty ? "checkmark.circle.fill" : "exclamationmark.circle")
+            Image(systemName: needsAnotherPass ? "exclamationmark.circle" : "checkmark.circle.fill")
                 .font(.system(size: 58))
-                .foregroundStyle(progress.sourceReadFailures.isEmpty ? Theme.verdictColor(.survivor) : Theme.Ink.amber)
+                .foregroundStyle(needsAnotherPass ? Theme.Ink.amber : Theme.verdictColor(.survivor))
             VStack(spacing: 6) {
                 Text(!progress.sourceReadFailures.isEmpty ? "Some sources need another try"
-                    : progress.mailIncomplete || progress.mailDeferred > 0 ? "Analysis saved" : "Analysis complete")
+                    : needsAnotherPass ? "Analysis saved" : "Analysis complete")
                     .display(28).foregroundStyle(.white).multilineTextAlignment(.center)
-                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.quietReads) quiet · \(progress.failed) failed")
-                    .font(.subheadline).foregroundStyle(.white.opacity(0.55))
+                if progress.total > 0 || progress.done > 0 {
+                    Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.quietReads) quiet · \(progress.failed) failed")
+                        .font(.subheadline).foregroundStyle(.white.opacity(0.55))
+                }
                 if progress.mailIncomplete || progress.mailDeferred > 0 {
                     Text(UserDefaults.standard.string(forKey: AppleMailHealth.key) ?? "Apple Mail will resume during the next analysis.")
                         .font(.caption).foregroundStyle(Theme.secondary).frame(maxWidth: 430)
+                }
+                if let notice = session.record.notice {
+                    Text(notice).font(.caption).foregroundStyle(Theme.secondary).frame(maxWidth: 430)
                 }
             }
             if progress.sourceRead?.status == .summarized || progress.sourceRead?.status == .quiet {
@@ -534,17 +475,11 @@ struct ProcessingView: View {
                     .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain).padding(.top, 6)
+            if needsAnotherPass {
+                Button("Retry analysis") { session.retry() }.buttonStyle(BackButtonStyle())
+            }
         }
-        // Auto-advance: 5s after completion the takeover dismisses itself, so a user who left
-        // the analysis running returns to the home + cards (onboarding: the Constellation
-        // finale), never a stale "complete" screen. The Done button stays for the impatient;
-        // dev runs and connector results keep manual Done so summaries and failures can be read.
-        // The cancellation check keeps a manual Done from double-firing the finale.
-        .task {
-            guard !showPrompt, progress.sourceReadFailures.isEmpty, progress.sourceRead == nil else { return }
-            try? await Task.sleep(for: .seconds(5))
-            if !Task.isCancelled { onDone() }
-        }
+
     }
 
     /// The failed screen for BOTH failure kinds the takeover can end in: the cloud tail's
@@ -564,7 +499,7 @@ struct ProcessingView: View {
                 }
                 .buttonStyle(BackButtonStyle())
                 if kind == .loggedOut {
-                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                    Button("Retry") { session.retry() }
                         .buttonStyle(.bordered).tint(.white)
                     if ModelBackend.current == .claude {
                         Button("Sign in to Claude") { loginStarted = true; claude.startLogin(force: true) }
@@ -576,12 +511,12 @@ struct ProcessingView: View {
                             .disabled(codex.loggingIn)
                     }
                 } else if kind == .diskFull {
-                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                    Button("Retry") { session.retry() }
                         .buttonStyle(.bordered).tint(.white)
                     Button("Manage Storage") { DiskSpace.openStorageSettings() }
                         .buttonStyle(.borderedProminent).tint(.white)
                 } else {
-                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                    Button("Retry") { session.retry() }
                         .buttonStyle(.borderedProminent).tint(.white)
                 }
             }
@@ -606,7 +541,7 @@ struct ProcessingView: View {
             loginStarted = false
             // Unstructured on purpose: the retry flips state out of .failed, which tears THIS
             // task down — the run must survive that.
-            Task { started = false; await startIfNeeded() }
+            session.retry()
         }
     }
 
@@ -646,405 +581,73 @@ struct ProcessingView: View {
         }
     }
 
+    private var isWaiting: Bool {
+        if case .waiting = state { return true }
+        return false
+    }
+
+    private var waitingView: some View {
+        VStack(spacing: 22) {
+            Image(systemName: state == .scheduled ? "moon.stars" : "pause.circle")
+                .font(.system(size: 40, weight: .light)).foregroundStyle(Theme.secondary)
+            Text(session.statusLine).display(27).foregroundStyle(.white)
+            if isWaiting {
+                if state == .waiting(.model) {
+                    OnboardingModelDownloadView(download: ModelDownload.shared)
+                        .frame(height: 230)
+                } else {
+                    Text(session.waitingDetail).font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                }
+            } else if let notice = session.record.notice {
+                Text(notice).font(.system(size: 14)).foregroundStyle(Theme.secondary)
+            }
+            Text(CodexAuth.knowledgeBaseOnly ? "Your main window is ready to use." : "Sidekick is ready to use in your main window.")
+                .font(.system(size: 13)).foregroundStyle(Theme.faint)
+            if state == .scheduled || state == .idle {
+                OnboardingNextButton(title: "Start now") { session.requestNow() }
+                    .disabled(session.isBusy || session.isSuspended)
+                    .accessibilityIdentifier("analysis.startNow")
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 520)
+    }
+
     private var footer: some View {
-        VStack(spacing: 18) {
-            // Demo mode drops the Stop control (home runs only) — the recording wants a clean frame.
-            if !(resizableDemo && !pausable && !showPrompt) {
-                VStack(spacing: 6) {
-                    Button(action: pausable ? (paused ? resume : pause) : stop) {
-                        Text(pausable ? (paused ? "Resume Analysis" : "Pause Analysis") : "Stop Analysis")
-                            .font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.9))
-                            .padding(.horizontal, 24).padding(.vertical, 10)
-                            .background(Capsule().fill(.white.opacity(0.08)))
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
-                    }
-                    .buttonStyle(.plain)
-                    Text(pausable ? (paused ? "Paused. It picks up exactly where it stopped." : "Pausing keeps your progress.")
-                                  : "Analysis can always resume later.")
-                        .font(.caption).foregroundStyle(.white.opacity(0.4))
-                }
+        VStack(spacing: 12) {
+            Button { if paused { session.retry() } else { session.pause() } } label: {
+                Text(paused ? "Resume Analysis" : "Pause Analysis")
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 24).padding(.vertical, 10)
+                    .background(Capsule().fill(.white.opacity(0.08)))
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
             }
+            .buttonStyle(.plain)
+            .disabled(state == .stopping)
+            Text(paused ? "Your progress is saved. Resume when you're ready."
+                 : isWaiting ? "Keep Sentient open. Analysis will start when your Mac is ready."
+                 : "You can close this window. Analysis continues in the background.")
+                .font(.caption).foregroundStyle(.white.opacity(0.45))
             if showPrompt {
-                // Dev: the current item being processed (replaces the trust footer).
-                HStack(spacing: 7) {
-                    Image(systemName: "doc.text")
-                    Text(progress.lastPath ?? "—").lineLimit(1).truncationMode(.middle).monospaced()
-                }
-                .font(.callout).foregroundStyle(.white.opacity(0.6))
-            } else {
-                HStack(spacing: 7) {
-                    Image(systemName: "lock.shield.fill")
-                    Text(PrivacyCopy.trustRibbon)
-                }
-                .font(.callout).foregroundStyle(.white.opacity(0.6))
+                Text(progress.lastPath ?? "").font(.caption.monospaced()).foregroundStyle(Theme.faint)
+                    .lineLimit(1).truncationMode(.middle)
             }
         }
-    }
-
-    /// Stop the run and return. Pointers advance per durable save, so re-running resumes. The
-    /// generation bump keeps the draining run from starting the proactive tail behind the home.
-    private func stop() {
-        runGeneration += 1
-        runTask?.cancel()
-        onDone()
-    }
-
-    /// Pause (pausable/onboarding only): cancel the run and FREEZE in place — the card keeps
-    /// showing the item it stopped on. Every item commits atomically, so nothing is lost; the
-    /// generation bump makes the draining run stale (see `runGeneration`).
-    private func pause() {
-        paused = true
-        runGeneration += 1
-        runTask?.cancel()
-    }
-
-    /// Resume from the durable marks — the same restart the crash-safe design gives a 3am run.
-    /// Waits for the cancelled run to finish draining FIRST, so two engines never overlap on
-    /// the GPU and the stopped item's atomic commit lands before the fresh run reads the marks.
-    /// The drained run's REAL counts (it may have committed the item it was on mid-pause) fold
-    /// into `carried`, so the fresh run's numbers stack on top instead of restarting the bar.
-    private func resume() {
-        paused = false
-        started = false
-        Task {
-            if let finished = await runTask?.value {
-                carried.done             += finished.done
-                carried.survivors        += finished.survivors
-                carried.junk             += finished.junk
-                carried.sensitive        += finished.sensitive
-                carried.failed           += finished.failed
-                carried.parseFailures    += finished.parseFailures
-                carried.extractionFailed += finished.extractionFailed
-                carried.totalSeconds     += finished.totalSeconds
-                carried.quietReads       += finished.quietReads
-                var results = finished
-                results.mergeSourceResults(from: carried)
-                carried.sourceReadFailures = results.sourceReadFailures
-            }
-            await startIfNeeded()
-        }
-    }
-
-    /// Overlay a live run on the carried base: the counters add, and the total re-anchors to
-    /// carried.done + the live run's own total (which counts only what's LEFT) — so 5 done of
-    /// 50 resumes as 5 of 50, not 0 of 45. The just-processed card always shows the live item.
-    private static func composed(_ base: RunProgress, _ p: RunProgress) -> RunProgress {
-        guard base.done > 0 else { return p }
-        var c = p
-        c.done             = base.done + p.done
-        c.total            = base.done + p.total
-        c.survivors        = base.survivors + p.survivors
-        c.junk             = base.junk + p.junk
-        c.sensitive        = base.sensitive + p.sensitive
-        c.failed           = base.failed + p.failed
-        c.parseFailures    = base.parseFailures + p.parseFailures
-        c.extractionFailed = base.extractionFailed + p.extractionFailed
-        c.totalSeconds     = base.totalSeconds + p.totalSeconds
-        c.quietReads       = base.quietReads + p.quietReads
-        c.mergeSourceResults(from: base)
-        return c
     }
 
     private var percent: Int {
         shownTotal > 0 ? Int(Double(shownDone) / Double(shownTotal) * 100) : 0
-    }
-
-    // MARK: Run
-
-    private func startIfNeeded() async {
-        // !paused: the user re-paused while resume() was still draining the old run — they win.
-        guard !started, !paused else { return }
-        started = true
-        await run()
-    }
-
-    /// One progress stream carries the on-device leg (IterativeRun) then the optional cloud Gmail
-    /// leg — both feed the SAME bar/card. `.bufferingNewest(1)` is fine: every RunProgress is a
-    /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
-    /// prompt pane from the card.
-    private func run() async {
-        // Every codex call under this run reports its trigger (task-local, inherited by the child
-        // task below): onboarding's first analysis vs the home's Analyze Now are different failure
-        // populations in Sentry. `pausable` is the onboarding-only footer mode.
-        await CodexTrigger.$current.withValue(pausable ? .onboarding : .analyzeNow) { await runBody() }
-    }
-
-    @State private var unavailableConnectors: Set<String> = []
-
-    private func runBody() async {
-        unavailableConnectors = []
-        let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
-        // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
-        // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 14h auto-enable
-        // uses (nil until the first full cycle completes). `defer` releases on completion, failure, or
-        // cancellation; the 3am path never reaches here (it never presents this view).
-        if mode == .initial || OvernightScheduler.firstCycleCompletedAt == nil {
-            awake.begin(reason: "Initial ingestion — keeping the screen on")
-        }
-        defer { awake.end() }
-
-        // A resumed run keeps the frozen card + composed bar on screen while the engine reloads
-        // (the reload is real, but "Loading on-device model" + a 0% bar read as progress lost).
-        if carried.done == 0 {
-            state = .loadingModel
-            progress = RunProgress()
-        }
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: RunProgress.self, bufferingPolicy: .bufferingNewest(1))
-        let task = Task<RunProgress, Never> {
-            defer { continuation.finish() }
-            var p = RunProgress()
-            if !connectors.isEmpty {
-                p = await IterativeRun(modelPath: modelPath).run(connectors, mode: mode) { continuation.yield($0) }
-            }
-            if runGmail {
-                p = await runGmailLeg(base: p) { continuation.yield($0) }
-            }
-            if runCalendar {
-                p = await runCalendarLeg(base: p) { continuation.yield($0) }
-            }
-            if !mcpSlugs.isEmpty {
-                p = await runMCPLeg(base: p) { continuation.yield($0) }
-            }
-            return p
-        }
-        runTask = task
-        for await p in stream {
-            guard generation == runGeneration else { continue }   // stale: drain silently, freeze the card
-            if state == .loadingModel { withAnimation { state = .processing } }
-            progress = Self.composed(carried, p)
-        }
-        let final = await task.value
-        // Paused, stopped, or superseded by a resume: this invocation is stale — the proactive
-        // tail (knowledge base + cycle) must ONLY ever run at the end of a live, complete read.
-        guard generation == runGeneration else { return }
-        progress = Self.composed(carried, final)   // completion shows the whole session's counts
-
-        // The read stopped because the disk is full: nothing more can be saved, and the cloud tail
-        // writes too (the knowledge-base staging copy) — show the fix instead of running it.
-        if final.diskFull { withAnimation { state = .diskFull }; return }
-
-        // Real-mode Analyze Now: after the read, file into the knowledge base + run all three proactive
-        // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.
-        if fullCycle {
-            withAnimation { state = .preparing }
-            thoughtPending = nil; thoughtTrail = []
-            let failure = await ProactiveCycle.shared.run(unavailableConnectors: unavailableConnectors, progress: { phase in
-                Task { @MainActor in
-                    thoughtPending = nil; thoughtTrail = []          // a new phase, a fresh thought stream
-                    switch phase {
-                    case .knowledgeBase(let s):
-                        prepStatus = s; prepSubtext = nil            // the phase line says it all
-                    case .deciding:
-                        prepStatus = "Creating proactive intelligence…"
-                        prepSubtext = "Reading what's new, then preparing a few things worth doing."
-                    case .researching(let n):
-                        prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
-                        prepSubtext = "Reading what's new, then preparing a few things worth doing."
-                    case .done, .failed:
-                        break
-                    }
-                }
-            }, onLine: { line in
-                Task { @MainActor in
-                    if let t = Self.thought(line) { thoughtPending = t }
-                }
-            })
-            if let failure { withAnimation { state = .failed(failure) }; return }
-        }
-        withAnimation { state = .completed }
-    }
-
-    /// Cloud Gmail leg — each weekly window maps onto the SAME bar/card: its prompt → the prompt
-    /// pane, its summary → the just-processed card, the windows → the bar (extended past `base`, the
-    /// device leg's final counts).
-    private func runGmailLeg(base: RunProgress,
-                             yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
-        let box = ProgressBox(base)
-        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
-        let onProgress: @Sendable (GmailConnect.Progress) -> Void = { ev in
-            switch ev {
-            case let .windowStart(total, label, prompt):
-                // All windows start together (parallel); the bar advances only as they finish below.
-                var p = box.value
-                p.total = baseTotal + total
-                p.lastPrompt = prompt
-                p.lastPath = "Gmail · \(label)"
-                p.lastItemDate = nil
-                box.value = p
-                yield(p)
-            case let .windowDone(total, label, summary, threads, completed, keptSoFar):
-                var p = box.value
-                p.total       = baseTotal + total
-                p.done        = baseDone + completed
-                p.survivors   = baseKept + keptSoFar
-                p.junk        = baseJunk + (completed - keptSoFar)   // a window with nothing notable
-                p.lastTitle   = "Email · \(label)"
-                p.lastSummary = summary
-                p.lastVerdict = summary == nil ? .junk : .survivor
-                p.lastFilePath = nil
-                p.lastPath    = "Gmail · \(label)" + (threads > 0 ? " · \(threads) threads" : "")
-                p.lastItemDate = nil
-                p.lastSeconds = nil
-                box.value = p
-                yield(p)
-            }
-        }
-        do {
-            // Only the explicit force-initial mode does a full re-read; `.auto` and `.iterative` both
-            // use runIterative — which itself falls back to a full initial read when Gmail has no mark
-            // yet. (Same auto behavior the scheduler relies on; keeps every entry point in agreement.)
-            _ = mode == .initial ? try await GmailConnect.runInitial(onProgress: onProgress)
-                                 : try await GmailConnect.runIterative(onProgress: onProgress)
-        } catch {
-            if Task.isCancelled || error is CancellationError { return box.value }
-            if ConnectorReadFailure.isConnectionFailure(error) {
-                unavailableConnectors.insert("gmail")
-                return base
-            }
-            var p = box.value
-            Diagnostics.report(.sourceReadFailed, phase: .read, reason: "hosted_source", error: error, source: "gmail")
-            p.lastTitle = "Gmail failed"
-            p.lastItemDate = nil
-            p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            p.lastVerdict = .junk
-            p.lastFilePath = nil
-            box.value = p
-            yield(p)
-            Log("ProcessingView.gmail: ✗ \(ErrorLabel(error))")
-        }
-        return box.value
-    }
-
-    /// Cloud Google Calendar leg — twin to the Gmail leg: each date window (a month, or the iterative
-    /// since-mark window) maps onto the SAME bar/card, extended past `base` (the prior legs' counts).
-    private func runCalendarLeg(base: RunProgress,
-                                yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
-        let box = ProgressBox(base)
-        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
-        let onProgress: @Sendable (CalendarConnect.Progress) -> Void = { ev in
-            switch ev {
-            case let .windowStart(step, total, label, prompt):
-                var p = box.value
-                p.total = baseTotal + total
-                p.done  = baseDone + (step - 1)
-                p.lastPrompt = prompt
-                p.lastPath = "Calendar · \(label)"
-                p.lastItemDate = nil
-                box.value = p
-                yield(p)
-            case let .windowDone(step, total, label, summary, events, keptSoFar):
-                var p = box.value
-                p.total       = baseTotal + total
-                p.done        = baseDone + step
-                p.survivors   = baseKept + keptSoFar
-                p.junk        = baseJunk + (step - keptSoFar)   // a window with nothing notable
-                p.lastTitle   = "Calendar · \(label)"
-                p.lastSummary = summary
-                p.lastVerdict = summary == nil ? .junk : .survivor
-                p.lastFilePath = nil
-                p.lastPath    = "Calendar · \(label)" + (events > 0 ? " · \(events) events" : "")
-                p.lastItemDate = nil
-                p.lastSeconds = nil
-                box.value = p
-                yield(p)
-            }
-        }
-        do {
-            // Force-initial only on `.initial`; `.auto`/`.iterative` → runIterative (which falls back
-            // to a full initial read when Calendar has no mark yet). Matches the Gmail leg + scheduler.
-            _ = mode == .initial ? try await CalendarConnect.runInitial(onProgress: onProgress)
-                                 : try await CalendarConnect.runIterative(onProgress: onProgress)
-        } catch {
-            if Task.isCancelled || error is CancellationError { return box.value }
-            if ConnectorReadFailure.isConnectionFailure(error) {
-                unavailableConnectors.insert("google-calendar")
-                return base
-            }
-            var p = box.value
-            Diagnostics.report(.sourceReadFailed, phase: .read, reason: "hosted_source", error: error, source: "google-calendar")
-            p.lastTitle = "Calendar failed"
-            p.lastItemDate = nil
-            p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            p.lastVerdict = .junk
-            p.lastFilePath = nil
-            box.value = p
-            yield(p)
-            Log("ProcessingView.calendar: ✗ \(ErrorLabel(error))")
-        }
-        return box.value
-    }
-
-    /// The generic connector KB legs (KB-toggled connectors, via MCPSource.runAll — always
-    /// iterative-with-fallback, same as the 3am run). The bar gets ONE slot per connector; each
-    /// window's label/summary rides the same card, and source failures remain visible through
-    /// later sources and the cloud tail without being counted as junk.
-    private func runMCPLeg(base: RunProgress,
-                           yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
-        let box = ProgressBox(base)
-        let baseTotal = base.total, baseDone = base.done
-        let onEvent: @Sendable (String, Int, Int, MCPSource.Progress) -> Void = { slug, index, total, ev in
-            let name = ConnectorRegistry.displayName(slug: slug)
-            switch ev {
-            case let .windowStart(_, _, label, prompt):
-                var p = box.value
-                p.total = baseTotal + total
-                p.beginSourceRead(name: name, label: label, prompt: prompt)
-                box.value = p
-                yield(p)
-            case let .windowDone(step, windows, label, summary, items, _):
-                var p = box.value
-                p.total = baseTotal + total
-                // The connector's final window completes its bar slot; inner windows (the Step 3
-                // windowed adapters) just refresh the card.
-                if step == windows { p.done = baseDone + index + 1 }
-                if summary != nil { p.survivors += 1 } else { p.quietReads += 1 }
-                p.finishSourceRead(name: name, label: label, summary: summary, items: items)
-                box.value = p
-                yield(p)
-            case let .failed(label, message):
-                var p = box.value
-                p.total = baseTotal + total
-                p.done = baseDone + index + 1
-                p.failSourceRead(name: label, message: message)
-                box.value = p
-                yield(p)
-            }
-        }
-        let (outcomes, limited) = await MCPSource.runAll(onEvent: onEvent)
-        unavailableConnectors.formUnion(outcomes.filter { $0.result == "connector_auth" }.map(\.slug))
-        var final = box.value
-        final.done = max(final.done, baseDone + outcomes.count)
-        final.total = max(final.total, baseTotal + outcomes.count)
-        box.value = final
-        if limited { Log("ProcessingView.mcp: usage limit — remaining connector reads skipped") }
-        return box.value
-    }
-}
-
-/// Thread-safe holder so the Gmail leg's `@Sendable` progress callback can accumulate onto the
-/// device leg's final counts and hand the final value back (mirrors CodexCLI's PipeDrain pattern).
-private nonisolated final class ProgressBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var p: RunProgress
-    init(_ p: RunProgress) { self.p = p }
-    var value: RunProgress {
-        get { lock.lock(); defer { lock.unlock() }; return p }
-        set { lock.lock(); p = newValue; lock.unlock() }
     }
 }
 
 // MARK: - Previews
 
 #if DEBUG
-/// The cloud-tail "preparing" stage, frozen at a representative moment. The real view starts the
-/// actual pipeline on appear, so this factory pre-sets `started` — `startIfNeeded()` no-ops and
-/// the REAL layout renders with nothing running.
+/// Frozen presentation fixtures never submit work to the app-owned coordinator.
 extension ProcessingView {
     static func appleMailPreview() -> ProcessingView {
-        var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, pausable: true, onDone: {})
-        view._started = State(initialValue: true)
-        view._state = State(initialValue: .processing)
+        let preview = ProcessingCoordinator.preview(state: .processing)
+        let view = ProcessingView(session: preview)
         var progress = RunProgress()
         progress.total = 600; progress.done = 63; progress.junk = 63
         progress.lastPath = "Apple Mail"
@@ -1052,14 +655,13 @@ extension ProcessingView {
         progress.lastTitle = "Weekly reading digest"
         progress.lastSummary = "A roundup of articles and product updates for this week."
         progress.lastVerdict = .junk; progress.lastSeconds = 3.2
-        view._progress = State(initialValue: progress)
+        preview.setPreviewProgress(progress)
         return view
     }
 
     static func connectorPreview(_ status: String) -> ProcessingView {
-        var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, mcpSlugs: ["fixture"], onDone: {})
-        view._started = State(initialValue: true)
-        view._state = State(initialValue: status.hasPrefix("completed") ? .completed : .processing)
+        let preview = ProcessingCoordinator.preview(state: status.hasPrefix("completed") ? .completed : .processing)
+        let view = ProcessingView(session: preview)
         var progress = RunProgress()
         progress.total = 1
         progress.beginSourceRead(name: "Granola", label: "recent 30-day note sample", prompt: "")
@@ -1074,15 +676,12 @@ extension ProcessingView {
             progress.done = 1
             progress.failSourceRead(name: "Granola", message: "The service returned a response Sentient couldn't verify.")
         }
-        view._progress = State(initialValue: progress)
+        preview.setPreviewProgress(progress)
         return view
     }
 
     static func preparingPreview() -> ProcessingView {
-        var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, fullCycle: true, onDone: {})
-        view._started = State(initialValue: true)
-        view._state = State(initialValue: .preparing)
-        view._prepStatus = State(initialValue: "Creating your perfect knowledge base from everything we've analyzed…")
+        var view = ProcessingView(session: .preview(state: .preparing))
         view._thoughtPending = State(initialValue: "The corpus resolves into five durable domains: education, AI research, creative interests…")
         view._thoughtTrail = State(initialValue: [
             Thought(id: 1, text: "Reading the week's summaries for durable facts worth keeping long-term…"),

@@ -1,22 +1,17 @@
-//
-//  RootView.swift
-//  Sentient OS macOS
-//
-//  The main window's switchboard: the proactive HomeView (idle) ⟷ the full-screen
-//  ProcessingView takeover (today they cross-fade). RootView owns the analyze/source state and
-//  feeds HomeView its live context; Analyze Now (in the home's Analysis popover) runs whatever
-//  the dev source picker has armed (SourceSelection). The picker + all debug controls live in
-//  DevToolsView, a sheet reached from the home's DEV TOOLS handle (DEBUG builds only).
-//
+// Main window navigation: onboarding becomes Home as soon as analysis timing is chosen.
+// Analysis runs in the app-owned coordinator and presents progress in its own window.
+// Doc: Documentation - Views - Home, Processing & Shared UI.md
 
 import SwiftUI
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
     @State private var navigation = MainNavigation.shared
-    @State private var isProcessing = false
+    @Environment(\.openWindow) private var openWindow
     @State private var showDevTools = false
     @State private var startedWritingStyleSetup = false
+    @State private var onboardingScale = OnboardingWindowLayout.scale(
+        visibleSize: NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
     // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
     // watched here so Analyze Now and the Analysis popover react to edits from any window.
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
@@ -26,16 +21,6 @@ struct RootView: View {
     // Analyze Now; .jesai/.launch swap in a hard-coded demo deck (pitch / launch-video mode).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
     private var deck: BriefingDeck { BriefingDeck(rawValue: deckRaw) ?? .real }
-    // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
-    // overnight run would (the user's selection determines which cloud reads to attempt).
-    @AppStorage("dbg.run.gmail")          private var runGmail = false
-    @AppStorage("dbg.run.calendar")       private var runCalendar = false
-
-    // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
-    // State, not a static let: onboarding's model download can land the file mid-session, and
-    // the finish closure below re-resolves so the home's Analyze Now works without a relaunch.
-    @State private var modelPath = ModelLocator.resolve()
-
     /// Observe the engine choice as well as its installer, including changes in another window.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
     private var computerSetup: ComputerUseSetup {
@@ -44,11 +29,6 @@ struct RootView: View {
 
     /// Observed for the bottom-left model-download whisper (same overlay slot).
     @State private var download = ModelDownload.shared
-
-    // Dev Tools → "Resizable analysis window (demo)": while the analysis takeover is up, the
-    // window's min frame drops away entirely, so the website screen rec can shrink it to just
-    // the analysis content. The home keeps its full canvas either way.
-    @AppStorage(ProcessingView.resizableDemoKey) private var resizableAnalysisDemo = false
 
     /// The sources Analyze Now will process — the shared selection (folders + DB sources).
     private var selectedSources: [RunSource] {
@@ -59,17 +39,14 @@ struct RootView: View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             if !appState.hasCompletedOnboarding {
-                // First launch → onboarding, whose finished first analysis calls this closure.
-                // The finale opens the Knowledge page in this same window. Home remains ready
-                // underneath, and an explicit notification destination takes precedence.
-                OnboardingView {
-                    modelPath = ModelLocator.resolve()   // the onboarding download may have just landed it
-                    withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
-                    // The first full cycle just stamped "initial done" — arm the 14h clock NOW.
-                    // (The app lives in the menu bar and rarely relaunches, so waiting for the
-                    // next launch tick could delay auto-enable by days.)
-                    appState.scheduler.maybeAutoEnable()
-                    navigation.finishOnboarding()
+                OnboardingCanvas(scale: onboardingScale) {
+                    OnboardingView { timing in
+                        appState.processing.choose(timing)
+                        withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                        if timing == .now {
+                            openWindow(id: ProcessingWindowView.windowID)
+                        }
+                    }
                 }
                 .transition(.opacity)
                 // The just-updated notice, overlaid on ONBOARDING only (the home renders it in
@@ -80,21 +57,37 @@ struct RootView: View {
                         .padding(.trailing, 24).padding(.top, 24)
                 }
             } else {
-                workspace
-                    .opacity(navigation.page == .home ? 1 : 0)
+                home
+                    // Secondary pages grow over the retained Home canvas. Home stays inert;
+                    // its draft, scroll position and card state keep their existing lifetime.
                     .allowsHitTesting(navigation.page == .home)
                     .disabled(navigation.page != .home)
                     .accessibilityHidden(navigation.page != .home)
-                if navigation.page == .settings {
-                    SettingsView()
-                }
-                if navigation.hasOpenedKnowledge {
-                    KnowledgeView(isPresented: navigation.page == .knowledge)
+            }
+        }
+        .overlayPreferenceValue(SettingsButtonBoundsKey.self) { source in
+            if appState.hasCompletedOnboarding {
+                SettingsPageLayer(isPresented: navigation.page == .settings,
+                                  animate: navigation.animatesSettingsTransition, source: source)
+            }
+        }
+        .overlayPreferenceValue(KnowledgeButtonBoundsKey.self) { source in
+            if appState.hasCompletedOnboarding {
+                HomePageLayer(isPresented: navigation.page == .knowledge,
+                              animate: navigation.animatesKnowledgeTransition, source: source,
+                              sourceKind: .knowledge, retainingContent: true) {
+                    if navigation.hasOpenedKnowledge {
+                        KnowledgeView(isPresented: navigation.page == .knowledge,
+                                      animateEntrance: navigation.animatesKnowledgeTransition)
+                    }
                 }
             }
         }
-        .frame(minWidth: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : 1040,
-               minHeight: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : 800)
+        .frame(minWidth: appState.hasCompletedOnboarding ? (navigation.page == .home ? 840 : 1040)
+                   : OnboardingWindowLayout.minimum.width * onboardingScale,
+               minHeight: appState.hasCompletedOnboarding ? (navigation.page == .home ? 680 : 800)
+                   : OnboardingWindowLayout.minimum.height * onboardingScale)
+        .background(OnboardingWindowFit(active: !appState.hasCompletedOnboarding) { onboardingScale = $0 })
         // Core tier: the home window came up (fires once per window instantiation — launch opens it
         // automatically; anything later is a deliberate menu-bar/Dock reopen, hence the trigger
         // param). Sidekick-only users who never look at home are exactly who this measures.
@@ -140,7 +133,6 @@ struct RootView: View {
         }
         .onChange(of: appState.hasCompletedOnboarding) { _, completed in
             if !completed {
-                isProcessing = false
                 showDevTools = false
                 startedWritingStyleSetup = false
             }
@@ -166,35 +158,12 @@ struct RootView: View {
         }
     }
 
-    /// Keep Home's card/run model and command draft alive across page changes. Processing
-    /// retains its original lifetime and completion callback even when another page is requested.
-    private var workspace: some View {
-        Group {
-            if isProcessing, let modelPath {
-                // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
-                // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
-                ProcessingView(modelPath: modelPath,
-                               connectors: RunSource.connectors(from: selectedSources),
-                               mode: .auto,
-                               runGmail: ModelBackend.connectorsAvailable && runGmail,
-                               runCalendar: ModelBackend.connectorsAvailable && runCalendar,
-                               mcpSlugs: MCPSource.kbSlugs(),
-                               fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
-                    withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
-                    appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock
-                }
-                .transition(.opacity)
-            } else {
-                home.transition(.opacity)
-            }
-        }
-    }
-
     private var canStartWritingStyleSetup: Bool {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return false }
         #endif
-        return appState.hasCompletedOnboarding && !isProcessing
+        return appState.hasCompletedOnboarding && appState.processing.initialComplete && !appState.processing.isBusy
+            && !appState.processing.isSuspended
             && !PipelineActivity.shared.isRunning && !appState.commandCoordinator.run.isRunning
             && !WritingStyle.exists()
             && FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.appendingPathComponent("README.md").path)
@@ -212,9 +181,13 @@ struct RootView: View {
                 notes: sources.contains(.notes),
                 whatsappAvailable: WhatsAppSource.isInstalled),
             customRoots: customRoots,
-            modelMissing: modelPath == nil,
             deck: deck,
-            onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },
+            onAnalyze: {
+                if !appState.processing.isBusy && appState.processing.record.status != .requested {
+                    appState.processing.requestNow()
+                }
+                openWindow(id: ProcessingWindowView.windowID)
+            },
             onShowDevTools: { showDevTools = true })
     }
 }

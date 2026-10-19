@@ -117,7 +117,8 @@ nonisolated final class AgentRunDiagnostics: Sendable {
 nonisolated struct SidekickInteraction: Sendable {
     static let current: Self? = nil
     enum Failure: Error { case toolWhileWaiting }
-    func observeToolEvent(_ line: String) throws { }
+    func observeToolEvent(_ line: String, streamID: UUID) throws { }
+    func endExecution(streamID: UUID) { }
 }
 nonisolated final class RunWatchdog {
     init(timeout: TimeInterval, interaction: SidekickInteraction?, onTimeout: @escaping @Sendable () -> Void) { }
@@ -305,8 +306,11 @@ with tempfile.TemporaryDirectory(prefix='sentient-private-runtime-') as director
             bad.mkdir()
             (bad / archive.name).write_text('wrong bytes')
             env['SENTIENT_CODEX_ARCHIVE_DIR'] = str(bad)
-        result = subprocess.run([str(binary)], env=env, cwd=base, check=True, timeout=30, capture_output=True, text=True)
+        result = subprocess.run([str(binary)], env=env, cwd=base, timeout=30, capture_output=True, text=True)
         print(result.stdout, end='', flush=True)
+        if result.returncode:
+            print(result.stderr, end='', flush=True)
+        result.check_returncode()
         total_checks += int(result.stdout.split('Checked ')[-1].split()[0])
     # Release artifact selection must ignore the DEBUG local-archive knob.
     release_probe = root / 'ReleaseProbe.swift'

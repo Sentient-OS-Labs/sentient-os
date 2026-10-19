@@ -21,37 +21,46 @@ struct NightSkyView: View {
     let vault: KnowledgeVault?
     var vaultLoaded = true       // false only while KnowledgeView's vault scan is still in flight
     @ObservedObject var model: NightSkyModel
+    var entranceReady = true
+    var isActive = true
     var onOpen: (URL) -> Void
     var onExit: () -> Void
+    private struct LoadKey: Equatable {
+        let root: URL?
+        let ready: Bool
+        let active: Bool
+    }
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 if let graph = model.graph, !graph.nodes.isEmpty {
-                    TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { tl in
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isActive || !entranceReady)) { tl in
                         ZStack {
                             Canvas { ctx, size in
                                 let t = tl.date.timeIntervalSinceReferenceDate
-                                model.tick(now: t, size: size)
+                                if isActive && entranceReady { model.tick(now: t, size: size) }
                                 SkyRenderer.draw(ctx, size: size, model: model, t: t)
                             }
                             // The sun IS the brand mark: the notch's SpinningLogo, slow, riding
                             // the root star's screen position (the canvas draws its light bed).
                             if let sun = model.sunOverlay(size: geo.size) {
-                                SpinningLogo(size: sun.diameter, fast: false)
+                                SpinningLogo(size: sun.diameter, fast: false, paused: !isActive || !entranceReady)
                                     .position(sun.center)
                                     .opacity(sun.opacity)
                             }
                         }
                     }
-                    SkyEventCatcher(model: model, onOpen: onOpen, onExit: onExit)
+                    if isActive && entranceReady {
+                        SkyEventCatcher(model: model, onOpen: onOpen, onExit: onExit)
+                    }
                     hud(graph: graph)
                     if model.hoverInfo != nil, let card = model.hoverCardRect(in: geo.size) {
                         SkyHoverCard(info: model.hoverInfo!)
                             .position(x: card.midX, y: card.midY)
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     }
-                } else if model.graph != nil || (vaultLoaded && vault == nil) {
+                } else if entranceReady && (model.graph != nil || (vaultLoaded && vault == nil)) {
                     emptyState
                 } else {
                     Color.clear      // vault scan / graph build in flight — the entrance covers the gap
@@ -63,7 +72,10 @@ struct NightSkyView: View {
         // Reruns on every sky entry (silent refresh) AND when the vault first arrives — with the
         // Constellation View as the window's default, this view mounts before the async vault
         // scan finishes, so the graph must build the moment the vault lands.
-        .task(id: vault?.root) { await model.load(vault: vault) }
+        .task(id: LoadKey(root: vault?.root, ready: entranceReady, active: isActive)) {
+            guard entranceReady, isActive else { return }
+            await model.load(vault: vault)
+        }
     }
 
     // MARK: HUD (whispers — none of it intercepts the cursor)
@@ -98,7 +110,7 @@ struct NightSkyView: View {
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Orb(size: 92)
+            Orb(size: 92, paused: !isActive || !entranceReady)
             Text("Your sky is still forming.")
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(Theme.Ink.statusInk)
@@ -136,9 +148,13 @@ struct SkyDoor: View {
 /// Cosmetic only — it never intercepts the cursor.
 private struct SkyDoorRim: View {
     private static let period: Double = 8.0
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var paused: Bool { !enabled || (motionOverride ?? systemReducedMotion) }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let angle = (t.truncatingRemainder(dividingBy: Self.period) / Self.period) * 360.0
             let rim = AngularGradient(colors: Theme.magicGlow, center: .center, angle: .degrees(angle))
@@ -212,6 +228,12 @@ private struct SkyEventCatcher: NSViewRepresentable {
         v.onOpen = onOpen
         v.onExit = onExit
     }
+
+    static func dismantleNSView(_ view: SkyEventNSView, coordinator: ()) {
+        view.model?.endDrag(); view.model?.clearHover()
+        view.model = nil; view.onOpen = nil; view.onExit = nil
+        if view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
+    }
 }
 
 private final class SkyEventNSView: NSView {
@@ -232,7 +254,7 @@ private final class SkyEventNSView: NSView {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, let w = self.window else { return }
+            guard let self, self.model != nil, let w = self.window else { return }
             w.makeFirstResponder(self)
         }
     }

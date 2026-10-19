@@ -209,7 +209,7 @@ actor ProactiveExecutor {
         }
     }
 
-    // AgentStatus validates the final status line. Missing confirmation stays unconfirmed
+    // AgentStatus validates the explicit structured completion or final status line. Missing confirmation stays unconfirmed
     // on computer and connector paths; a zero process exit alone never completes an action.
 
     // MARK: The connector channels (gmail / calendar / any mcp target — ONE plumbing)
@@ -277,7 +277,7 @@ actor ProactiveExecutor {
         inv.sandbox = .readOnly              // Seatbelt ON — a connector action needs no shell/file writes
         inv.includeUserConfig = true         // the recipes need the connector fetch
         inv.webSearch = false
-        inv.timeout = 300
+        inv.timeout = 0 // User-fired actions run until completion, failure or explicit Stop.
         if ModelBackend.current == .claude { await ConnectorClassifier.ensureClassified(slug: slug) }
         inv.mcpActionServer = slug
         inv.mcpExpectedIdentity = expectedIdentity
@@ -291,13 +291,14 @@ actor ProactiveExecutor {
     }
 
     /// Shared codex run for the connector channels (Gmail / calendar). Success/failure comes from the
-    /// wrapper's `STATUS: DONE` / `STATUS: COULD_NOT` sentinel (§7.19), not a brittle string guess.
+    /// saved structured answer outcome or exact final sentinel, never a text-content guess.
     private func runConnector(_ inv: CodexCLI.Invocation, channel: String,
                               progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         do {
             let env = try await FrontierRun.run(inv) { progress($0) }   // live play-by-play
             Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content
-            switch AgentStatus.parseConnector(env.result) {
+            switch AgentStatus.resolve(env.result, completion: SidekickInteraction.current?.conversationRun?.completionStatus,
+                                       providerSucceeded: true, connector: true) {
             case .couldNot(let reason):
                 // A run can fail after a successful mutation. Never repeat it automatically
                 // with broader permissions based on a message substring.
@@ -325,15 +326,16 @@ actor ProactiveExecutor {
         do {
             let prompt = Self.computerWrapper(routing: routing, content: content)
             let out = try await FrontierRun.runAgentCommand(prompt,
-                                                                timeout: 900) { line in progress(line) }
+                                                                timeout: 0) { line in progress(line) }
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let final = lines.last ?? "Done on your Mac."
             Log("ProactiveExecutor/computer: received final output (\(final.count) chars)")   // B7: length, not content
-            switch AgentStatus.parse(out) {   // bottom-up + echo-guarded — `out` contains the echoed wrapper
+            switch AgentStatus.resolve(out, completion: SidekickInteraction.current?.conversationRun?.completionStatus,
+                                       providerSucceeded: true) {
             case .couldNot(let reason):
                 return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
                                   board: .refused, statusPresent: true, errorClass: "refused")
-            case .done: return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: true, errorClass: nil)
+            case .done: return FireResult(outcome: .fired(out), board: .fired, statusPresent: true, errorClass: nil)
             case .none: return FireResult(outcome: .failed(AgentStatus.unconfirmedComputerMessage), board: .refused, statusPresent: false, errorClass: "unconfirmed")
             }
         } catch {

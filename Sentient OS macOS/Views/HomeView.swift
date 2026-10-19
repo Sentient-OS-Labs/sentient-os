@@ -3,14 +3,13 @@
 //  Sentient OS macOS
 //
 //  THE HOME — the app's main surface, and the product itself: Proactive Intelligence. You
-//  open Sentient straight into this. The morning run (1 min after wake) leaves a scatter of
+//  open Sentient straight into this. The morning run (1 min after wake) leaves a spread of
 //  SUGGESTION CARDS here — each one the AI already did the work for ("Should I send it for
 //  you?"); clicking is the user's fire (Privacy Constitution: we offer, they fire). A command
 //  bar at the foot lets you ask it to DO anything (computer use).
 //
-//  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
-//  Analysis ▾ and Give AIs Knowledge ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
-//  Settings (pages in this window). Status lives inside Analysis, never cluttering the home.
+//  The chrome is deliberately quiet: a wordmark, conversation search, Analysis, Knowledge
+//  and Settings. Optional AI connections live inside Knowledge. Status lives inside Analysis.
 //
 //  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
 //  help." — the orb appears ONLY here (its one home), turning the empty state into a launchpad
@@ -37,7 +36,6 @@ struct HomeView: View {
     var thingsUnderstood: Int = 0
     var sources: HomeSources = .init()
     var customRoots: [URL] = []        // session folders from RootView — shown in the Analysis popover, like Dev Tools
-    var modelMissing: Bool = false
     var deck: BriefingDeck = .jesai    // .real → real proactive cards from latest(); .jesai/.launch → a demo deck
     var previewKBOnly = false          // preview-only: force the knowledge-base-only state
     var onAnalyze: () -> Void = {}
@@ -55,14 +53,27 @@ struct HomeView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(AppState.self) private var appState
 
-    @State private var model = ForYouModel()
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reducedMotion: Bool { motionOverride ?? systemReducedMotion }
+    private var presentation: SidekickPresentation { appState.sidekickPresentation }
+    private var model: ForYouModel { presentation.cards }
+    private var conversation: SidekickConversation { appState.commandCoordinator.run.conversation }
+    private var inConversation: Bool { !kbOnly && presentation.surface == .conversation }
+    @State private var overviewPage = 0
+    @State private var overviewPull: Double = 0
+    @State private var gatheringFromScroll = false
+    @State private var chromeHeight: CGFloat = 140
+    @State private var overviewDockTop: CGFloat = 0
+    @State private var cardSizes: [String: CGSize] = [:]
+    @State private var proactiveDockFrame = CGRect(x: 160, y: 18, width: 126, height: 34)
     // The letter layer is ALWAYS mounted and driven purely by opacity/scale from plain
     // @State — view INSERTION (`if let` overlays) can miss a redraw on macOS hidden-titlebar
     // windows (the "appears only after a resize" bug); opacity changes cannot.
     @State private var letter: Briefing?
     @State private var letterShown = false
     @State private var showAnalysis = false
-    @State private var showShareKnowledge = false
+    @State private var showDoubleTap = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
@@ -90,36 +101,90 @@ struct HomeView: View {
     @AppStorage("dbg.imessage.chats") private var imessageCSV = ""
     @AppStorage("dbg.run.imessage")   private var runIMessage = false
 
-    var body: some View {
+    private var homeCanvas: some View {
         GeometryReader { geo in
+            let layout = overviewLayout(in: geo.size)
             ZStack {
-                Theme.bg.ignoresSafeArea()
+                SidekickAtmosphere(focused: presentation.composerFocused,
+                                   sendPulse: presentation.sendPulse,
+                                   active: isPresented && presentation.windowActive && !presentation.textSelected && !presentation.isScrolling && overviewPull == 0)
 
-                Group {
-                    scatter(geo)
-                    if kbOnly {
-                        // The preview note is ALWAYS on the free home — the gift envelope (the
-                        // only card this home can ever hold) perches above it, never in front:
-                        // the pitch must not hide behind a fling.
-                        previewState
-                    } else if model.entries.isEmpty {
-                        emptyState.transition(.scale(scale: 0.86).combined(with: .opacity))
+                SidekickGlassGroup {
+                    ZStack {
+                        scatter(geo, layout: layout)
+                        if kbOnly {
+                            // The preview note is ALWAYS on the free home — the gift envelope (the
+                            // only card this home can ever hold) perches above it, never in front:
+                            // the pitch must not hide behind a fling.
+                            previewState
+                        } else if model.entries.isEmpty {
+                            emptyState.opacity(inConversation ? 0 : 1)
+                                .blur(radius: inConversation && !reducedMotion ? 9 : 0)
+                                .scaleEffect(inConversation && !reducedMotion ? 0.94 : 1)
+                                .allowsHitTesting(!inConversation)
+                                .accessibilityHidden(inConversation)
+                        }
+                        VStack(spacing: 0) {
+                            Color.clear.frame(height: kbOnly ? 130 : (inConversation && hasCriticalCaution ? max(128, chromeHeight + 8) : 86))
+                            if !kbOnly {
+                                SidekickTranscript(conversation: conversation, coordinator: appState.commandCoordinator,
+                                                   presentation: presentation,
+                                                   active: isPresented && presentation.windowActive && inConversation)
+                                    .opacity(inConversation ? 1 : 0)
+                                    .blur(radius: !inConversation && !reducedMotion ? 10 : 0)
+                                    .offset(y: !inConversation && !reducedMotion ? 30 : 0)
+                                    .animation(reducedMotion ? .easeOut(duration: 0.14)
+                                        : .smooth(duration: 0.35).delay(inConversation ? 0.16 : 0), value: inConversation)
+                                    .allowsHitTesting(inConversation)
+                                    .disabled(!inConversation)
+                                    .accessibilityElement(children: inConversation ? .contain : .ignore)
+                                    .accessibilityHidden(!inConversation)
+                            } else { Spacer() }
+                            VStack(spacing: 0) {
+                                if !kbOnly && !inConversation {
+                                    conversationPeek.padding(.horizontal, 38).padding(.bottom, 13)
+                                        .transition(SidekickStyle.entrance(reducedMotion))
+                                }
+                                bottomDock
+                            }
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("sidekick-home")).minY } action: { value in
+                                if !inConversation { overviewDockTop = value }
+                            }
+                        }
+                        chrome(in: geo.size)       // on top → the nav stays clickable
+                        #if DEBUG
+                        devToolsOverlay
+                        #endif
                     }
-                    bottomDock
-                    chrome                     // on top → the nav stays clickable
-                    cautionBanner              // health, updates, then invitations in the top-right
-                    #if DEBUG
-                    devToolsOverlay
-                    #endif
                 }
                 .blur(radius: letterShown ? 7 : 0)
                 .opacity(letterShown ? 0.4 : 1)
 
                 letterLayer(geo)
             }
+            .background {
+                SidekickOverviewScroll(
+                    enabled: isPresented && !kbOnly && !inConversation
+                        && !letterShown && !showAnalysis && !showDoubleTap,
+                    activeRect: layout.region, onProgress: followOverviewScroll,
+                    onSettle: settleOverviewScroll, onCollapse: dockOverviewFromScroll)
+            }
+            .onChange(of: layout.pageCount) { _, count in overviewPage = min(overviewPage, count - 1) }
         }
-        .frame(minWidth: 1040, minHeight: 800)
-        .background(Theme.bg)
+    }
+
+    private var observedHome: some View {
+        homeCanvas
+        .frame(minWidth: 840, minHeight: 680)
+        .coordinateSpace(name: "sidekick-home")
+        .background(SidekickStyle.base)
+        .preferredColorScheme(.dark)
+        .tint(SidekickStyle.accent)
+        .background(SidekickWindowPresence { active in
+            presentation.windowActive = active
+            updateConversationVisibility()
+        })
+        .animation(SidekickStyle.motion(reducedMotion), value: inConversation)
         .onAppear {                        // every appearance starts fresh: sealed envelope, full deal
             letter = nil
             letterShown = false
@@ -127,31 +192,52 @@ struct HomeView: View {
             appState.commandCoordinator.run.proactiveCards = { [weak model] in
                 model?.sidekickActions ?? []
             }
-            if !appState.isUninstalling { model.beginVisit(deck: deck) }
+            if !appState.isUninstalling { model.ensureVisit(deck: deck) }
+            presentation.visit(conversation: conversation, running: appState.commandCoordinator.run.isRunning,
+                               pending: appState.commandCoordinator.run.recovery.isPending)
+            updateConversationVisibility()
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
             probeHealth()
         }
-        .alert("Analyze again before using this card", isPresented: Binding(
-            get: { model.mailEvidenceIssue != nil },
-            set: { if !$0 { model.mailEvidenceIssue = nil } }
-        )) {
-            Button("OK", role: .cancel) { model.mailEvidenceIssue = nil }
-        } message: {
-            Text(model.mailEvidenceIssue ?? "")
+        .onDisappear { conversation.isVisible = false }
+        .onChange(of: presentation.surface) { _, surface in
+            if surface == .suggestions { overviewPull = 0; gatheringFromScroll = false }
+            updateConversationVisibility()
         }
-        .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
+        .onChange(of: model.entries.map(\.id)) { _, ids in
+            cardSizes = cardSizes.filter { ids.contains($0.key) }
+        }
+        .onChange(of: conversation.navigationRequest) { _, id in
+            if id != nil { showConversation() }
+        }
+        .onChange(of: appState.commandCoordinator.run.recovery.content?.id) { _, id in
+            if id != nil && isPresented && presentation.windowActive { showConversation() }
+        }
+        .onChange(of: appState.commandCoordinator.run.isRunning) { _, running in
+            if !running { model.reconcileFinishedRuns() }
+            else { showConversation() }
+        }
         .onChange(of: isPresented) { _, visible in
+            updateConversationVisibility()
+            if !visible { overviewPull = 0; presentation.clearChatConfirmationShown = false }
             if visible {
+                model.ensureVisit(deck: deck)
+                presentation.visit(conversation: conversation, running: appState.commandCoordinator.run.isRunning,
+                                   pending: appState.commandCoordinator.run.recovery.isPending)
                 planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
                 caution = OvernightCaution.latest()
                 probeHealth()
             } else {
                 showAnalysis = false
-                showShareKnowledge = false
+                showDoubleTap = false
                 showCodexSignIn = false
             }
         }
+    }
+
+    private var lifecycleHome: some View {
+        observedHome
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil {
                 Task { await MailAccountCloud.shared.retryPendingSync() }
@@ -170,6 +256,10 @@ struct HomeView: View {
                 dismissedCodexSignInReminder = false
                 probeHealth(forceCodexRecheck: true)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            guard !appState.isUninstalling else { return }
+            model.ensureVisit(deck: deck)
         }
         .onChange(of: deck) { _, v in
             // The teardown's defaults wipe re-publishes the deck key — never re-deal mid-uninstall.
@@ -192,6 +282,10 @@ struct HomeView: View {
             else { model.beginVisit(deck: deck) }
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
+    }
+
+    var body: some View {
+        lifecycleHome
         .sheet(isPresented: $showWhatsAppPicker) {
             ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
                        initialSelection: Set(whatsappCSV.split(separator: ",").map(String.init))) { sel in
@@ -219,30 +313,115 @@ struct HomeView: View {
 
     // MARK: Chrome — the top-bar nav + the editorial greeting
 
-    private var chrome: some View {
+    private func chrome(in size: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            topBar
-            header.padding(.top, 20)
+            topBar(compact: inConversation && size.width < 980).zIndex(1)
+            HStack(alignment: .top, spacing: 24) {
+                header
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Clear the cards' path as a direct pull approaches the greeting.
+                    // Opacity follows the same gesture and restores on a partial reversal.
+                    .opacity(inConversation ? 0 : (reducedMotion ? 1 : max(0, 1 - overviewPull / 60)))
+                    .blur(radius: inConversation && !reducedMotion ? 6 : 0)
+                    .offset(y: reducedMotion ? 0 : (inConversation ? -8 : -min(8, overviewPull * 0.15)))
+                    .allowsHitTesting(false).accessibilityHidden(inConversation)
+                if !inConversation || hasCriticalCaution {
+                    cautionBanner.frame(maxWidth: min(480, size.width * 0.48))
+                }
+            }.padding(.horizontal, 30).padding(.top, 25)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { value in
+            chromeHeight = value
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var topBar: some View {
+    private var discoveryActive: Bool {
+        isPresented && presentation.windowActive && !letterShown && !showAnalysis
+            && !showCodexSignIn && !showWhatsAppPicker && !showIMessagePicker
+            && !showGmailConnect && !showCalendarConnect && !showAppleMailPicker
+            && !presentation.clearChatConfirmationShown && !appState.commandCoordinator.run.recovery.isPending
+    }
+
+    private func topBar(compact: Bool) -> some View {
         HStack(spacing: 10) {
-            OrbMark(size: 17)
+            SidekickMark(size: 18, illuminated: true)
             Text("Sentient OS")
                 .font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white)
+            if !kbOnly { proactiveDock }
             Spacer()
-            NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
+            if !kbOnly && inConversation {
+                SidekickToolbarIconButton(symbol: "magnifyingglass") {
+                    withAnimation(SidekickStyle.motion(reducedMotion)) {
+                        presentation.searchShown.toggle()
+                    }
+                }
+                    .help("Search conversation").accessibilityLabel("Search conversation")
+                    .accessibilityIdentifier("sidekick.search")
+                    .keyboardShortcut("f", modifiers: .command)
+                SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
+            }
+            if !kbOnly {
+                HomeDoubleTapButton(active: discoveryActive, presented: $showDoubleTap) {
+                    openWindow(id: ProcessingWindowView.windowID)
+                }.zIndex(1)
+            }
+            NavItem(title: compact ? nil : (appState.processing.isBusy ? "Analyzing" : "Analysis"), icon: "waveform.path",
+                    dot: appState.processing.needsAttention ? Theme.Ink.amber
+                        : (appState.processing.initialComplete ? Theme.Ink.green : GlowHalo.stops[4]),
+                    emphasized: !appState.processing.initialComplete,
+                    animateEmphasis: isPresented && presentation.windowActive && !inConversation
+                        && !showAnalysis && !showDoubleTap && !letterShown && !reducedMotion) { showAnalysis = true }
+                .accessibilityIdentifier("navigation.analysis")
+                .accessibilityLabel(appState.processing.isBusy ? "Analyzing" : "Analysis")
+                .help("Check analysis status")
                 .popover(isPresented: $showAnalysis) { analysisPopover }
-            NavItem(title: "Knowledge") { HomeWindowOpening.open(.knowledge) }
-            NavItem(title: "Give AIs Knowledge") { showShareKnowledge = true }
-                .popover(isPresented: $showShareKnowledge) { shareKnowledgePopover }
+            NavItem(title: compact ? nil : "Knowledge", icon: "books.vertical") { HomeWindowOpening.open(.knowledge) }
+                .accessibilityLabel("Knowledge").help("Knowledge")
+                .anchorPreference(key: KnowledgeButtonBoundsKey.self, value: .bounds) { $0 }
             NavItem(icon: "gearshape") { HomeWindowOpening.open(.settings) }
                 .accessibilityLabel("Settings")
+                .accessibilityIdentifier("navigation.settings")
                 .help("Settings (⌘,)")
+                .anchorPreference(key: SettingsButtonBoundsKey.self, value: .bounds) { $0 }
         }
         .padding(.horizontal, 30).padding(.top, 18)
+    }
+
+    private var proactiveDock: some View {
+        ZStack {
+            // Keep the destination stable while the cards are out, without rendering glass.
+            Color.clear
+            if inConversation {
+                Button {
+                    withAnimation(SidekickStyle.motion(reducedMotion)) { presentation.surface = .suggestions }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "square.stack.3d.up")
+                        Text("Proactive")
+                        if !model.entries.isEmpty {
+                            Text("\(model.entries.count)").font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(.white.opacity(0.08), in: Capsule())
+                        }
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .sidekickGlass(radius: 15, prominent: true)
+                }
+                .buttonStyle(SidekickPressStyle())
+                .accessibilityIdentifier("sidekick.proactive")
+                .transition(reducedMotion ? .opacity : .asymmetric(
+                    insertion: .scale(scale: 0.85).combined(with: .opacity)
+                        .animation(.smooth(duration: 0.22).delay(0.28)),
+                    removal: .opacity.animation(.easeOut(duration: 0.12))))
+            } else {
+                HomeNotchHint(coordinator: appState.commandCoordinator)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: 126, height: 34)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("sidekick-home")) } action: { proactiveDockFrame = $0 }
     }
 
     private var header: some View {
@@ -250,9 +429,20 @@ struct HomeView: View {
             Text(greeting)
                 .display(27)
                 .foregroundStyle(Theme.Ink.statusInk)
-            MonoCaps(readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
+            if !appState.processing.initialComplete || appState.processing.isBusy || appState.processing.needsAttention {
+                Button { openWindow(id: ProcessingWindowView.windowID) } label: {
+                    HStack(spacing: 6) {
+                        Text(appState.processing.statusLine)
+                        Image(systemName: "arrow.up.right").font(.system(size: 9))
+                    }
+                    .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("analysis.home.status")
+            } else {
+                Text(model.entries.isEmpty ? "A little help, whenever you need it." : "A few things to make your day easier.")
+                    .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
+            }
         }
-        .padding(.leading, 30)
     }
 
     // MARK: The caution banner (one slot, most severe first)
@@ -268,6 +458,12 @@ struct HomeView: View {
     // both: skipped-connector warnings from the last completed KB pass, then the green
     // just-updated notice (UpdateNotice) with its changelog link. Good news
     // never outranks something broken.
+
+    private var hasCriticalCaution: Bool {
+        (needsCodexSignIn && !dismissedCodexSignInReminder) || liveIssue != nil
+            || computerSetup.updateNotice == .failed || caution != nil
+            || !ConnectorCaution.items(from: connectorCautionData).isEmpty
+    }
 
     private var cautionBanner: some View {
         Group {
@@ -319,14 +515,12 @@ struct HomeView: View {
                     UpdateNoticeCapsule()
                     // The offer waits until update notices are dismissed and the home is
                     // active. Keeping it here also postpones it behind every caution above.
-                    if isPresented && deck == .real && !letterShown && !showAnalysis && !showShareKnowledge {
+                    if isPresented && deck == .real && !letterShown && !showAnalysis {
                         InviteBanner()
                     }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .padding(.trailing, 30).padding(.top, 64)
         .animation(.easeInOut(duration: 0.25), value: connectorCautionData)
         .animation(.easeInOut(duration: 0.25), value: computerSetup.updateNotice)
     }
@@ -391,7 +585,7 @@ struct HomeView: View {
 
     private var canOfferCodexSignIn: Bool {
         needsCodexSignIn && !appState.hasOfferedCodexSignIn
-            && !letterShown && !showAnalysis && !showShareKnowledge
+            && !letterShown && !showAnalysis
             && !showWhatsAppPicker && !showIMessagePicker && !showGmailConnect && !showCalendarConnect && !showAppleMailPicker
     }
 
@@ -421,14 +615,6 @@ struct HomeView: View {
         return name.isEmpty ? "\(part)." : "\(part), \(name)."
     }
 
-    /// The mono whisper under the greeting — the REAL lifetime count of things analyzed
-    /// (`thingsUnderstood`, from LifetimeStats), not a hardcoded number.
-    private var readLine: String {
-        let n = thingsUnderstood
-        guard n > 0 else { return "Ready to read your life" }
-        return "I've read \(n.formatted()) thing\(n == 1 ? "" : "s") so far"
-    }
-
     /// The user's first name from their macOS account — full name's first word (e.g. "Jesai
     /// Tarun" → "Jesai"), falling back to the (capitalized) short login name, then to nothing
     /// (the greeting just drops the name). Resolved once per launch; no account, no network.
@@ -441,8 +627,10 @@ struct HomeView: View {
 
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
-                        modelMissing: modelMissing,
                         lastRun: lastRunLabel,
+                        nextWakeAt: appState.scheduler.nextWakeAt,
+                        schedulerEnabled: appState.scheduler.isEnabled,
+                        schedulerNeedsSetup: appState.scheduler.needsSchedulerSetup,
                         onAnalyze: { showAnalysis = false; onAnalyze() },
                         onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
                         onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
@@ -463,75 +651,118 @@ struct HomeView: View {
         return d.glanceStamp
     }
 
-    private var shareKnowledgePopover: some View {
-        ShareKnowledgePopover()   // self-contained: toggles the real MCP mirror + copies the link / system prompt
-            .preferredColorScheme(.dark)
+    // MARK: Suggestions — measured, spacious rows that gather into their dock
+
+    private func overviewLayout(in size: CGSize) -> SidekickOverviewLayout {
+        let entries = Array(model.entries.prefix(6))
+        let width = SidekickOverviewLayout.width(for: size, count: entries.count)
+        let heights = entries.map { entry -> CGFloat in
+            guard let measured = cardSizes[entry.id], abs(measured.width - width) < 1 else { return 220 }
+            return measured.height
+        }
+        return SidekickOverviewLayout(size: size, top: chromeHeight + 16,
+            bottom: (overviewDockTop > 0 ? overviewDockTop : size.height - 184) - 10,
+            heights: heights, requestedPage: overviewPage)
     }
 
-    // MARK: The scatter (the suggestion cards)
-
-    private func scatter(_ geo: GeometryProxy) -> some View {
-        // kb-only: the lone gift envelope gets a fixed top-center perch (the preview note owns
-        // the center beneath it). Any other population falls back to the normal scatter.
-        let slots = (kbOnly && model.entries.count == 1)
-            ? [CGPoint(x: geo.size.width / 2, y: geo.size.height * 0.24)]
-            : Self.slots(count: model.entries.count, in: geo.size)
+    private func scatter(_ geo: GeometryProxy, layout: SidekickOverviewLayout) -> some View {
+        let availableHeight = layout.region.height - SidekickOverviewLayout.pagerHeight
+        let width = kbOnly ? BriefingCard.width : layout.cardWidth
         return ZStack {
-            ForEach(Array(model.entries.enumerated()), id: \.element.id) { item in
+            ForEach(Array(model.entries.prefix(6).enumerated()), id: \.element.id) { item in
                 DealtCard(
                     entry: item.element,
-                    slot: slots[min(item.offset, slots.count - 1)],
-                    dealFrom: CGPoint(x: geo.size.width / 2, y: -160),
+                    slot: kbOnly ? CGPoint(x: geo.size.width / 2, y: geo.size.height * 0.24) : layout.positions[item.offset],
+                    dealFrom: CGPoint(x: geo.size.width / 2, y: chromeHeight - 20),
+                    gathered: inConversation, gatherPoint: CGPoint(x: proactiveDockFrame.midX, y: proactiveDockFrame.midY),
+                    scrollPull: overviewPull, interactiveGather: gatheringFromScroll,
+                    cardWidth: width, onPage: kbOnly || layout.visibleRange.contains(item.offset),
+                    order: item.offset % layout.capacity, reducedMotion: reducedMotion,
+                    previewBodyLines: availableHeight < 185 ? 2 : (availableHeight < 220 ? 3 : 5),
+                    previewTitleLines: availableHeight < 185 ? 1 : (availableHeight < 220 ? 2 : 3),
+                    measured: { value in if cardSizes[item.element.id] != value { cardSizes[item.element.id] = value } },
                     fireDimmed: appState.commandCoordinator.run.isRunning
                         && item.element.action.map { ProactiveExecutor.isFireable($0) } == true,
                     onOffer: { model.run(item.element.id) },
                     onDetail: { openLetter(item.element.b) },
                     onOpenEnvelope: {
+                        // The flap finishes asynchronously. Dismissing it during that
+                        // animation must not reopen the removed card's letter.
+                        guard let current = model.entry(item.element.id),
+                              current.flight == nil else { return }
                         model.unsealWelcome()
-                        openLetter(item.element.b)
+                        openLetter(current.b)
                     },
                     onStop: { model.stopRun(item.element.id) },
+                    onOpenConversation: showConversation,
                     onFling: { model.dismiss(item.element.id, toward: $0) })
             }
+            if !kbOnly && !inConversation && layout.pageCount > 1 {
+                HStack(spacing: 4) {
+                    Button { turnSuggestions(to: layout.page - 1) } label: {
+                        Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Circle())
+                    }.disabled(layout.page == 0).accessibilityLabel("Previous suggestions")
+                    ForEach(0..<layout.pageCount, id: \.self) { page in
+                        Button { turnSuggestions(to: page) } label: {
+                            Capsule().fill(.white.opacity(page == layout.page ? 0.7 : 0.22))
+                                .frame(width: page == layout.page ? 17 : 5, height: 5)
+                                .frame(width: 28, height: 44).contentShape(Rectangle())
+                        }.accessibilityLabel("Suggestions page \(page + 1) of \(layout.pageCount)")
+                    }
+                    Button { turnSuggestions(to: layout.page + 1) } label: {
+                        Image(systemName: "chevron.right").frame(width: 44, height: 44).contentShape(Circle())
+                    }.disabled(layout.page + 1 == layout.pageCount).accessibilityLabel("Next suggestions")
+                }
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(SidekickStyle.secondary)
+                .buttonStyle(SuggestionPageButtonStyle())
+                .position(x: geo.size.width / 2, y: layout.region.maxY - SidekickOverviewLayout.pagerHeight / 2)
+                .transition(.opacity)
+            }
         }
+        .allowsHitTesting(!inConversation)
+        .accessibilityHidden(inConversation)
     }
 
-    /// Organic slot positions per population, laid into the CARD ZONE — the band between the
-    /// top chrome (nav + greeting) and the command-bar dock. The two rows cluster toward the
-    /// vertical centre with a tight, deliberate gap (one composed spread, not two stranded rows)
-    /// and a gentle stagger. Pinned, not gridded; reflows as cards leave. (y-fraction is WITHIN
-    /// the zone.) Convention: the LAST slot of every population is the rightmost/lowest one —
-    /// the welcome gift envelope always rides last in the deck, so that slot is its perch.
-    private static func slots(count: Int, in size: CGSize) -> [CGPoint] {
-        let top = size.height * 0.20
-        let bottom = size.height * 0.86
-        let h = bottom - top
-        let f: [(CGFloat, CGFloat)]
-        switch count {
-        case 6...: f = [(0.21, 0.24), (0.50, 0.20), (0.79, 0.20),
-                        (0.21, 0.72), (0.50, 0.70), (0.79, 0.66)]
-        case 5:    f = [(0.22, 0.22), (0.50, 0.14), (0.78, 0.19), (0.34, 0.68), (0.66, 0.68)]
-        case 4:    f = [(0.28, 0.22), (0.72, 0.22), (0.30, 0.68), (0.70, 0.68)]
-        case 3:    f = [(0.24, 0.46), (0.50, 0.32), (0.76, 0.46)]
-        case 2:    f = [(0.35, 0.44), (0.65, 0.44)]
-        default:   f = [(0.50, 0.42)]
-        }
-        return f.map { CGPoint(x: $0.0 * size.width, y: top + $0.1 * h) }
+    private func turnSuggestions(to page: Int) {
+        withAnimation(reducedMotion ? .easeOut(duration: 0.14) : .smooth(duration: 0.28)) { overviewPage = page }
     }
 
     // MARK: The empty state — the orb's one home
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Orb(size: 118)
-            Text("I'm here to help.")
+            SidekickMark(size: 48, illuminated: true).padding(.bottom, 20)
+            Text("What can I take off your hands?")
                 .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(Theme.Ink.statusInk)
                 .offset(y: -8)
+            if appState.processing.initialComplete {
+                Text("Your context is already here. Pick up anywhere.")
+                    .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
+            } else {
+                VStack(spacing: 9) {
+                    Text("Sidekick will get your personal context soon.\nDouble Tap will be ready after your first analysis.")
+                        .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
+                        .multilineTextAlignment(.center).lineSpacing(4)
+                    analysisStatusLink
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .offset(y: -8)
-        .allowsHitTesting(false)
+        .offset(y: -35)
+    }
+
+    private var analysisStatusLink: some View {
+        Button { showAnalysis = true } label: {
+            Text("Check analysis status")
+                .underline().font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.Ink.bright)
+                .padding(.horizontal, 8).frame(minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SidekickPressStyle())
+        .accessibilityIdentifier("analysis.home.checkStatus")
+        .accessibilityHint("Opens the Analysis popover")
     }
 
     // MARK: The knowledge-base-only preview state (free/go plans)
@@ -558,12 +789,15 @@ struct HomeView: View {
             .display(24)
             .foregroundStyle(Theme.Ink.statusInk)
             .padding(.top, 16)
-        Text("Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:")
+        Text(appState.processing.initialComplete
+             ? "Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:"
+             : "Your first analysis will build your private knowledge base.\nThe living Sentient uses your ChatGPT Plus:")
             .font(.system(size: 13.5))
             .foregroundStyle(Theme.secondary)
             .multilineTextAlignment(.center)
             .lineSpacing(4)
             .padding(.top, 10)
+        if !appState.processing.initialComplete { analysisStatusLink.padding(.top, 4) }
         if !compact {   // the feature rows return once the envelope is gone
             VStack(alignment: .leading, spacing: 11) {
                 previewRow("sunrise", "Mornings where things worth doing arrive already done")
@@ -645,22 +879,94 @@ struct HomeView: View {
     // MARK: Floor — the command bar + trust footer
 
     private var bottomDock: some View {
-        VStack(spacing: 16) {
-            if !kbOnly {   // knowledge-base-only mode: computer use has no quota — no command bar
-                PromptBar(isPresented: isPresented, onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
-                          onStop: { appState.commandCoordinator.stop() },
-                          isRunning: appState.commandCoordinator.run.isRunning,
-                          statusLine: appState.commandCoordinator.run.statusLine)
+        VStack(spacing: 10) {
+            if !kbOnly {
+                SidekickComposer(coordinator: appState.commandCoordinator, presentation: presentation,
+                                 isPresented: isPresented, onAccepted: showConversation)
+                    .frame(maxWidth: 744)
             }
-            HStack(spacing: 8) {
-                Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
-                Text("Private by design.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
-            }
+            HStack(spacing: 5) {
+                Image(systemName: "lock.shield").font(.system(size: 9))
+                Text("Private by design.").font(.system(size: 10))
+            }.foregroundStyle(SidekickStyle.secondary.opacity(0.62))
         }
-        .padding(.horizontal, 40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 38).padding(.top, 8).padding(.bottom, 14)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var conversationPeek: some View {
+        Button(action: showConversation) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle().fill(.white.opacity(0.055)).frame(width: 32, height: 32)
+                    Image(systemName: "arrow.up").font(.system(size: 12, weight: .semibold))
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(conversation.messages.isEmpty ? "Sidekick’s ready to take over your work." : "Continue the conversation")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(SidekickStyle.ink)
+                    if let last = conversation.previewMessage {
+                        Text(peekText(last.event))
+                            .font(.system(size: 11)).foregroundStyle(SidekickStyle.secondary).lineLimit(1)
+                    } else if conversation.messages.isEmpty {
+                        Text("Ready to work across your computer. Just say the word.").font(.system(size: 11)).foregroundStyle(SidekickStyle.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                if conversation.unreadCount > 0 {
+                    Circle().fill(SidekickStyle.accent).frame(width: 6, height: 6)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(alignment: .top) { LinearGradient(colors: [.clear, .white.opacity(0.13), .clear], startPoint: .leading, endPoint: .trailing).frame(height: 1).padding(.horizontal, 22) }
+            .frame(maxWidth: 722)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(SidekickPressStyle())
+        .accessibilityLabel(conversation.messages.isEmpty ? "Open Sidekick" : "Expand conversation history")
+        .accessibilityIdentifier("sidekick.expandHistory")
+    }
+
+    private func peekText(_ event: SidekickConversationEvent) -> AttributedString {
+        let text = String(event.text.prefix(600)).replacingOccurrences(of: "\n", with: " ")
+        guard event.kind == .assistantMessage else { return AttributedString(text) }
+        return (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
+
+    private func showConversation() {
+        withAnimation(SidekickStyle.motion(reducedMotion)) {
+            gatheringFromScroll = false
+            presentation.surface = .conversation
+            overviewPull = 0
+        }
+    }
+
+    private func followOverviewScroll(_ distance: Double) {
+        guard !inConversation else { return }
+        // A trackpad is direct manipulation. Do not ease behind the user's fingers.
+        withTransaction(Transaction(animation: nil)) { overviewPull = distance }
+    }
+
+    private func settleOverviewScroll() {
+        guard !inConversation else { return }
+        withAnimation(reducedMotion ? .easeOut(duration: 0.14) : .spring(response: 0.34, dampingFraction: 0.86)) {
+            overviewPull = 0
+        }
+    }
+
+    private func dockOverviewFromScroll() {
+        withAnimation(SidekickStyle.motion(reducedMotion)) {
+            gatheringFromScroll = true
+            presentation.surface = .conversation
+            // Gathered geometry ignores this value, so the existing presentation position
+            // flows straight into the dock rather than returning to the resting card slot.
+            overviewPull = 0
+        }
+    }
+    private func updateConversationVisibility() {
+        let visible = isPresented && presentation.windowActive && inConversation
+        if conversation.isVisible != visible { conversation.isVisible = visible }
+        if visible && appState.commandCoordinator.run.recovery.isVisible { appState.commandCoordinator.run.recovery.dismiss() }
     }
 
     // MARK: The expanded letter (always-mounted layer; see the note at the top)
@@ -711,23 +1017,72 @@ private struct NavItem: View {
     var title: String? = nil
     var icon: String? = nil
     var dot: Color? = nil
+    var emphasized = false
+    var animateEmphasis = false
     var action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let dot { Circle().fill(dot).frame(width: 5, height: 5).opacity(0.9) }
-                if let icon { Image(systemName: icon).font(.system(size: 17, weight: .bold)) }
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: title == nil ? 22 : 14.5, weight: .semibold))
+                        .overlay(alignment: .bottomTrailing) {
+                            if let dot {
+                                Circle().fill(dot).frame(width: 4, height: 4)
+                                    .overlay(Circle().stroke(Color.black, lineWidth: 1))
+                                    .offset(x: 2, y: 2)
+                            }
+                        }
+                }
                 if let title { Text(title).font(.system(size: 13.5, weight: .medium)) }
             }
-            .foregroundStyle(hover ? .white : Theme.Ink.bright)
-            .padding(.horizontal, 11).padding(.vertical, 6)
-            .background(Capsule().fill(.white.opacity(hover ? 0.06 : 0)))
+            .foregroundStyle(hover || emphasized ? .white : Theme.Ink.bright)
+            .padding(.horizontal, 11).frame(minHeight: 40)
+            .background {
+                if emphasized { Capsule().fill(GlowHalo.stops[4].opacity(0.16)) }
+            }
+            .background(Capsule().fill(.white.opacity(hover ? 0.07 : (title == nil ? 0.035 : 0))))
+            .overlay {
+                if emphasized {
+                    Capsule().strokeBorder(LinearGradient(
+                        colors: [GlowHalo.stops[4].opacity(0.55), GlowHalo.stops[5].opacity(0.3)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                }
+            }
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .background {
+            if emphasized {
+                GlowHalo(active: true, colors: [GlowHalo.stops[4], GlowHalo.stops[5], GlowHalo.stops[4]],
+                         intensity: 0.28, period: 12, animating: animateEmphasis)
+            }
+        }
+        // The decorative halo extends beyond the pill; assistive hit bounds must not.
+        .contentShape(.accessibility, Capsule())
         .onHover { hover = $0 }
+    }
+}
+
+// Generous targets with quiet, local feedback; page indicators stay visually small.
+private struct SuggestionPageButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        SuggestionPageButtonBody(configuration: configuration, enabled: enabled)
+    }
+    private struct SuggestionPageButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        let enabled: Bool
+        @State private var hover = false
+        var body: some View {
+            configuration.label
+                .foregroundStyle(.white.opacity(enabled ? (hover ? 0.95 : 0.65) : 0.22))
+                .background(Capsule().fill(.white.opacity(enabled && hover ? 0.07 : 0)))
+                .opacity(configuration.isPressed ? 0.65 : 1)
+                .onHover { hover = $0 }
+        }
     }
 }
 
@@ -746,16 +1101,21 @@ final class ForYouModel {
     }
 
     var entries: [Entry] = []
-    var mailEvidenceIssue: String?
     /// The app-lifetime command coordinator (HomeView sets it on appear) — the notch and the
-    /// app-wide one-task lock. A computer-use card fire ADOPTS its run (lighting the notch and
-    /// locking out Sidekick/the bar/other cards); gmail/calendar/research fires ignore it.
+    /// app-wide one-task lock. Every executable card adopts the shared conversation run;
+    /// its setup, progress, questions and result all belong to chat.
     weak var coordinator: CommandCoordinator?
     /// Bumped per appearance — in-flight Tasks from a previous visit check it and bail,
     /// so a re-deal can never be mutated by stale theater/dismiss timers.
     private var visit = 0
-    /// Live real-card fires, keyed by card id, so a card's STOP can cancel exactly its run.
-    private var runTasks: [String: Task<Void, Never>] = [:]
+    private var loadedDeck: BriefingDeck?
+    private var loadedBriefing: Date?
+    func ensureVisit(deck: BriefingDeck) {
+        let stamp = UserDefaults.standard.object(forKey: ProactiveCycle.lastCycleKey) as? Date
+        if loadedDeck != deck || (stamp != loadedBriefing && draftPreviews.isEmpty && coordinator?.run.isRunning != true) {
+            beginVisit(deck: deck)
+        }
+    }
     /// Editor values waiting for the existing autosave. Keep them separate from the saved
     /// action so reading Sidekick context cannot change the editor's identity or its fields.
     private var draftPreviews: [String: (content: String, recipient: String)] = [:]
@@ -782,9 +1142,10 @@ final class ForYouModel {
     /// "I'm here to help."). Demo modes → the picked hard-coded deck (welcome re-sealed). Then the orb
     /// deals the cards with staggered springs from above the header.
     func beginVisit(deck: BriefingDeck) {
+        loadedDeck = deck
+        loadedBriefing = UserDefaults.standard.object(forKey: ProactiveCycle.lastCycleKey) as? Date
         visit += 1
         let v = visit
-        runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         draftPreviews.removeAll()
         switch deck {
         case .real:
@@ -809,6 +1170,7 @@ final class ForYouModel {
             entries = cards.map { Entry(b: $0, action: nil, phase: $0.kind == .welcome ? .sealed : .offer) }
         }
         for (i, e) in entries.enumerated() {
+            if coordinator?.run.externalCardID == e.id { update(e.id) { $0.phase = .working(0) } }
             Task {
                 try? await Task.sleep(for: .seconds(0.25 + Double(i) * 0.11))
                 guard self.visit == v else { return }
@@ -819,12 +1181,10 @@ final class ForYouModel {
         }
     }
 
-    /// Uninstall's quiet home: cancel any running theater and take every card off the table.
+    /// Uninstall's quiet home: invalidate theater timers and take every card off the table.
     func clear() {
         visit += 1
-        runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         entries.removeAll()
-        mailEvidenceIssue = nil
         draftPreviews.removeAll()
     }
 
@@ -838,29 +1198,13 @@ final class ForYouModel {
     /// STOP); a demo card plays the briefing's hard-coded `workLog` theater for visual feedback.
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
-        if let action = e.action {   // real card → fire for real (behind the first-use permission gate)
-            // The app-wide one-task lock (every fireable channel): while ANY task owns the run — a
-            // Sidekick/command-bar run or another card — a new fire can't start (the CTA is
-            // dimmed; this is the backstop for a click that lands anyway). Only research is
-            // exempt (nothing fires).
-            if ProactiveExecutor.isFireable(action), coordinator?.run.isRunning == true {
-                Log("card fire blocked — a task is already running (one at a time)")
-                return
-            }
-            if action.mailEvidence != nil || action.appleMailReferences != nil {
-                let v = visit
-                update(id) { $0.phase = .working(0); $0.liveLines = ["Checking email evidence…"] }
-                runTasks[id] = Task { [weak self] in
-                    let issue = await ProactiveExecutor.mailEvidenceIssue(action)
-                    guard let self, self.visit == v, !Task.isCancelled else { return }
-                    self.runTasks[id] = nil
-                    self.update(id) { $0.phase = .offer; $0.liveLines = [] }
-                    if let issue { self.mailEvidenceIssue = issue; return }
-                    self.startWithPermissions(id, action)
-                }
-            } else {
-                startWithPermissions(id, action)
-            }
+        if let action = e.action {
+            guard ProactiveExecutor.isFireable(action), coordinator?.run.isRunning != true else { return }
+            // Include a live edit even if its debounced persistence has not fired yet.
+            let reviewed = draftPreviews[id].map {
+                Self.replacing(action, content: $0.content, recipient: $0.recipient)
+            } ?? action
+            runReal(id, reviewed)
             return
         }
         let v = visit
@@ -882,81 +1226,72 @@ final class ForYouModel {
         }
     }
 
-    private func startWithPermissions(_ id: String, _ action: PreparedAction) {
-        if ComputerUseGate.shared.intercept({ [weak self] in self?.runReal(id, action) }) { return }
-        runReal(id, action)
-    }
-
-    /// Fire a REAL card: route its action through the executor, stream codex's play-by-play into the
-    /// card (replacing the demo theater), and on success fly it away + drop it from the persisted set
-    /// so a re-deal won't show it again. `ProactiveExecutor.fire` reads `action.preparedContent`, so a
-    /// draft the user edited in the letter is exactly what gets sent.
-    ///
-    /// Every fireable fire (computer, gmail, calendar) is also ADOPTED by the notch
-    /// (`beginExternalRun`): the shared run lights up (the one-task lock engages), the card's lines
-    /// tee into it, and every exit — success, failure, ANY stop — completes the adoption exactly
-    /// once, here, when `fire` unwinds (it always returns, even cancelled). `beginExternalRun`'s
-    /// refusal doubles as the re-check for a fire the permission gate held while another task
-    /// started.
+    /// Persist the selected request and open chat before any setup or execution awaits.
+    /// The app-owned run keeps the exact reviewed artifact and executor policy; the card
+    /// is only a suggestion, never a second progress surface or owner of the running task.
     private func runReal(_ id: String, _ action: PreparedAction, retryContext: String = "") {
         let v = visit
-        let external = ProactiveExecutor.isFireable(action)
-        if external {
-            let fallback: String = switch action.method {
-            case .gmail:    "Sending your email…"
-            case .calendar: "Updating your calendar…"
-            case .mcp:      "Working through your \(action.methodTarget.map { ConnectorRegistry.displayName(slug: $0) } ?? "connected service") connector…"
-            default:        "Working on your Mac…"
-            }
-            guard let coordinator,
-                  coordinator.beginExternalRun(
-                      caption: entry(id)?.b.title ?? fallback,
-                      retryContext: retryContext,
-                      onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
-                      onStopRequest: { [weak self] in self?.stopRun(id) })
-            else { Log("card fire blocked at launch — a task already owns the run"); return }
-        }
+        guard ProactiveExecutor.isFireable(action), let coordinator,
+              coordinator.beginExternalRun(
+                  caption: action.title,
+                  request: SidekickCardContext.taskSnapshot(action),
+                  retryContext: retryContext,
+                  onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
+                  onStopRequest: { [weak self] in self?.stopRun(id) }) else { return }
+        let adoptedRun = coordinator.run
+        let generation = adoptedRun.runID
+        let interaction = adoptedRun.interaction
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
+        adoptedRun.conversation.requestNavigation()
         InviteProgram.shared.record(.proactive)
-        let adoptedRun = external ? coordinator?.run : nil
-        let generation = adoptedRun?.runID
-        let interaction = adoptedRun?.interaction
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
-                Task { @MainActor in
-                    guard self.visit == v, !external || adoptedRun?.runID == generation else { return }
-                    self.appendLine(id, line)                                  // the card (raw)
-                    if external { self.coordinator?.run.externalPush(line, runID: generation) }
+                Task { @MainActor in adoptedRun.externalPush(line, runID: generation) }
+            }
+            let outcome: ProactiveExecutor.Outcome
+            do {
+                // Validate before setup, then let the executor recheck immediately before acting.
+                if let issue = await ProactiveExecutor.mailEvidenceIssue(action) {
+                    outcome = .notFireable(issue)
+                } else {
+                    try Task.checkCancellation()
+                    try await ComputerUseGate.shared.waitUntilReady()
+                    try Task.checkCancellation()
+                    outcome = await SidekickInteraction.$current.withValue(interaction) {
+                        await ProactiveExecutor.shared.fire(action, progress: progress)
+                    }
                 }
+            } catch {
+                guard adoptedRun.runID == generation else { return }
+                let stopped = Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled
+                let message = (error as? LocalizedError)?.errorDescription ?? "Sidekick couldn’t finish setup. Try again."
+                if !stopped { Log("card setup failed — \(ErrorLabel(error))") }
+                adoptedRun.completeExternal(stopped ? .stopped : .failed,
+                    line: stopped ? "■ stopped" : "✗ \(message)", runID: generation)
+                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
+                return
             }
-            let outcome = await SidekickInteraction.$current.withValue(interaction) {
-                await ProactiveExecutor.shared.fire(action, progress: progress)
-            }
-            let adopted = external ? self.coordinator?.run : nil
-            if external, adopted?.runID != generation { return }
-            self.runTasks[id] = nil
-            guard self.visit == v, !Task.isCancelled else {
-                adopted?.completeExternal(.stopped, line: "■ stopped", runID: generation)
+            guard adoptedRun.runID == generation else { return }
+            guard !Task.isCancelled else {
+                adoptedRun.completeExternal(.stopped, line: "■ stopped", runID: generation)
+                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
                 return
             }
             switch outcome {
-            case .fired:
-                adopted?.completeExternal(.success, line: "✓ done", runID: generation)
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { self.update(id) { $0.phase = .done } }
+            case .fired(let answer):
                 self.removeFromLatest(id)
-                try? await Task.sleep(for: .seconds(2.6))
+                adoptedRun.completeExternal(.success, line: "✓ done", finalText: answer, runID: generation)
                 guard self.visit == v else { return }
-                self.dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
-                                                height: -CGFloat.random(in: 350...560)))
-            case .notFireable(let m), .failed(let m):
-                adopted?.completeExternal(.failed, line: "✗ \(m)", runID: generation)
-                self.appendLine(id, "✗ \(m)")
-                try? await Task.sleep(for: .seconds(1.4))
-                guard self.visit == v, !external || adopted?.runID == generation else { return }
-                withAnimation { self.update(id) { $0.phase = .offer } }   // back to offer — edit + retry
+                // The answer lives in chat. Retire the consumed suggestion without a second
+                // completion presentation when the user reopens the proactive dock.
+                self.entries.removeAll { $0.id == id }
+                self.draftPreviews[id] = nil
+            case .notFireable(let message), .failed(let message):
+                adoptedRun.completeExternal(.failed, line: "✗ \(message)", runID: generation)
+                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
             }
         }
-        runTasks[id] = task
+        adoptedRun.ownExternalTask(task, cardID: id)
     }
 
     /// STOP a live real-card run: cancel the codex process (CodexCLI honors it) and return to offer.
@@ -964,19 +1299,8 @@ final class ForYouModel {
     /// `onStopRequest` — the guard makes a second arrival a no-op (one cancel is enough; the
     /// adoption completes from the fire's unwind in runReal, never here).
     func stopRun(_ id: String) {
-        guard let task = runTasks[id] else { return }
-        task.cancel(); runTasks[id] = nil
-        withAnimation { update(id) { $0.liveLines.append("■ stopped"); $0.phase = .offer } }
-    }
-
-    /// Append one live line to a real card (dedup consecutive duplicates; cap the buffer).
-    private func appendLine(_ id: String, _ line: String) {
-        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        update(id) {
-            guard $0.liveLines.last != t else { return }   // item.started + .completed can repeat
-            $0.liveLines.append(t)
-            if $0.liveLines.count > 40 { $0.liveLines.removeFirst($0.liveLines.count - 40) }
+        if let run = coordinator?.run, run.isExternal, run.externalCardID == id {
+            run.stop(); return
         }
     }
 
@@ -1008,6 +1332,17 @@ final class ForYouModel {
                                                  dropped: result.dropped))
     }
 
+    /// A newly mounted Home observes the same app-owned task. Reconcile persisted results
+    /// when it ends, even when its original view/model is no longer the visible one.
+    func reconcileFinishedRuns() {
+        guard let latest = ProactiveResearch.latest() else { return }
+        let current = Set(latest.ready.map(\.id))
+        entries.removeAll { $0.action != nil && !current.contains($0.id) }
+        for entry in entries where entry.action != nil {
+            if case .working = entry.phase { update(entry.id) { $0.phase = .offer } }
+        }
+    }
+
     /// A copy of a PreparedAction with new `preparedContent` + `recipient` (the rest unchanged).
     /// Copy the full value so content edits preserve routing, identity and operation metadata.
     private static func replacing(_ a: PreparedAction, content: String, recipient: String) -> PreparedAction {
@@ -1035,33 +1370,66 @@ final class ForYouModel {
     }
 }
 
-// MARK: - One dealt card: position + jitter + drag/flick physics
+// MARK: - One dealt card: readable spread + dock morph + drag/flick physics
 
 private struct DealtCard: View {
     let entry: ForYouModel.Entry
     let slot: CGPoint
     let dealFrom: CGPoint
+    var gathered = false
+    var gatherPoint = CGPoint.zero
+    var scrollPull = 0.0
+    var interactiveGather = false
+    var cardWidth: CGFloat = BriefingCard.width
+    var onPage = true
+    var order = 0
+    var reducedMotion = false
+    var previewBodyLines = 5
+    var previewTitleLines = 3
+    var measured: (CGSize) -> Void = { _ in }
     var fireDimmed: Bool = false       // one task at a time: another task is running → the CTA waits
     var onOffer: () -> Void
     var onDetail: () -> Void
     var onOpenEnvelope: () -> Void
     var onStop: () -> Void
+    var onOpenConversation: () -> Void
     var onFling: (CGSize) -> Void
 
     @State private var drag: CGSize = .zero
 
+    private var pullProgress: CGFloat {
+        reducedMotion ? 0 : min(1, max(0, scrollPull / SidekickOverviewScrollPolicy.preciseThreshold))
+    }
+    private var pulledSlot: CGPoint {
+        CGPoint(x: slot.x, y: slot.y - (reducedMotion ? 0 : scrollPull))
+    }
+
     var body: some View {
-        let j = Self.jitter(entry.id)
         BriefingCard(briefing: entry.b, phase: entry.phase,
                      onOffer: onOffer, onDetail: onDetail, onOpenEnvelope: onOpenEnvelope,
                      liveLines: entry.liveLines, onStop: entry.action != nil ? onStop : nil,
-                     fireDimmed: fireDimmed)
-            .rotationEffect(.degrees(j.rot + drag.width / 24))
-            .scaleEffect(entry.dealt ? 1 : 0.7)
-            .position(entry.dealt ? CGPoint(x: slot.x + j.dx, y: slot.y + j.dy) : dealFrom)
+                     onOpenConversation: entry.action != nil ? onOpenConversation : nil,
+                     fireDimmed: fireDimmed, cardWidth: cardWidth,
+                     previewBodyLines: previewBodyLines, previewTitleLines: previewTitleLines,
+                     onDismiss: { onFling(CGSize(width: -100, height: -300)) })
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { measured($0) }
+            .rotationEffect(.degrees(gathered ? 0 : drag.width / 30))
+            .scaleEffect(gathered && !reducedMotion ? 0.035 : (entry.dealt ? 1 - 0.08 * pullProgress : 0.92))
+            .position(gathered && !reducedMotion ? gatherPoint : (entry.dealt ? pulledSlot : dealFrom))
+            .blur(radius: reducedMotion ? 0 : (gathered ? 3 : (onPage ? 0 : 4)))
+            .animation(reducedMotion ? .easeOut(duration: 0.14) : .spring(response: interactiveGather ? 0.42 : 0.60, dampingFraction: 0.86)
+                .delay(interactiveGather ? 0 : Double(order) * 0.025), value: gathered)
             .offset(x: drag.width + (entry.flight?.width ?? 0),
                     y: drag.height + (entry.flight?.height ?? 0))
-            .opacity(entry.flight != nil ? 0 : (entry.dealt ? 1 : 0))
+            .opacity(gathered || !onPage || entry.flight != nil ? 0 : (entry.dealt ? 1 : 0))
+            .animation(reducedMotion ? .easeOut(duration: 0.14) : .easeOut(duration: 0.18)
+                .delay(gathered ? (interactiveGather ? 0.12 : 0.25 + Double(order) * 0.025) : 0), value: gathered)
+            .animation(.easeInOut(duration: reducedMotion ? 0.14 : 0.22), value: onPage)
+            .accessibilityElement(children: .contain)
+            .allowsHitTesting(onPage && !gathered && entry.dealt && entry.flight == nil)
+            .accessibilityHidden(!onPage || gathered || !entry.dealt || entry.flight != nil)
+            .accessibilityIdentifier("sidekick.suggestion.\(entry.id)")
             // simultaneous, NOT .gesture: a plain ancestor DragGesture can win macOS click
             // arbitration and eat the card's buttons ("read it again", the envelope).
             .simultaneousGesture(DragGesture(minimumDistance: 12)
@@ -1076,15 +1444,6 @@ private struct DealtCard: View {
                 })
     }
 
-    /// Stable per-card scatter personality (offset + rotation) from the briefing id.
-    private static func jitter(_ id: String) -> (dx: CGFloat, dy: CGFloat, rot: Double) {
-        var h = UInt64(5381)
-        for b in id.utf8 { h = (h &* 33) ^ UInt64(b) }
-        let r1 = Double(h % 1000) / 1000
-        let r2 = Double((h >> 10) % 1000) / 1000
-        let r3 = Double((h >> 20) % 1000) / 1000
-        return (CGFloat(r1 * 20 - 10), CGFloat(r2 * 16 - 8), r3 * 5.2 - 2.6)
-    }
 }
 
 // MARK: - The typeset letter (expanded view)
@@ -1433,15 +1792,13 @@ private enum Demo {
 
 #Preview("Home — the suggestions") {
     HomeView(thingsUnderstood: 3339,
-             sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-             modelMissing: false)
+             sources: .init(files: true, whatsapp: true, imessage: true, notes: true))
         .frame(width: 1180, height: 880)
 }
 
 #Preview("Home — launch demo deck") {
     HomeView(thingsUnderstood: 3339,
              sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-             modelMissing: false,
              deck: .launch)
         .frame(width: 1180, height: 880)
 }
@@ -1449,7 +1806,6 @@ private enum Demo {
 #Preview("Home — knowledge-base-only (free plan)") {
     HomeView(thingsUnderstood: 1704,
              sources: .init(files: true),
-             modelMissing: false,
              deck: .real,
              previewKBOnly: true,
              previewUpgraded: false)
@@ -1459,7 +1815,6 @@ private enum Demo {
 #Preview("Home — kb-only, upgrade detected") {
     HomeView(thingsUnderstood: 1704,
              sources: .init(files: true),
-             modelMissing: false,
              deck: .real,
              previewKBOnly: true,
              previewUpgraded: true)

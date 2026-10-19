@@ -24,14 +24,20 @@ import Foundation
 
 @MainActor @Observable
 final class CommandRunModel {
-    /// How a run ended — drives the notch's finishing glyph (and nothing else).
-    enum Outcome: Equatable { case success, stopped, failed }
+    /// Shared by the finishing presentation, local history, and structured task telemetry.
+    nonisolated enum Outcome: String, Sendable { case success, stopped, failed }
 
-    static let offlineMessage = "You're currently not connected to internet. Try again later"
+    static let offlineMessage = "You might be offline. Retrying..."
 
     var isRunning = false
     private(set) var isPreparing = false
-    /// Keep the offline reason visible while the cancelled backend unwinds.
+    private(set) var isClearingChat = false
+    #if DEBUG
+    /// Isolated UI previews can exercise Clear chat without allowing a provider launch.
+    var preventsTaskExecutionForUIFixture = false
+    #endif
+    /// A network-path hint is presentation only. Keep the same executor alive so its
+    /// request/stream retry can recover without replaying the user's task or app actions.
     var statusLine: String {
         get { isOffline ? Self.offlineMessage : progressLine }
         set { progressLine = newValue }
@@ -45,7 +51,7 @@ final class CommandRunModel {
     private(set) var isPersonalizing = false
     private(set) var mode: AgentMode = .computer // the in-flight run's channel (the notch shows only for .computer)
 
-    /// Starts the finishing presentation, including immediately on an offline interruption.
+    /// Starts the finishing presentation once the owned execution actually ends.
     /// The one-task lock remains held until backend cleanup completes.
     var onFinished: ((Outcome) -> Void)?
     let recovery = SidekickRecovery()
@@ -54,8 +60,12 @@ final class CommandRunModel {
     private(set) var runID = UUID()
     @ObservationIgnored private var retryAction: ((String) -> Void)?
     @ObservationIgnored private var queuedRetry: (() -> Void)?
-    private var historyID: UUID?
+    let conversation: SidekickConversation
+    init(conversation: SidekickConversation = .shared) { self.conversation = conversation }
+    private var conversationTask: SidekickConversationRun?
+    private(set) var externalCardID: String?
     private var recoveryCancelled = false
+    private var stopCause: SidekickTaskEnd.StopCause?
     private var lastAttemptDetail = ""
 
     /// Supplied by the mounted home through a weak model capture. Read once at launch so
@@ -66,11 +76,10 @@ final class CommandRunModel {
     /// theater has nothing to stop). Cleared the moment a REAL run starts.
     private(set) var isDemo = false
 
-    /// True while this run is an ADOPTED external one — a proactive card's computer-use fire.
-    /// The work lives in ForYouModel's Task (not `task`), so stop() delegates to `externalStop`
-    /// (which cancels that Task) and completion arrives via completeExternal, exactly once, when
-    /// the fire unwinds. External ends never touch the scoreboard/analytics — ProactiveExecutor
-    /// records every card fire itself.
+    /// True while this run adopts a proactive card's fire. ownExternalTask retains the
+    /// caller-created Task here so Home's lifetime cannot cancel it. Until adoption completes,
+    /// externalStop reaches the caller. Completion arrives via completeExternal exactly once;
+    /// ProactiveExecutor owns the card's existing scoreboard/analytics.
     private(set) var isExternal = false
     private var externalStop: (@MainActor () -> Void)?
 
@@ -88,13 +97,22 @@ final class CommandRunModel {
     private var personalizationTaskID = UUID()
     private var retryGuidance: String?
 
-    func start(_ text: String, mode: AgentMode, source: String = "command", retryContext: String = "") {
-        guard !isRunning else { return }
+    private var mayStartTask: Bool {
+        guard !isClearingChat else { return false }
+        #if DEBUG
+        if preventsTaskExecutionForUIFixture { return false }
+        #endif
+        return true
+    }
+
+    func start(_ text: String, mode: AgentMode, source: String = "command", retryContext: String = "",
+               reply: SidekickConversationEvent.ReplyReference? = nil) {
+        guard !isRunning, mayStartTask else { return }
         let task0 = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task0.isEmpty else { return }
-        prepareRecovery(context: retryContext, userRequest: task0) { [weak self] guidance in
+        guard prepareRecovery(context: retryContext, userRequest: task0, source: source, reply: reply, retry: { [weak self] guidance in
             self?.start(task0, mode: mode, source: source, retryContext: retryContext + guidance)
-        }
+        }) else { return }
         let generation = runID
         self.mode = mode
         self.source = source
@@ -116,7 +134,6 @@ final class CommandRunModel {
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         // prepareRecovery captured the previous requests before this run enters history.
         let cardContext = SidekickCardContext.promptBlock(for: proactiveCards?() ?? [])
-        historyID = SidekickHistory.record(task0)
         let started = Date()
         Diagnostics.$current.withValue(Diagnostics.Operation("command")) {
             ModelBackend.$runOverride.withValue(ModelBackend.current) {
@@ -194,10 +211,11 @@ final class CommandRunModel {
                         #if DEBUG
                         Log("CMD: final → \(out.suffix(1200))")
                         #endif
-                        // Honesty gate: codex exiting 0 is NOT success — the run's own STATUS sentinel is.
-                        // A clean give-up surfaces its reason. Missing or malformed confirmation
-                        // remains unconfirmed rather than becoming a successful action.
-                        switch AgentStatus.parse(out) {
+                        // A clean process exit plus explicit final-message completion (or
+                        // the legacy sentinel) establishes the model's outcome claim.
+                        // Neither a saved answer alone nor a failed process implies success.
+                        switch AgentStatus.resolve(out, completion: self?.interaction?.conversationRun?.completionStatus,
+                                                   providerSucceeded: true) {
                         case .couldNot(let reason):
                             Log("──────── 🤖 ⚠️ COULD NOT after \(secs)s (\(reason.count)-char reason) ────────")
                             #if DEBUG
@@ -205,20 +223,21 @@ final class CommandRunModel {
                             #endif
                             self?.complete(.failed,
                                            line: reason.isEmpty ? "✗ couldn't do it" : "✗ \(reason)",
-                                           board: .refused)
+                                           board: .refused, interruption: .modelReport(reason))
                         case .done:
                             Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
                             self?.complete(.success, line: "✓ done")
                         case .none:
                             Log("CMD: computer task completion was not confirmed")
                             self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
-                                           board: .refused, statusPresent: false)
+                                           board: .refused, statusPresent: false, interruption: .unconfirmed)
                         }
                     } catch {
                         let secs = Int(Date().timeIntervalSince(started))
-                        if Task.isCancelled || error is CancellationError {
+                        if Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled {
                             Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
-                            self?.complete(.stopped, line: "■ stopped")
+                            self?.complete(.stopped, line: "■ stopped",
+                                           interruption: .error(Task.isCancelled ? CancellationError() : error))
                         } else {
                             Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
                             Log("CMD: \(ErrorLabel(error))")
@@ -231,15 +250,35 @@ final class CommandRunModel {
         }
     }
 
-    private func prepareRecovery(context: String, userRequest: String? = nil, retry: ((String) -> Void)?) {
+    private func prepareRecovery(context: String, userRequest: String, source: String, displayRequest: String? = nil,
+                                 reply: SidekickConversationEvent.ReplyReference? = nil, retry: ((String) -> Void)?) -> Bool {
+        let continuation = context.isEmpty ? nil : conversationTask.map { "end:\($0.taskID)" }
+        let historyRequest = retryGuidance ?? displayRequest ?? userRequest
         interaction?.personalization?.finish(success: false)
         recovery.cancel()
         runID = UUID(); recoveryCancelled = false; queuedRetry = nil
+        stopCause = nil
         isPersonalizing = false
         if context.isEmpty { personalizationTaskID = UUID(); retryGuidance = nil }
         retryAction = retry; lastAttemptDetail = ""
         let generation = runID
+        let contextBlock: String
+        do {
+            let (recording, history) = try conversation.begin(request: userRequest, source: source,
+                taskID: generation, userMessage: historyRequest, reply: reply, continuation: continuation)
+            conversationTask = recording; contextBlock = history
+            SidekickDiagnostics.event(.task, outcome: .started, taskID: generation,
+                backend: .init(rawValue: ModelBackend.current.rawValue) ?? .unknown,
+                source: source == "proactive_card" ? .proactive : (.init(rawValue: source) ?? .command))
+        } catch {
+            statusLine = (error as? LocalizedError)?.errorDescription ?? "Sidekick could not open conversation history. Your existing data has been preserved."
+            SidekickDiagnostics.failure(.storeWrite, reason: .persistence, taskID: generation)
+            return false
+        }
         let snapshot = CustomInstructions.sidekickSnapshot()
+        if snapshot.readError != nil {
+            SidekickDiagnostics.failure(.memoryRead, reason: .readFailed, taskID: generation)
+        }
         let personalization = SidekickPersonalization(snapshot: snapshot, taskID: personalizationTaskID,
             request: userRequest, retryGuidance: retryGuidance) { [weak self] active in
                 guard let self, self.runID == generation else { return }
@@ -249,30 +288,38 @@ final class CommandRunModel {
         retryGuidance = nil
         let diagnosticTaskID = context.isEmpty ? UUID() : (interaction?.diagnosticTaskID ?? UUID())
         let diagnosticAttempt = context.isEmpty ? 1 : (interaction?.diagnosticAttempt ?? 0) + 1
-        interaction = SidekickInteraction(retryContext: context, historyContext: SidekickHistory.promptBlock(),
+        interaction = SidekickInteraction(retryContext: context, historyContext: contextBlock,
             instructionsSnapshot: snapshot, personalization: personalization,
-            taskSummary: userRequest == nil ? nil : SidekickTaskSummary(),
+            taskSummary: source == "proactive_card" ? nil : SidekickTaskSummary(),
+            conversationRun: conversationTask,
             diagnosticTaskID: diagnosticTaskID, diagnosticAttempt: diagnosticAttempt) { [weak self] question in
-            guard let self, self.runID == generation, self.isRunning, !self.isOffline, !self.recoveryCancelled else { throw CancellationError() }
+            guard let self, self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
-            if let error = question.error { SidekickHistory.recordError(error, for: self.historyID) }
-            let answer = try await self.recovery.ask(question) { [weak self] in self?.stop() }
+            let answer = try await self.recovery.ask(question) { [weak self] cause in
+                self?.stop(cause: cause == .expired ? .recoveryExpired : .user)
+            }
             guard self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
             self.onRecoveryResumed?()
             return answer
         }
+        return true
     }
 
     private func presentFailure(_ line: String) {
         guard !isDemo, !recoveryCancelled else { return }
         interaction?.recordRecovery("final_failure", error: line)
-        SidekickHistory.recordError(line, for: historyID)
         let generation = runID
         let retry = retryAction
         let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
-        recovery.present(.failure(id: UUID(), error: line)) { [weak self] answer in
+        recovery.present(.failure(id: UUID(), error: line)) { [weak self] resolution in
             guard let self, self.runID == generation else { return }
-            guard let answer else { self.interaction?.recordRecovery("dismissed"); self.stop(); return }
+            guard case .answered(let answer) = resolution else {
+                if case .cancelled(let cause) = resolution, cause != .interrupted {
+                    self.interaction?.recordRecovery(cause == .expired ? "expired" : "dismissed")
+                    self.stop(cause: cause == .expired ? .recoveryExpired : .user)
+                }
+                return
+            }
             guard let retry else { self.recoveryCancelled = true; return }
             let context = SidekickInteraction.retryInstructions(error: detail, guidance: answer.text)
             self.interaction?.recordRecovery("retry")
@@ -307,7 +354,7 @@ final class CommandRunModel {
         inv.feature = "sidekick-mcp"
         inv.effort = .medium
         inv.webSearch = false
-        inv.timeout = 600
+        inv.timeout = 0 // User-owned work has no overall execution deadline.
         inv.mcpActionServer = slug
         inv.slackOperation = operation
         inv.outlookOperation = mailOperation
@@ -335,7 +382,8 @@ final class CommandRunModel {
             #if DEBUG
             Log("CMD: final → \(env.result.suffix(1200))")
             #endif
-            switch AgentStatus.parseConnector(env.result) {
+            switch AgentStatus.resolve(env.result, completion: interaction?.conversationRun?.completionStatus,
+                                       providerSucceeded: true, connector: true) {
             case .done:
                 Log("──────── 🤖 ✓ DONE via \(slug) in \(secs)s ────────")
                 complete(.success, line: "✓ done")
@@ -343,12 +391,12 @@ final class CommandRunModel {
             case .none:
                 Log("CMD: connector completion unconfirmed after \(secs)s")
                 complete(.failed, line: AgentStatus.unconfirmedConnectorMessage,
-                         statusPresent: false)
+                         statusPresent: false, interruption: .unconfirmed)
                 return true
             case .couldNot(let reason):
                 if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                     complete(.failed, line: reason.isEmpty ? AgentStatus.unconfirmedConnectorMessage : reason,
-                             statusPresent: true)
+                             statusPresent: true, interruption: .modelReport(reason))
                     return true // a remote write may have succeeded; never repeat it on screen
                 }
                 Log("──────── 🤖 ⚠️ \(slug) COULD_NOT after \(secs)s (\(reason.count)-char reason) → falling back to computer use ────────")
@@ -359,9 +407,13 @@ final class CommandRunModel {
             }
         } catch {
             try Task.checkCancellation()   // the user's STOP → the caller's honest "stopped"
+            if error is CancellationError { throw error }
+            // Losing the durable conversation is not a connector obstacle. Do not start
+            // another acting executor after recording failed or the history was reset.
+            if error is SidekickConversationStore.Failure || error is SidekickConversationRun.Failure { throw error }
             if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                 complete(.failed, line: (error as? DirectMCPError)?.errorDescription ?? AgentStatus.unconfirmedConnectorMessage,
-                         statusPresent: false)
+                         statusPresent: false, error: error)
                 return true
             }
             Log("CMD: connector leg failed (\(ErrorLabel(error))) → falling back to computer use")
@@ -370,6 +422,7 @@ final class CommandRunModel {
         // The narrated fallback: one honest notch line, then the SAME run continues on screen
         // (the caller). Seeded into `recent` so the computer leg's first lines join below it.
         interaction?.personalization?.discardProposal()
+        interaction?.taskSummary?.discard()
         executedMethod = "computer"
         let note = "\(name)'s tools couldn't finish this. Doing it on screen instead."
         recent = [note]
@@ -394,31 +447,98 @@ final class CommandRunModel {
         """
     }
 
-    func stop() {
+    func stop(cause: SidekickTaskEnd.StopCause = .user) {
         guard !recoveryCancelled else { return }
+        if isRunning, stopCause == nil { stopCause = cause }
         recoveryCancelled = true; queuedRetry = nil
         interaction?.personalization?.finish(success: false)
         recovery.cancel()
         guard isRunning else { return }
         stopWatchingConnectivity()
+        isOffline = false
         clearRemembering()
         statusLine = "Stopping…"
-        // An adopted run's Task lives in ForYouModel — ask IT to cancel (which kills codex the
-        // same way); completion still arrives once, from the fire's unwind. Never both paths.
+        // The callback covers the brief interval before task ownership transfers. Afterwards
+        // cancel the app-owned Task; completion still arrives once from the fire's unwind.
         if let externalStop { externalStop() } else { task?.cancel() }
+    }
+
+    /// Teardown cannot remove runtime/data while an owned task still has effects in flight.
+    /// A failed drain aborts teardown instead of pretending cancellation finished instantly.
+    func stopAndDrain() async -> Bool {
+        stop()
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        while isRunning, ProcessInfo.processInfo.systemUptime < deadline {
+            do { try await Task.sleep(for: .milliseconds(20)) } catch { return false }
+        }
+        return !isRunning
+    }
+
+    enum ClearChatFailure: LocalizedError {
+        case busy, stillStopping, storage
+
+        var errorDescription: String? {
+            switch self {
+            case .busy: "Sentient is already clearing or resetting data. Please wait for it to finish."
+            case .stillStopping: "Sidekick is still stopping. Your chat has not been cleared. Try again once it stops."
+            case .storage: "Your chat could not be cleared. Please try again."
+            }
+        }
+    }
+
+    /// Clear only conversation history. Stop owned foreground work before deleting anything;
+    /// generation checks prevent a cancelled compactor or delayed callback restoring old data.
+    /// Knowledge and saved instructions have separate owners and are never reset here.
+    func clearChat(defaults: UserDefaults = .standard) async throws {
+        guard !isClearingChat, conversation.beginMaintenance() else {
+            SidekickDiagnostics.event(.chatClear, outcome: .skipped, reason: .conflict, source: .reset)
+            throw ClearChatFailure.busy
+        }
+        isClearingChat = true
+        let began = ProcessInfo.processInfo.systemUptime
+        defer { conversation.endMaintenance(); isClearingChat = false }
+        SidekickDiagnostics.event(.chatClear, outcome: .started, source: .reset)
+        let drained = await stopAndDrain()
+        if Task.isCancelled {
+            SidekickDiagnostics.event(.chatClear, outcome: .skipped, reason: .cancelled, source: .reset)
+            throw CancellationError()
+        }
+        guard drained else {
+            SidekickDiagnostics.failure(.chatClear, reason: .timeout, source: .reset)
+            throw ClearChatFailure.stillStopping
+        }
+        do { try conversation.reset(defaults: defaults) }
+        catch {
+            SidekickDiagnostics.failure(.chatClear, reason: .writeFailed, source: .reset)
+            throw ClearChatFailure.storage
+        }
+        // Invalidate captured retry/stream callbacks before dropping their retained context.
+        runID = UUID()
+        recovery.cancel(); recoveryCancelled = true
+        retryAction = nil; queuedRetry = nil; retryGuidance = nil
+        interaction = nil; conversationTask = nil
+        lastAttemptDetail = ""; connectorRecoveryContext = ""
+        personalizationTaskID = UUID(); stopCause = nil
+        stopWatchingConnectivity(); clearRemembering()
+        statusClearTask?.cancel(); statusClearTask = nil
+        task = nil; externalStop = nil; externalCardID = nil
+        isPreparing = false; isPersonalizing = false; isExternal = false; isDemo = false
+        isOffline = false; statusLine = ""; recent = []; section = ""
+        SidekickDiagnostics.event(.chatClear, source: .reset,
+            duration: ProcessInfo.processInfo.systemUptime - began)
     }
 
     // MARK: Adopted external runs (a proactive card's fire — any channel)
 
     /// Adopt a proactive card's fire as THE one run: `isRunning` + `statusLine` light the notch
     /// and the prompt bar, and every other entry point — hotkey, submits, other cards — is locked
-    /// out until it ends. The work itself stays in the caller's Task; `onStopRequest` is how any
-    /// STOP surface (notch, bar) reaches it. Silently refuses while a run is live — the
-    /// caller checks the coordinator's `beginExternalRun` return.
-    func adoptExternal(caption: String, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
+    /// out until it ends. The caller transfers its Task with ownExternalTask; onStopRequest
+    /// covers cancellation before transfer. Silently refuses while a run is live — the
+    /// caller checks the coordinator's beginExternalRun return.
+    func adoptExternal(caption: String, request: String? = nil, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
                        onStopRequest: @escaping @MainActor () -> Void) {
-        guard !isRunning else { return }
-        prepareRecovery(context: retryContext, retry: onRetry)
+        guard !isRunning, mayStartTask else { return }
+        guard prepareRecovery(context: retryContext, userRequest: request ?? caption, source: "proactive_card", displayRequest: caption, retry: onRetry) else { return }
         mode = .computer
         source = "proactive_card"        // log/analytics honesty only — external ends never reach complete()
         runStarted = Date()
@@ -433,7 +553,6 @@ final class CommandRunModel {
         rememberClear?.cancel()
         statusLine = caption
         watchConnectivity()
-        historyID = SidekickHistory.record(caption, card: true)
     }
 
     /// One raw codex line from the adopted run, through the same cleaning a native run gets
@@ -445,9 +564,17 @@ final class CommandRunModel {
 
     /// End the adopted run — no scoreboard, no analytics (ProactiveExecutor already recorded the
     /// fire); just the shared epilogue. Idempotent: a late second arrival no-ops.
-    func completeExternal(_ outcome: Outcome, line: String, runID: UUID? = nil) {
+    func completeExternal(_ outcome: Outcome, line: String, finalText: String = "", runID: UUID? = nil) {
         guard isRunning, isExternal, runID == nil || runID == self.runID else { return }
+        lastAttemptDetail = finalText
         finish(outcome, line: line)
+    }
+
+    /// The app owns adopted work; Home may disappear without cancelling it.
+    func ownExternalTask(_ owned: Task<Void, Never>, cardID: String) {
+        guard isRunning, isExternal else { owned.cancel(); return }
+        task = owned; externalStop = nil; externalCardID = cardID
+        if recoveryCancelled { owned.cancel() }
     }
 
     // MARK: The onboarding notch demo
@@ -459,8 +586,9 @@ final class CommandRunModel {
     /// the "Remembering" bloom render exactly as a live run does. Same finishing contract
     /// (onFinished → the coordinator's ✓ flourish + retract); stop() cancels it like any run.
     func startOnboardingDemo() {
-        guard !isRunning else { return }
+        guard !isRunning, mayStartTask else { return }
         recovery.cancel(); recoveryCancelled = false; runID = UUID()
+        stopCause = nil
         retryAction = nil; interaction = nil
         mode = .computer
         isDemo = true
@@ -506,18 +634,32 @@ final class CommandRunModel {
     /// scoreboard + analytics), the demo's theater exit, and completeExternal. Sets the final
     /// status line, releases the run, tells the coordinator, and lets the line linger.
     private func finish(_ outcome: Outcome, line: String) {
-        let alreadyFinishing = isOffline
-        let outcome: Outcome = alreadyFinishing ? .failed : outcome
-        let line = alreadyFinishing || (!isDemo && outcome == .failed && NetworkSnapshot.shared.current.status == "unsatisfied")
-            ? Self.offlineMessage : line
+        finish(SidekickTaskEnd(outcome: outcome, stop: stopCause), line: line)
+    }
+
+    private func finish(_ end: SidekickTaskEnd, line: String) {
+        let outcome = end.outcome
+        // A path-monitor hint must not overwrite a successful result or disguise the
+        // actual terminal error. "Retrying" is shown only while a run is still alive.
+        var line = outcome == .stopped ? "■ stopped" : line
         stopWatchingConnectivity()
         if !isDemo {
             interaction?.personalization?.finish(success: outcome == .success && !recoveryCancelled)
-            interaction?.taskSummary?.finish(outcome: outcome, source: source, method: executedMethod)
+            interaction?.taskSummary?.finish(end: end, source: source, method: executedMethod)
         }
         isPersonalizing = false
-        if !isDemo { SidekickHistory.close(historyID, outcome: outcome, line: line) }
-        historyID = nil
+        if !isDemo, let recording = conversationTask {
+            let saved = conversation.finish(recording, outcome: .init(rawValue: outcome.rawValue) ?? .failed,
+                status: outcome == .stopped ? (stopCause == .user ? "[Stopped by user]" : "Stopped before completion") : line,
+                finalText: lastAttemptDetail)
+            if !saved { line = outcome == .stopped ? "Stopped, but history couldn't be saved." : "Task ended, but history couldn't be saved. Check the result before retrying." }
+            SidekickDiagnostics.event(.task, outcome: outcome == .stopped ? .stopped : .completed,
+                reason: outcome == .failed ? .providerFailure : .none, taskID: recording.taskID,
+                backend: .init(rawValue: recording.backend) ?? .unknown,
+                source: source == "proactive_card" ? .proactive : (.init(rawValue: source) ?? .command),
+                duration: Date().timeIntervalSince(runStarted))
+        }
+        externalCardID = nil
         clearRemembering()
         isOffline = false
         statusLine = line
@@ -527,9 +669,8 @@ final class CommandRunModel {
         externalStop = nil
         task = nil
         if let retry = queuedRetry { queuedRetry = nil; retry(); return }
-        // Offline already presented recovery. Backend cleanup must not reset its window or draft.
-        if outcome == .failed, !isDemo, !alreadyFinishing, !recoveryCancelled { presentFailure(line) }
-        else if !alreadyFinishing || recoveryCancelled { onFinished?(outcome) }
+        if outcome == .failed, !isDemo, !recoveryCancelled { presentFailure(line) }
+        else { onFinished?(outcome) }
         statusClearTask?.cancel()
         statusClearTask = Task { [weak self] in
             // Failures hold longest — the ✗ line carries the give-up REASON and must be readable.
@@ -539,32 +680,31 @@ final class CommandRunModel {
         }
     }
 
-    /// Reuse the app's network monitor. Unknown and on-demand paths are not proof of being offline.
+    /// Reuse the app's network monitor. Losing a route is not proof that the current
+    /// request failed; leave transport retries and their request identity with the CLI.
     private func watchConnectivity() {
         stopWatchingConnectivity()
         statusClearTask?.cancel()
+        let generation = runID
         let updates = NotificationCenter.default.notifications(named: NetworkSnapshot.didChange)
         connectivityTask = Task { [weak self] in
-            // Defer the first check until the caller has installed the task/cancel callback
-            // and the coordinator has entered .running, even when starting already offline.
-            if self?.interruptIfOffline() == true { return }
+            guard let self, !Task.isCancelled, self.runID == generation else { return }
+            self.refreshConnectivity()
             for await _ in updates {
-                guard !Task.isCancelled, let self, self.isRunning else { return }
-                if self.interruptIfOffline() { return }
+                guard !Task.isCancelled, self.isRunning, self.runID == generation else { return }
+                self.refreshConnectivity()
             }
         }
     }
 
-    private func interruptIfOffline() -> Bool {
-        guard !Task.isCancelled, isRunning, !isDemo, !isOffline,
-              NetworkSnapshot.shared.current.status == "unsatisfied" else { return false }
-        isOffline = true
-        interaction?.personalization?.finish(success: false)
-        clearRemembering()
-        stopWatchingConnectivity()
-        presentFailure(Self.offlineMessage)
-        if let externalStop { externalStop() } else { task?.cancel() }
-        return true
+    private func refreshConnectivity() {
+        guard !Task.isCancelled, isRunning, !isDemo else { return }
+        let unavailable = NetworkSnapshot.shared.current.status == "unsatisfied"
+        guard unavailable != isOffline else { return }
+        isOffline = unavailable
+        if unavailable { clearRemembering() }
+        SidekickDiagnostics.event(.connectivity, outcome: unavailable ? .started : .completed,
+            reason: unavailable ? .unavailable : .none, taskID: conversationTask?.taskID)
     }
 
     private func stopWatchingConnectivity() {
@@ -573,7 +713,7 @@ final class CommandRunModel {
     }
 
     private func push(_ line: String) {
-        guard isRunning, !isOffline, !isPersonalizing else { return }
+        guard isRunning, !isPersonalizing else { return }
 
         // Strip codex's stderr channel tag — BEFORE trimming, so a bare "stderr:" (empty line) vanishes
         // instead of flashing in the bar.
@@ -682,12 +822,17 @@ final class CommandRunModel {
     /// `board` overrides the outcome-derived scoreboard verdict (the sentinel's `.refused`);
     /// `statusPresent: false` = codex claimed done but never emitted the STATUS sentinel.
     private func complete(_ outcome: Outcome, line: String,
-                          board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true, error: Error? = nil) {
+                          board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true, error: Error? = nil,
+                          interruption: SidekickTaskEnd.Failure? = nil) {
+        guard isRunning else { return }
+        let end = SidekickTaskEnd(outcome: outcome, stop: stopCause,
+                                 failure: interruption ?? error.map(SidekickTaskEnd.Failure.error))
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
-        // Skip .stopped — that's a user cancel, not a health outcome. `fired` is now
+        // Skip .stopped — cancellation alone is not an executor defect. `fired` is now
         // sentinel-verified when statusPresent; without the sentinel it stays a flagged claim.
-        // An offline interruption is expected environment state, not an executor defect.
-        let resolved = isOffline ? nil : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
+        // A disconnected failure is expected environment state, not an executor defect.
+        let resolved = (isOffline && end.outcome == .failed) || end.outcome == .stopped ? nil
+            : (board ?? (end.outcome == .success ? .fired : .failed))
         if let resolved {
             ExecutorScoreboard.record(method: executedMethod, source: source, outcome: resolved,
                                       durationS: Date().timeIntervalSince(runStarted),
@@ -697,11 +842,10 @@ final class CommandRunModel {
         // Extended tier: how long the agent worked this run — EVERY outcome (a stopped run still had
         // the notch lit that long). floatValue sums server-side into total agent-seconds, the
         // "Sidekick saved users N hours" headline.
-        let outcomeTag = isOffline ? "failed" : (outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed"))
         Analytics.signal("ComputerUse.finished",
-                         parameters: ["source": source, "method": executedMethod, "outcome": outcomeTag],
+                         parameters: end.parameters.merging(["source": source, "method": executedMethod]) { _, new in new },
                          floatValue: Date().timeIntervalSince(runStarted))
-        finish(outcome, line: line)
+        finish(end, line: line)
     }
 
     private static func short(_ error: Error) -> String {
@@ -765,7 +909,7 @@ final class CommandRunModel {
     /// bare-pointer fallback pre-first-analysis. Shared by both prompts.
     nonisolated static func knowledgeBlock(_ kbContext: String) -> String {
         kbContext.isEmpty
-            ? "For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it."
+            ? "My personal knowledge base is not available yet; initial analysis may be pending or still running. You can help now using this request, our conversation, my Sidekick memory, the current screen and available connected tools. Do not assume you know personal facts that are absent from that context. Do not read analysis staging files or create a placeholder knowledge base. Ask me for missing context when needed."
             : kbContext
     }
 
@@ -833,9 +977,8 @@ final class CommandRunModel {
         // The user's standing Sidekick context (Settings → Proactive & Sidekick) — preferred apps,
         // browser, norms. Empty string when they've set none, so the prompt is unchanged by default.
         // Live runs receive one frozen snapshot through SidekickInteraction on every route.
-        let context = SidekickInteraction.current == nil ? CustomInstructions.sidekick : ""
-        let contextLine = context.isEmpty ? ""
-            : "\nStanding preferences I've set for you (apply them wherever they're relevant to this task): \(context)\n"
+        // File memory is read on the main actor at request start and injected once by FrontierRun.
+        let contextLine = ""
         // Only ChatGPT carries its hosted Gmail tools into the Codex computer task.
         // Claude's dedicated connector tasks still run separately through claude -p.
         let gmailLine = (ModelBackend.current == .chatgpt

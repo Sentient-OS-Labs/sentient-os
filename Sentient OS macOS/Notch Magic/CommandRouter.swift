@@ -83,6 +83,12 @@ enum CommandRouter {
     /// The same router with explicit services lets the lab test account ambiguity without
     /// disclosing any connected account's labels or content.
     static func route(_ command: String, services: [Service], cardContext: String = "", standingInstructions: String = "") async -> Route {
+        // A native Mail request must keep its app/account context even when Gmail is connected.
+        // The computer route still has connectors when the user explicitly authorizes a switch.
+        guard !requiresAppleMail(command) else {
+            Log("router: computer (mail application context)")
+            return .computer
+        }
         let t0 = Date()
         var inv = CodexCLI.Invocation(prompt: prompt(command: command, services: services, cardContext: cardContext, standingInstructions: standingInstructions))
         inv.model = .gpt6luna          // → haiku on the Claude tier map
@@ -199,9 +205,8 @@ enum CommandRouter {
         THE TWO ROUTES:
         - "connector": the ENTIRE task can be completed with one connected service's
           tools alone (below), with no need to see the screen or touch any app window.
-        - "computer": any part of the task needs the screen, an app, or a website.
-          Connector tools remain available inside this route too, so a wrong "computer"
-          pick costs nothing.
+        - "computer": any part of the task needs web research, the screen, an app, or a website.
+          Web search and connector tools remain available alongside computer use in this route.
 
         CONNECTED SERVICES:
         \(list)
@@ -212,7 +217,17 @@ enum CommandRouter {
         - The same service may have separate accounts. Choose one only when the command or its
           explicit context identifies the account, or exactly one matching account is listed.
           If the destination account is ambiguous, choose computer so it can be clarified.
+        - Apple Mail, Mail.app, "my email app", "mail client", or a preference to use a desktop
+          email application requires "computer". An explicit exclusion such as "not Gmail"
+          must never route to that provider. Keep the named app/account context or clarify it.
+          A connected Gmail or Outlook account does not identify the account or message visible in
+          Apple Mail. Never substitute a provider merely because both services handle email.
         - When in doubt, choose "computer".
+        - Public web research needs "computer", even when the final result goes into one
+          connected service. "Research a topic and make a presentation", "look up current
+          pricing and write a Notion page", and "find recent news and email a summary" all
+          need web research plus an action. Searching only a service's own data, such as
+          finding an email in Gmail, can still use "connector".
         \(services.contains(where: { $0.slug == "slack" }) ? "- A Slack connector task supports one message or one other constructive change. Explicitly requested multiple Slack messages need computer so the broader workflow can handle them." : "")
         - "connector" is right ONLY when EVERY step of the command fits that ONE
           service's tools. If any step needs a second service (listed or not), a
@@ -248,6 +263,16 @@ enum CommandRouter {
     {"type":"object","additionalProperties":false,"required":["route","target"],"properties":{\
     "route":{"type":"string","enum":["computer","connector"]},"target":{"type":"string"}}}
     """
+
+    /// Application requests and provider exclusions require the app/account context. Generic
+    /// email remains eligible for a connector; computer use can clarify an ambiguous application.
+    static func requiresAppleMail(_ command: String) -> Bool {
+        let application = #"(?<![\p{L}\p{N}_])(?:apple[ \t]+mail|mail\.app|com\.apple\.mail|(?:mac(?:os)?|native|desktop)[ \t]+mail|(?:e[ -]?)?mail[ \t]+(?:app(?:lication)?|client))(?![\p{L}\p{N}_])"#
+        let excludedProvider = #"\b(?:not|never|except|excluding|instead\s+of|rather\s+than|don['’]?t\s+(?:use|check|open)|do\s+not\s+(?:use|check|open))\s+(?:my\s+|the\s+)?(?:gmail|google\s+mail|outlook)\b"#
+        return [application, excludedProvider].contains {
+            command.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+    }
 
     static func ambiguousMail(_ command: String, services: [Service]) -> Bool {
         guard services.contains(where: { $0.slug == "gmail" }), services.contains(where: { $0.slug == OutlookMailConnector.slug }) else { return false }

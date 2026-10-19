@@ -126,6 +126,7 @@ struct IterativeRun {
             // batch does nothing). Escalate to an event — error TYPE only, plus whether the model
             // file resolved (never the path).
             Log("IterativeRun: engine load failed — \(ErrorLabel(error))")
+            p.failSourceRead(name: "On-device sources", message: "The on-device model could not load. Try analysis again.")
             CrashReporting.captureEvent("engine.load_failed", level: .error,
                 tags: ["error": String(describing: type(of: error))],
                 extra: ["model_present": String(ModelLocator.resolve() != nil)],
@@ -272,6 +273,7 @@ struct IterativeRun {
                 CrashReporting.captureEvent("source.dropped", level: .error,
                     tags: ["source": connector.kind.rawValue, "error": String(describing: type(of: error))],
                     fingerprint: ["source", "dropped", connector.kind.rawValue])
+                SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "incomplete")
                 p.failed += 1
                 continue
             }
@@ -281,6 +283,8 @@ struct IterativeRun {
             // cut-off source just resumes next run. `processedThisConnector` feeds the cap event.
             let connectorDeadline = Date().addingTimeInterval(Self.sourceTimeCapSeconds)
             var processedThisConnector = 0
+            var capped = false
+            SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "incomplete")
 
             bucketLoop: for bucket in buckets {
                 if Task.isCancelled { break runLoop }
@@ -342,6 +346,11 @@ struct IterativeRun {
                             extra: ["processed": String(processedThisConnector),
                                     "cap_seconds": String(Int(Self.sourceTimeCapSeconds))])
                         finished = false
+                        capped = true
+                        SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "time_cap")
+                        let name = connector.kind == .file ? "Files" : connector.kind.rawValue.capitalized
+                        p.sourceReadFailures[name] = "More items remain. Completed items are saved; the next analysis continues from the checkpoint."
+                        onProgress(p)
                         break bucketLoop
                     }
                     if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine(reason: "preemptive") }
@@ -423,6 +432,10 @@ struct IterativeRun {
                 if effective == .initial, finished, top != nil {
                     await store.collapseFloor(bucket.key)
                 }
+            }
+            if !capped {
+                SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "ok")
+                p.successfulSources.insert(connector.kind == .file ? "Files" : connector.kind.rawValue.capitalized)
             }
         }
         await engine.unload()

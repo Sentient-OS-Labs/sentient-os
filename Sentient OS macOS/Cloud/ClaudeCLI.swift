@@ -419,7 +419,9 @@ actor ClaudeCLI {
                                                   observeAgentTools: true,
                                                   onStdoutLine: stdoutLine)
         AgentRunDiagnostics.current?.recordProcess(status: out.status)
-        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
+            completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
+                ? nil : SidekickInteraction.current?.conversationRun?.completionStatus)
         Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
         return env
     }
@@ -552,14 +554,8 @@ actor ClaudeCLI {
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
-        if SidekickToolServer.connection != nil {
-            recipeAllows.append("mcp__sentient_recovery__ask_user")
-            if SidekickInteraction.current?.personalization != nil {
-                recipeAllows.append("mcp__sentient_recovery__" + SidekickPersonalization.toolName)
-            }
-            if SidekickInteraction.current?.taskSummary != nil {
-                recipeAllows.append("mcp__sentient_recovery__" + SidekickTaskSummary.toolName)
-            }
+        if let connection = SidekickToolServer.connection {
+            recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
         }
 
         if let connection = ResearchToolServer.connection {
@@ -714,15 +710,19 @@ actor ClaudeCLI {
     /// Reduce the stream-json output to the shared Envelope. The stream's last line is a
     /// `result` object; `system/init` (the first line) carries the session id — so even a
     /// mid-run usage limit keeps its resume handle, the same guarantee codex gives.
-    static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int) throws -> CodexCLI.Envelope {
+    static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int,
+                              completion: AgentStatus? = nil) throws -> CodexCLI.Envelope {
         var sessionID: String?
         var resultObj: [String: Any]?
         var rateLimitRejected = false
+        var cleanTerminalResult = false
+        var terminalFailure = false
 
         for line in out.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let type = obj["type"] as? String else { continue }
+                  let type = obj["type"] as? String else { cleanTerminalResult = false; continue }
+            cleanTerminalResult = type == "result"
             switch type {
             case "system":
                 if sessionID == nil { sessionID = obj["session_id"] as? String }
@@ -732,6 +732,9 @@ actor ClaudeCLI {
                     rateLimitRejected = info["status"] as? String == "rejected"
                 }
             case "result":
+                if (obj["is_error"] as? Bool) != false || (obj["subtype"] as? String)?.hasPrefix("error") == true {
+                    terminalFailure = true
+                }
                 resultObj = obj
             default:
                 break
@@ -751,7 +754,12 @@ actor ClaudeCLI {
             text = json
         }
 
-        if out.status != 0 || isError || text.isEmpty {
+        // Only Sidekick action callers supply a completion receipt. Background/schema
+        // consumers still need an actual result payload, and no receipt overrides failure.
+        let toolOnlyCompletion = cleanTerminalResult && (resultObj?["subtype"] as? String) == "success"
+            && (completion.map { $0 != .none } ?? false)
+        if out.status != 0 || isError || terminalFailure
+            || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !toolOnlyCompletion) {
             let resultDetail = ([text] + (resultObj?["errors"] as? [String] ?? []))
                 .filter { !$0.isEmpty }.joined(separator: " · ")
             let detail = !resultDetail.isEmpty ? resultDetail
@@ -803,7 +811,7 @@ actor ClaudeCLI {
                 if let text = block["text"] as? String, !text.isEmpty { lines.append(text) }
             case "tool_use":
                 let name = (block["name"] as? String) ?? ""
-                if name == "mcp__sentient_recovery__" + SidekickTaskSummary.toolName { continue }
+                if SidekickConversationRun.hidden(server: "", tool: name) { continue }
                 let input = block["input"] as? [String: Any]
                 if name == "Bash" {
                     if let cmd = input?["command"] as? String, !cmd.isEmpty { lines.append("$ \(cmd)") }
@@ -845,6 +853,7 @@ actor ClaudeCLI {
     private func emitClaudeFailure(event: String, _ error: Error, feature: String,
                                    modelID: String, effort: String, resumed: Bool, durationMS: Int,
                                    timeoutS: Int? = nil, diag: [String: String] = [:]) {
+        guard !ConnectorClassificationDiagnostics.ownsFailures else { return }
         let caseName: String
         let level: CrashReporting.DiagLevel
         var extra = diag

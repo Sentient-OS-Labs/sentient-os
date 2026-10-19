@@ -281,25 +281,31 @@ struct SettingsMenu<Selection: Hashable, Options: View>: View {
                 .pickerStyle(.inline)
                 .menuActionDismissBehavior(.enabled)
         } label: {
-            Text(value).font(.system(size: 14)).foregroundStyle(.white.opacity(0.9))
+            HStack(spacing: 10) {
+                Text(value).font(.system(size: 14)).foregroundStyle(.white.opacity(0.9))
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(SettingsStyle.secondary)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(SettingsStyle.control, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.16), lineWidth: 1))
+            // Padding, blank space and chevron belong to the native menu's label, so
+            // the entire visible control opens it instead of just the selected text.
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
+        // macOS's borderless style flattens rich labels to a tiny native text picker.
+        // Button style preserves this full-sized label and its complete hit target.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 12).padding(.trailing, 32)
-        .frame(height: 36)
-        .background(SettingsStyle.control, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.16), lineWidth: 1))
-        .overlay(alignment: .trailing) {
-            Image(systemName: "chevron.down")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(SettingsStyle.secondary)
-                .padding(.trailing, 12)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
         .accessibilityLabel(title)
         .accessibilityValue(value)
+        .accessibilityIdentifier("settings.menu." + title)
     }
 }
 

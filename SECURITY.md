@@ -123,21 +123,28 @@ content scrubbing and disabled URL-capture defaults help exclude private materia
 reports use bounded tool categories, outcomes and app-generated correlation IDs. Provider identifiers,
 tool arguments and output text are not reporting fields.
 
-TelemetryDeck receives basic usage counts and reviewed, generalized phrases describing eligible
-Sidekick attempts. Timings, setup and health signals use the extended-analytics setting. Turning that
-setting off leaves basic usage, launch/session and install/uninstall counts and task descriptions
-enabled, as disclosed in onboarding and Settings.
+TelemetryDeck receives basic usage counts, task outcomes and fixed interruption categories, and
+short AI-written workflow descriptions for eligible Sidekick attempts. Timings, setup and health
+signals use the extended-analytics setting. Turning that setting off leaves the basic counts,
+outcomes, interruption categories and workflow descriptions enabled, as disclosed in the app.
 
-The task's selected AI proposes the phrase. Local format checks and a separate, tool-free call to
-the selected AI review it before submission. That review receives only the candidate phrase; it can
-approve the exact text or reject it. Missing, rejected or failed reviews produce an unavailable-summary
-status without the phrase or rejection reason. Raw prompts, conversations, screenshots, knowledge
-files and final responses are not accepted by the task-summary analytics sink.
+The selected task model writes the phrase under instructions to omit identifying and sensitive
+details. Local checks restrict its length, word count and characters. There is no separate model
+review. Invalid, withdrawn or unavailable phrases are omitted. These instructions and format checks
+do not guarantee that every phrase is free of personal information. Raw requests, conversations,
+screenshots, knowledge files and final responses are not sent to the task-description analytics sink.
+Generated installation identifiers allow repeat events to be associated without using a name or email.
 
-The review is a model-based safeguard, not a guarantee that identifying or sensitive meaning can
-never pass. Generated identifiers allow repeat events to be associated without asking for a name
-or email. The diagnostics guide documents these controls and limits; do not describe the switches
-as disabling every report or make blanket anonymity guarantees.
+The optional computer-use check operates a temporary Sentient test window. Its report contains app,
+OS and tool versions, permission observations, test results and bounded technical error codes. It
+excludes screenshots, messages, account details and document contents. The report stays local unless
+the user reviews it and chooses **Send report**. That separate action sends the displayed report to
+Supabase using a dedicated anonymous support identity, separate from feedback contacts and invitation
+records. A local save is also available. Automatic crash/analytics controls do not authorize this upload.
+
+The support-report schema and RPC are included in source. Applying the server migration is a separate
+release operation; publishing source does not deploy it. The diagnostics guide describes the reporting
+boundaries and limits. Do not describe the controls as disabling every report or promise anonymity.
 
 ## Implementation references
 

@@ -171,6 +171,7 @@ nonisolated enum CrashReporting {
             scope.setTag(value: role.rawValue, key: "process")
             scope.setTag(value: osVersion, key: "os_version")
             scope.setTag(value: appVersion, key: "app_version")
+            scope.setTag(value: BuildIdentity.identifier, key: "app_binary_id")
             scope.setUser(User(userId: installID))   // the anonymous per-install id
         }
 
@@ -219,6 +220,7 @@ nonisolated enum CrashReporting {
             scope.setLevel(sentryLevel(level))
             scope.setTag(value: osVersion, key: "os_version")
             scope.setTag(value: appVersion, key: "app_version")
+            scope.setTag(value: BuildIdentity.identifier, key: "app_binary_id")
             for (k, v) in tags { scope.setTag(value: v, key: k) }
             if !details.isEmpty { scope.setExtras(details) }
             if let fingerprint { scope.setFingerprint(fingerprint) }
@@ -308,8 +310,11 @@ nonisolated enum CrashReporting {
             if let values = value as? [Any] { return (key, values.map { scrubData(["value": $0])["value"]! } as Any) }
             return (key, value)
         }).merging(data.filter { key, value in
-            ["operation_id", "parent_operation_id", "root_operation_id", "task_id"].contains(key) && (value as? String).flatMap(UUID.init(uuidString:)) != nil
-        }) { _, safeID in safeID }
+            (["operation_id", "parent_operation_id", "root_operation_id", "task_id", "capture_id"].contains(key)
+                && (value as? String).flatMap(UUID.init(uuidString:)) != nil)
+                || (["native_detail", "stderr_detail"].contains(key)
+                    && (value as? String).flatMap(NativeComputerUseFailure.Detail.init(rawValue:)) != nil)
+        }) { _, safeValue in safeValue }
     }
 
     // MARK: - Helpers
@@ -341,14 +346,30 @@ nonisolated enum CrashReporting {
             event.message = SentryMessage(formatted: scrub(text: formatted))
         }
         event.exceptions?.forEach { $0.value = scrub(text: $0.value) }
-        event.tags = event.tags?.mapValues(scrub(text:))
+        event.tags = event.tags.map { scrubData($0).compactMapValues { $0 as? String } }
         event.extra = event.extra.map(scrubData)
-        event.context = event.context?.mapValues(scrubData)
+        event.context = event.context.map(scrubContexts)
         event.breadcrumbs?.forEach { crumb in
             crumb.message = crumb.message.map(scrub(text:))
             crumb.data = crumb.data.map(scrubData)
         }
         return event
+    }
+
+    /// SDK trace identifiers are fixed-width hexadecimal, never free-text credentials.
+    /// Preserve them only in the trace context; arbitrary strings still use the PII scrubber.
+    nonisolated static func scrubContexts(_ contexts: [String: [String: Any]]) -> [String: [String: Any]] {
+        var clean = contexts.mapValues(scrubData)
+        if let trace = contexts["trace"] {
+            for (key, width) in [("trace_id", 32), ("span_id", 16), ("parent_span_id", 16)] {
+                if let value = trace[key] as? String, value.utf8.count == width,
+                   value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) }),
+                   value.contains(where: { $0 != "0" }) {
+                    clean["trace"]?[key] = value
+                }
+            }
+        }
+        return clean
     }
 
     /// Redact home-dir paths, emails, phone numbers, and long token/base64 blobs from a string.

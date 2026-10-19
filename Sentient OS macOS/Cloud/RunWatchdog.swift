@@ -1,16 +1,20 @@
-// Enforces the process budget in active seconds, excluding time spent awaiting a notch reply.
+// Enforces a positive process budget in active seconds, excluding time awaiting a notch reply.
+// A zero budget is explicitly unlimited; user-owned Sidekick tasks remain cancellable instead.
 // Uses a monotonic clock and cancels its timer when the owned process finishes.
 // Doc: Documentation - Cloud - CodexCLI (the codex exec spine).md
 import Foundation
 import os
 
 nonisolated final class RunWatchdog: Sendable {
-    private let timer: DispatchSourceTimer
+    private let timer: DispatchSourceTimer?
     private let finished = OSAllocatedUnfairLock(initialState: false)
     init(timeout: TimeInterval, interaction: SidekickInteraction?, onTimeout: @escaping @Sendable () -> Void) {
+        precondition(timeout.isFinite && timeout >= 0, "Execution timeout must be finite and nonnegative; zero means unlimited")
+        guard timeout > 0 else { timer = nil; return }
         let began = ProcessInfo.processInfo.systemUptime
         let waitingAtStart = interaction?.waitingSeconds ?? 0
-        timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        self.timer = timer
         if interaction == nil { timer.schedule(deadline: .now() + timeout) }
         else { timer.schedule(deadline: .now() + min(timeout, 0.25), repeating: 0.25) }
         timer.setEventHandler { [finished] in
@@ -24,6 +28,6 @@ nonisolated final class RunWatchdog: Sendable {
         }
         timer.resume()
     }
-    func cancel() { finished.withLock { $0 = true }; timer.cancel() }
-    deinit { timer.cancel() }
+    func cancel() { finished.withLock { $0 = true }; timer?.cancel() }
+    deinit { timer?.cancel() }
 }

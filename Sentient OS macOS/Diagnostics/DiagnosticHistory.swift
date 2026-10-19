@@ -111,11 +111,65 @@ nonisolated enum DiagnosticHistory {
     static func recordError(_ payload: Diagnostics.Payload, defaults: UserDefaults = .standard) {
         // No raw errors, breadcrumbs, tool events, stderr, arguments, or output cross this seam.
         let allowed: Set<String> = ["phase", "reason", "backend", "source", "error_type", "error_case",
-            "error_domain", "error_code", "http_status", "exit_code"]
+            "classification_kind", "native_state", "rule", "claude_version",
+            "error_domain", "error_code", "http_status", "exit_code",
+            "underlying_1_domain", "underlying_1_code", "underlying_2_domain", "underlying_2_code",
+            "underlying_3_domain", "underlying_3_code"]
         var fields = payload.tags.filter { allowed.contains($0.key) }.mapValues { safe($0) }
         fields.merge(payload.extra.filter { Int($0.value) != nil || ["true", "false"].contains($0.value) }) { _, new in new }
         update(defaults) { state in
             state.errors.append(Failure(at: Date(), event: payload.event, fields: fields))
+            state.errors = Array(state.errors.suffix(100))
+        }
+    }
+
+    /// Agent diagnostics supply closed categories/counts only. No arguments, app selectors,
+    /// error text, successful tool output, or screenshots are retained in the export ledger.
+    static func recordAgentFailure(_ event: String, fields supplied: [String: String], defaults: UserDefaults = .standard) {
+        guard ["agent.tool_failed", "agent.run_diagnostic"].contains(event) else { return }
+        let categories: Set<String> = ["reason", "tool", "tool_family", "backend", "feature", "outcome",
+            "model_outcome", "runtime_outcome", "process_outcome", "error_type", "error_domain", "error_case", "tool_recovery"]
+        let numbers: Set<String> = ["call_index", "duration_ms", "error_code", "process_exit_code", "tool_calls",
+            "tool_completed", "tool_failed", "tool_incomplete", "tool_omitted", "tool_unknown"]
+        let booleans: Set<String> = ["helper_running_at_start", "helper_running_at_end"]
+        var fields: [String: String] = [:]
+        for (key, value) in supplied {
+            if categories.contains(key) { fields[key] = safe(value) }
+            else if numbers.contains(key), Int(value) != nil { fields[key] = value }
+            else if booleans.contains(key), ["true", "false", "unknown"].contains(value) { fields[key] = value }
+            else if ["operation_id", "root_operation_id", "task_id"].contains(key), UUID(uuidString: value) != nil { fields[key] = value }
+        }
+        update(defaults) { state in
+            state.errors.append(Failure(at: Date(), event: event, fields: fields))
+            state.errors = Array(state.errors.suffix(100))
+        }
+    }
+
+    /// Capture diagnostics are built only from fixed cases, numeric codes and OS metadata.
+    static func recordCapture(_ supplied: [String: String], defaults: UserDefaults = .standard) {
+        guard supplied["capture_outcome"] != "passed" || supplied["capture_source"] == "health_probe" else { return }
+        let categories: Set<String> = ["capture_source", "capture_outcome", "native_kind", "native_detail",
+            "failure_stage", "error_domain", "system_error_domain", "tool", "helper_version", "cli_version", "diagnostic_schema", "stderr_detail", "stderr_evidence", "recovery_decision"]
+        let ids: Set<String> = ["capture_id", "operation_id", "root_operation_id", "task_id"]
+        let numbers: Set<String> = ["capture_attempt", "attempt", "duration_ms", "helper_build", "helper_process_count",
+            "display_count", "target_window_count", "target_onscreen_count", "native_error_code", "rpc_error_code",
+            "error_code", "system_error_code", "exit_code", "stderr_native_code", "recovery_ax_lookup_code", "recovery_ax_restore_code",
+            "display_index", "image_width", "image_height"]
+        let booleans: Set<String> = ["native_code_present", "underlying_error_available", "helper_expected_path",
+            "helper_screen_granted_cached", "helper_accessibility_granted_cached", "sentient_screen_preflight", "stage_manager_enabled_cached",
+            "target_running", "target_hidden", "target_active", "recovery_open_dispatched", "recovery_ax_available",
+            "recovery_activated", "image_valid", "probe_requires_capture", "watchdog_fired"]
+        var fields: [String: String] = [:]
+        for (key, value) in supplied {
+            if ["native_detail", "stderr_detail"].contains(key), NativeComputerUseFailure.Detail(rawValue: value) != nil {
+                fields[key] = value
+            } else if categories.contains(key) { fields[key] = safe(value) }
+            else if ids.contains(key), UUID(uuidString: value) != nil { fields[key] = value }
+            else if numbers.contains(key), Int(value) != nil { fields[key] = value }
+            else if booleans.contains(key), ["true", "false"].contains(value) { fields[key] = value }
+        }
+        update(defaults) { state in
+            state.errors.append(Failure(at: Date(), event: "computer_use.capture", fields: fields))
             state.errors = Array(state.errors.suffix(100))
         }
     }

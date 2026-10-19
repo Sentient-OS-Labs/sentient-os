@@ -3,10 +3,9 @@
 //  Sentient OS macOS  ·  Ingestion/
 //
 //  A tiny "is the pipeline running?" flag, set by IterativeRun and ProactiveCycle (a counter, so
-//  overlapping legs nest safely). First user: Settings → System disables Reset while a run is
-//  active — wiping the store mid-run would leave high-water marks pointing past erased notes
-//  (history silently skipped forever). UI guard only; the hard generation-counter guarantee is
-//  the deferred Layer-2 hardening.
+//  overlapping legs nest safely). Coordinates analysis admission and idle-only setup.
+//  Reset and Uninstall cancel and drain work through ProcessingCoordinator before wiping data;
+//  this activity flag does not lock the user out of either action.
 //
 
 import Foundation
@@ -21,7 +20,11 @@ final class PipelineActivity {
     private(set) var activeRuns = 0
     var isRunning: Bool { activeRuns > 0 }
 
+    /// The analysis owner holds this synchronously across all legs and cancellation draining.
+    func acquire() { activeRuns += 1 }
+    func release() { activeRuns = max(0, activeRuns - 1) }
+
     /// Callable from any actor (the runs live off-main); hops to main for the observable write.
-    nonisolated static func begin() { Task { @MainActor in shared.activeRuns += 1 } }
-    nonisolated static func end() { Task { @MainActor in shared.activeRuns = max(0, shared.activeRuns - 1) } }
+    nonisolated static func begin() { Task { @MainActor in shared.acquire() } }
+    nonisolated static func end() { Task { @MainActor in shared.release() } }
 }

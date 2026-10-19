@@ -62,6 +62,10 @@ struct OnboardingResetChecks {
 // Compile only with FactoryReset.swift. These replace the destructive collaborators, never
 // their orchestration or Foundation preferences, so the test executes the production reset.
 enum SidekickInstructionStore { static func resetLearning() {} }
+@MainActor final class ComputerUseDoctor {
+    static let shared = ComputerUseDoctor()
+    func clear(defaults: UserDefaults) async { defaults.removeObject(forKey: "computerUse.lastDiagnostic.v1") }
+}
 @MainActor enum HostedConnectorSetup {
     static var active = false
     static func beginTeardown() async { active = true }
@@ -98,6 +102,16 @@ enum CodexAuth {
     static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding = true
     let scheduler = Scheduler()
+    let commandCoordinator = Coordinator()
+    let processing = ProcessingCoordinator.shared
+    @MainActor final class Coordinator {
+        let run = Run()
+        @MainActor final class Run {
+            let conversation = SidekickConversation.shared
+            func stop() {}
+            func stopAndDrain() async -> Bool { true }
+        }
+    }
     final class Scheduler {
         var needsSchedulerSetup = true
         func reevaluate() {}
@@ -114,6 +128,7 @@ enum SidekickHistory { static func reset() {} }
     static func reset(defaults: UserDefaults) { resetDefaults = defaults }
 }
 enum OvernightScheduler {
+    static let setupEnabledKey = "test.setupEnabled"
     static let firstCycleAtKey = "test.firstCycleAt"
     static let autoEnableFiredKey = "test.autoEnableFired"
     static let prodEnabledKey = "test.prodEnabled"
@@ -123,3 +138,24 @@ enum OvernightScheduler {
     func reset() {}
 }
 func Log(_ message: String) {}
+@MainActor final class SidekickConversation {
+    static let shared = SidekickConversation()
+    func beginMaintenance() -> Bool { true }
+    func endMaintenance() {}
+    func reset(defaults: UserDefaults) throws {}
+    func drainBackgroundWork() async {}
+}
+@MainActor final class ProcessingCoordinator {
+    static let shared = ProcessingCoordinator()
+    func suspend() async {}
+    func resumeMonitoring() {}
+    func reset() async {}
+}
+enum SidekickDiagnostics {
+    enum Stage { case reset }; enum Reason { case writeFailed, timeout }; enum Source { case reset }
+    static func failure(_ stage: Stage, reason: Reason, source: Source) {}
+}
+enum SourceHealth { static let readStatusKey = "test.sourceHealth" }
+enum AppleMailHealth { static let key = "test.mail"; static let needsRetryKey = "test.mailRetry" }
+enum AppleCalendarSource { static let issueKey = "test.calendar" }
+enum ProcessingPlan { static let key = "test.processing" }

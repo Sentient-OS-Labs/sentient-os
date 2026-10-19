@@ -22,7 +22,11 @@ nonisolated enum NativeComputerUseLab {
             "bundlePath": Bundle.main.bundlePath, "pid": ProcessInfo.processInfo.processIdentifier,
             "started": Date().timeIntervalSince1970]
         persist(result)
-        if env["LAB_SKIP_AUTOMATION_PROBE"] == "1" {
+        if command == "helper-takeover" || command.hasPrefix("doctor") {
+            // AEDeterminePermission can hang on a deliberately suspended foreign helper.
+            // The production gate performs this check after replacing it; preserve that order.
+            result["appleEventsBefore"] = "checked_by_production_gate_after_takeover"
+        } else if env["LAB_SKIP_AUTOMATION_PROBE"] == "1" {
             result["appleEventsBefore"] = "diagnostic probe skipped; OS authorization unchanged"
         } else if command.hasPrefix("claude") || command == "coordinator" {
             result["appleEventsBefore"] = "not_required_for_this_test"
@@ -38,6 +42,166 @@ nonisolated enum NativeComputerUseLab {
         do {
             switch command {
             case "preflight": break
+            case "doctor-chatgpt", "doctor-claude":
+                let saved = UserDefaults.standard.object(forKey: ComputerUseDoctor.savedReportKey)
+                defer {
+                    if let saved { UserDefaults.standard.set(saved, forKey: ComputerUseDoctor.savedReportKey) }
+                    else { UserDefaults.standard.removeObject(forKey: ComputerUseDoctor.savedReportKey) }
+                }
+                let provider: ModelBackend = command == "doctor-claude" ? .claude : .chatgpt
+                let previousCheck = ComputerUseDoctor.shared.report?.id
+                let prompt = """
+                Verify that an unnecessary computer-use diagnostic is suppressed. This is a tool-contract test.
+                Call the available sentient_native.diagnose_computer_use tool exactly once with no arguments,
+                and no other app, shell, web or computer tools. No failures have occurred in this run, so
+                the expected status is not_needed. Do not manufacture failures to make a test eligible.
+                Do not inspect or modify any customer app, account, file or permissions. Do not
+                send any diagnostic report. If the returned status is not_needed, reply NOT_NEEDED and
+                end with STATUS: DONE. Otherwise explain the mismatch and end with STATUS: COULD_NOT.
+                """
+                result["reply"] = try await ModelBackend.$runOverride.withValue(provider) {
+                    try await FrontierRun.runAgentCommand(prompt, timeout: 180, onLine: { appendLine($0) })
+                }
+                let stream = try String(contentsOf: output.deletingPathExtension().appendingPathExtension("stream.txt"), encoding: .utf8)
+                guard ComputerUseDoctor.shared.report?.id == previousCheck, !ComputerUseDoctor.shared.isRunning,
+                      stream.contains("diagnose_computer_use"), stream.contains("not_needed"),
+                      (result["reply"] as? String)?.contains("NOT_NEEDED") == true else { throw LabError.invalidCapture }
+                result["diagnosticSuppressed"] = true
+            case "doctor":
+                let saved = UserDefaults.standard.object(forKey: ComputerUseDoctor.savedReportKey)
+                defer {
+                    if let saved { UserDefaults.standard.set(saved, forKey: ComputerUseDoctor.savedReportKey) }
+                    else { UserDefaults.standard.removeObject(forKey: ComputerUseDoctor.savedReportKey) }
+                }
+                let fault = env["LAB_DIAGNOSTIC_FAULT"] ?? "none"
+                let expected: ComputerUseCheckReport.Outcome
+                switch fault {
+                case "disconnect":
+                    ComputerUseDoctor.shared.testProbeFailures = [.init(kind: .connection, code: nil, detail: .disconnected, stage: .transport)]
+                    expected = .repaired
+                case "persistent":
+                    ComputerUseDoctor.shared.testProbeFailures = Array(repeating: .init(kind: .connection, code: nil, detail: .disconnected, stage: .transport), count: 2)
+                    expected = .needsAttention
+                case "permission":
+                    ComputerUseDoctor.shared.testProbeFailures = [.init(kind: .permission, code: -1743, detail: .permissionDenied, stage: .probe)]
+                    expected = .permissionsNeeded
+                case "focus":
+                    ComputerUseDoctor.shared.testProbeFailures = [.init(kind: .unknown, code: nil, detail: .focusChanged, stage: .action)]
+                    expected = .interrupted
+                case "cancel": expected = .cancelled
+                default: expected = .passed
+                }
+                ComputerUseDoctor.shared.start()
+                if fault == "cancel" {
+                    Task { try? await Task.sleep(for: .milliseconds(800)); ComputerUseDoctor.shared.cancel() }
+                }
+                while ComputerUseDoctor.shared.isRunning { try await Task.sleep(for: .milliseconds(100)) }
+                guard let report = ComputerUseDoctor.shared.report else { throw LabError.invalidCapture }
+                result["diagnostic"] = try JSONSerialization.jsonObject(with: report.encoded())
+                result["injectedFault"] = fault
+                result["expectedOutcome"] = expected.rawValue
+                result["repairClaimVerified"] = report.repairVerified == (expected == .repaired)
+                persist(result)
+                if let seconds = env["LAB_KEEP_OPEN"].flatMap(Double.init) { try await Task.sleep(for: .seconds(min(seconds, 300))) }
+                guard report.outcome == expected, report.repairVerified == (expected == .repaired),
+                      !["permission", "focus", "cancel"].contains(fault) || !report.repairAttempted else { throw LabError.invalidCapture }
+            case "capture", "helper-takeover":
+                // Explicit test-only capture through the current model-free session API.
+                // No production health UI/recovery loop, saved pixels, or model call.
+                let bootstrap = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                bootstrap.isReleasedWhenClosed = false
+                bootstrap.title = "Sentient backend test"
+                let captureText = "Sentient native capture check"
+                let label = NSTextField(labelWithString: captureText)
+                label.frame = NSRect(x: 20, y: 60, width: 320, height: 40)
+                bootstrap.contentView?.addSubview(label)
+                bootstrap.center(); bootstrap.makeKeyAndOrderFront(nil)
+                defer { bootstrap.close() }
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                for _ in 0..<20 where !NSApp.isActive { try await Task.sleep(for: .milliseconds(100)) }
+                let lease = try await CodexRuntime.sharedRuntimeLease()
+                defer { lease.unlock() }
+                let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+                if command == "helper-takeover" {
+                    let foreign = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+                        .filter { !$0.isTerminated && $0.bundleURL?.standardizedFileURL != configuration.appURL.standardizedFileURL }
+                    guard !foreign.isEmpty else { throw LabError.missingConflict }
+                    result["foreignHelpersBefore"] = foreign.count
+                    await CodexSetup.shared.refreshInstalled()
+                    let gate = ComputerUseGate.shared
+                    gate.refresh()
+                    await gate.awaitAutomationRefresh()
+                    result["passiveConflictHidden"] = gate.nativePermissionError == nil
+                    result["passiveCheckPreservedOtherHelper"] = foreign.allSatisfy { !$0.isTerminated }
+                    persist(result)
+                    // A fixture timeout must distinguish a runtime stall from macOS setup
+                    // legitimately waiting for a person. Read-only; never alter TCC grants.
+                    let gateMonitor = Task { @MainActor in
+                        for _ in 0..<40 {
+                            let snapshot: [String: Any] = [
+                                "allRequiredGranted": gate.allRequiredGranted,
+                                "automation": String(describing: gate.automation),
+                                "checkingAutomation": gate.checkingAutomation,
+                                "requestingAutomation": gate.requestingAutomation,
+                                "helperAccessibility": gate.helperAccessibility,
+                                "helperScreen": gate.helperScreen,
+                                "sentientScreen": gate.sentientScreen,
+                                "runtimeInstalled": gate.setup.ready,
+                                "codexReady": CodexSetup.shared.computerUseReady,
+                                "voice": String(describing: gate.micSpeech),
+                                "voiceOffered": UserDefaults.standard.bool(forKey: ComputerUseGate.micSpeechOfferedKey),
+                                "nativePermissionError": gate.nativePermissionError ?? ""
+                            ]
+                            if let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys]) {
+                                try? data.write(to: root.appendingPathComponent("evidence/gate-status.json"), options: .atomic)
+                            }
+                            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        }
+                    }
+                    defer { gateMonitor.cancel() }
+                    // Exactly the preparation used by the real prompt-box task, with all
+                    // existing macOS grants. No model, credential edits or user-app actions.
+                    try await gate.waitUntilReady()
+                    result["foregroundGateReady"] = gate.allRequiredGranted
+                    result["foreignHelpersTerminated"] = foreign.allSatisfy(\.isTerminated)
+                    let own = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration, stoppingConflictingHelpers: true)
+                    let reused = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration, stoppingConflictingHelpers: true)
+                    result["privateHelperReused"] = !own.isTerminated && own.processIdentifier == reused.processIdentifier
+                    result["privateHelperPath"] = own.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL
+                    guard gate.allRequiredGranted, gate.nativePermissionError == nil,
+                          foreign.allSatisfy(\.isTerminated), !own.isTerminated,
+                          own.processIdentifier == reused.processIdentifier else { throw LabError.takeoverFailed }
+                }
+                let task = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: configuration)
+                defer { OpenAIComputerUseRuntime.shared.endTask(task) }
+                let session = try await OpenAIComputerUseSession.open(configuration)
+                do {
+                    let arguments = try JSONSerialization.data(withJSONObject: ["app": Bundle.main.bundleURL.path])
+                    let data = try await session.call("get_app_state", arguments: arguments)
+                    guard let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        throw LabError.invalidCapture
+                    }
+                    try OpenAIComputerUseProbe.validateResult(reply, requiresCapture: true)
+                    let content = reply["content"] as? [[String: Any]] ?? []
+                    guard content.contains(where: { ($0["text"] as? String)?.contains(captureText) == true }) else {
+                        throw LabError.invalidCapture
+                    }
+                    if env["LAB_CAPTURE_DETAILS"] == "1" {
+                        // Only this app-owned synthetic window; never retain image bytes.
+                        let details = content.compactMap { $0["text"] as? String }
+                        try JSONSerialization.data(withJSONObject: details, options: .prettyPrinted)
+                            .write(to: root.appendingPathComponent("evidence/synthetic-state.json"))
+                        try await session.catalog().write(to: root.appendingPathComponent("evidence/native-catalog.json"))
+                    }
+                    try Task.checkCancellation()
+                    await session.close()
+                    result["captureHealth"] = "passed"
+                    result["captureVerified"] = true
+                } catch {
+                    await session.close()
+                    throw error
+                }
             case "coordinator":
                 guard Bundle.main.bundleIdentifier == "ai.sentient.cua-controller-validation" else {
                     result["error"] = "Controller tests require a separate defaults domain"; break
@@ -231,6 +395,6 @@ nonisolated enum NativeComputerUseLab {
     private static func status(_ value: AgentStatus) -> String {
         switch value { case .done: "done"; case .none: "none"; case .couldNot(let reason): "couldNot: " + reason }
     }
-    private enum LabError: Error { case missingPrompt }
+    private enum LabError: Error { case missingPrompt, invalidCapture, missingConflict, takeoverFailed }
 }
 #endif

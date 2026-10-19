@@ -15,18 +15,22 @@ views of one task, and there is one shared computer/connector task at a time. Do
 This doc covers the brain and the backend: the coordinator, the run model, the hotkey, voice, the
 screen stills, and the prompt. The window, the click-through mechanics, and the visual are in
 `Documentation - Sidekick - Notch Window & Visual.md`.
+Durable messages, history, context compaction, memory and their verification are documented in
+`Documentation - Sidekick - Conversation Backend.md`. The conversation presentation is separate
+UI work; these backend seams already survive provider-process and Home-view lifetimes.
 
 ## Files
 
 | File | Job |
 |---|---|
 | `CommandCoordinator.swift` | The app-lifetime brain: owns the one shared run, the hotkey, and voice; drives `phase` (`NotchPhase`), the press → voice or type flow, `submit()`, STOP and cancel, adopted card runs, the notch-as-a-button seams, the onboarding notch demo, and the display anchor. |
+| `SidekickDiscovery.swift` | Local ready-hint acknowledgement keys and a bounded count of accepted notch/voice submissions, used to retire Home's learning cue. No task content or telemetry. |
 | `CommandRunModel.swift` | Routes ONE task through the connector leg or `FrontierRun.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
 | `SidekickHotkeyMonitor.swift` | The zero-permission global hotkey: NSEvent `flagsChanged` monitors (global + local) reading the right-key device bit. Press / hold-confirmed / release. |
 | `VoiceCapture.swift` · `QuickTranscriptionEngine.swift` · `SpeechAnalyzerEngine.swift` · `SFSpeechRecognizerEngine.swift` | Voice: permissions, engine selection (SpeechAnalyzer on macOS 26+, SFSpeechRecognizer on 15), start / stop-and-transcribe / cancel. |
 | `ScreenCapture.swift` | A still of EVERY display at fire time (main first), attached to the codex run so "finish this" resolves against real pixels. |
 | `SidekickInteraction.swift` · `SidekickToolServer.swift` | Per-attempt recovery tools, instruction updates, reporting capability, waiting state and task/attempt correlation. |
-| `SidekickTaskSummary.swift` | Stages a generalized workflow phrase and reviews it separately before passing approved text to analytics. |
+| `SidekickTaskSummary.swift` | Stages intent/final workflow phrases, validates their format locally and reports one task outcome and description without additional inference. |
 | `NotchWindowController.swift` · `NotchView.swift` · `NotchShape.swift` · `NotchSpace.swift` · `SpinningLogo.swift` | The window and visual (the other doc). |
 
 `AppState` owns one `CommandCoordinator` and one `NotchWindowController`. It starts both once at normal launch, or defers both until an eligible pending computer-use upgrade finishes. Closing/minimizing setup cannot start them; native migration can explicitly defer setup while first-use gates remain enforced.
@@ -37,7 +41,7 @@ screen stills, and the prompt. The window, the click-through mechanics, and the 
 hotkey hold / tap ─► SidekickHotkeyMonitor ─┐
 notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► router / connector leg / FrontierRun.runAgentCommand
 home PromptBar ─────────────────────────────┘        │ owns phase (NotchPhase) + VoiceCapture
-card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run; the work stays in the card's Task)
+card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run and transfers its Task to the app)
                                                      ▼
                                           NotchWindowController renders coordinator.phase + run
 ```
@@ -69,7 +73,10 @@ fireable method: computer, gmail, calendar; not research) adopt THE run: `run.ad
 `isRunning` and seeds the status with the card's title, the notch rises in `.running`, the card's raw
 codex lines tee through `run.externalPush` (same cleaning), and every exit completes the adoption exactly
 once via `run.completeExternal` (no scoreboard or analytics from here; the executor records every card
-fire itself). `stop()` on an adopted run delegates to the card's own cancel. So `run.isRunning` locks
+fire itself). `ownExternalTask` retains the card task in the app-owned run. Home can disappear or
+be recreated without cancelling work; persisted card completion precedes releasing the run lock.
+`stop()` cancels that owned task (the initial callback covers the interval before transfer).
+So `run.isRunning` locks
 every other entry point, other fireable cards dim, `beginExternalRun` returns false while anything runs,
 and every STOP surface (card, notch, bar, a fresh hotkey press) cancels the one task.
 
@@ -81,12 +88,25 @@ monitor whenever Sentient is frontmost, and a fresh hotkey press over other apps
 a keyDown tap is Input-Monitoring-gated). `stop()` unifies STOP, Esc, and the hotkey press.
 
 **Completion.** `run.onFinished` → `.finishing(outcome)`: ✓ and stopped flourish for 1.5 s, a failure
-holds 5 s (its caption carries the ✗ reason). Completion is sentinel-honest: the command prompt demands
-a final `STATUS: DONE` / `STATUS: COULD_NOT` line; `AgentStatus.parse` routes DONE → "✓ done", no
-sentinel → an unconfirmed failed attempt; COULD_NOT → a real failure with the reported reason.
+holds 5 s (its caption carries the ✗ reason). `message_user` final answers include the explicit
+`completion: "done" | "could_not"` field. `AgentStatus.resolve` checks this task-scoped claim after a
+clean provider exit, with the exact final `STATUS: DONE` / `STATUS: COULD_NOT` line as a compatibility
+fallback. A refusal from either source wins over a contradictory DONE. Without either source the
+outcome remains unconfirmed; saving a plain message or exiting zero alone never means success.
+Substantive tools, new provider legs and questions invalidate earlier structured completion claims.
+Failed/cancelled providers and connector action-evidence checks still control the actual outcome.
+Visible final answers omit a standalone terminal STATUS protocol line. Quoted and code examples
+remain intact, and this display cleanup does not create or alter a completion claim.
 
 `setPhase` bumps a token that every delayed transition checks, so a stale timer can never clobber a
 newer phase.
+
+**Diagnostic consent.** An eligible last-resort computer-use check uses the ordinary inline/notch
+question UI. `ask_user` accepts the optional `computer_use_check_id` returned by the native broker;
+the app substitutes its own fixed explanation and **Run check / Not now** choices. Only a real
+affirmative answer produces a task-scoped, single-use authorization. The question does not open the
+test window or reset the connection. Declining/cancelling prevents another offer during that task.
+Browser-specific problems and routine interrupted actions keep using normal recovery, not diagnostics.
 
 ## The run model (`CommandRunModel`)
 
@@ -114,16 +134,52 @@ startup banner, the prompt echo, reasoning, counts, and raw `STATUS:` lines; kee
 tool lines, the last two joined as `statusLine`. The confirmation-policy dump's tail becomes "Thinking
 through your task".
 
+The running notch renders raw tool-status lines through the same `SidekickActivityPresentation`
+labels and cached app icons used by chat. Its observable conversation projection reads one indexed
+latest-activity row for the active task; it never scans the full activity history. Caption changes
+blur-dissolve (fade with Reduce Motion). Agent narration, connection notices, read-back and memory
+status retain their existing priority. Ending/resetting a task clears its live activity projection.
+
+The notch always uses the full `SpinningLogo` brand mark, including idle and reduced-motion states.
+It rotates slowly before work (13 seconds per turn, 30 Hz) and faster while running (2 seconds,
+60 Hz). Hidden, Reduce Motion and Low Power states pause the same artwork rather than substituting
+a different ring/dot design. Pausing/resuming retains the current angle.
+
+Both ChatGPT and Claude computer runs emit activity through `ComputerUseStream`; Claude's bridge
+provides narration only. `SidekickActivityLab` (`SENTIENT_SELFTEST=sidekickbackend`,
+`LAB_SIDEKICK_COMMAND=activity`, `LAB_SIDEKICK_PROVIDER=chatgpt|claude_bridge`) validates the real
+authenticated providers against six in-memory native tool calls, temporary conversation storage,
+and the exact shared notch projection. It checks label/icon identity parity and hidden message/usage
+wrappers without launching the computer-use helper or touching real apps. Each provider needs its
+normal login; results include content-safe status snapshots for comparison.
+
+Message previews include a native reply field and Open in Sentient button. The field shares Home's
+draft; submission uses the normal coordinator gate with the displayed message's exact reply reference.
+Return sends inline without opening Home, and rejected/active-task submissions retain the draft.
+Selected-text Reply targets that quote and focuses the inline field. Auto-presentation remains
+non-key; only editing requests keyboard focus. Focus or an unsent draft holds attention so a timeout
+or newer message cannot replace the preview mid-reply. Closing keeps the draft/reference for Home.
+`test_sidekick_notch_reply.py` exercises native editing/Return and renders the real view in an inert
+nonactivating panel; attention and layout fixtures cover timing, coalescing and bounded reading space.
+
 `startOnboardingDemo()` performs the film step's scripted shopping story through the real cleaner with
 nothing real underneath (no codex, no screenshots, no scoreboard).
 
 ## The prompt (`CommandRunModel.commandPrompt`)
 
 The command prompt includes the requested task, a speech-transcription note when appropriate,
-screenshot context for “this” and “here,” the user's standing Sidekick instructions, and the
+screenshot context for “this” and “here,” the user's standing Sidekick memory, and the
 knowledge-folder path. It asks the model to read knowledge with file tools, act through computer-use
 tools, verify the result, and finish with the `STATUS` sentinel. Retrieved pages, messages and other
 content are explicitly framed as data rather than new instructions.
+`SidekickInteraction` injects the current memory snapshot, bounded recent conversation and reply
+reference across execution routes. Previous screenshots and raw tool traces are never injected.
+The model sends explicit Markdown through `message_user` and must finish with a user-facing answer
+and structured completion field. The claim is recorded only after the answer commits, is never
+accepted while substantive tools are pending, and does not replay work if the final STATUS line is
+omitted. The app separately persists the resolved execution outcome and handles missing-answer
+fallbacks. `Scripts/test_sidekick_run.py` and `Scripts/test_sidekick_tools.py` cover final outcome
+precedence, stale-claim invalidation, exact RPC replay, save failures and legacy replies.
 
 At dispatch, `FrontierRun` appends the selected runtime's manual once. Every active backend uses
 `OpenAIComputerUse.promptRules`; custom models also receive `CustomProvider.computerUsePromptRules`.
@@ -192,18 +248,17 @@ Technical diagnostics correlate operation scopes and retry attempts through app-
 names use a fixed vocabulary or a broad family; model and process outcomes are recorded separately.
 Recovery reports omit question, answer and error text. See the diagnostics guide for reporting gates.
 
-Eligible user-requested Sidekick attempts can also provide a short workflow description for product
-analytics. The selected AI calls `describe_task_usage` after actions and instruction updates, before
-the final status. This bookkeeping does not mark success and is omitted from the progress display.
-Further actions or user answers invalidate a staged phrase. Completion consumes it once and releases
-the task normally while a separate, tool-free model call reviews only the candidate phrase.
+Eligible user-requested Sidekick attempts can provide a short workflow description for product
+analytics. The selected task model calls `describe_task_usage` with intent before actions and a final
+phrase before finishing. This bookkeeping does not mark success or appear as progress. Later activity
+invalidates a final phrase; a valid original intent can describe an interrupted attempt. Null or
+rejected replacements withdraw earlier text. Task completion consumes the report once.
 
-Local checks and review reject malformed, identifying or sensitive descriptions. Only exact approved
-text reaches the typed analytics sink; a missing or failed review reports an unavailable summary
-without text or a rejection reason. This is a model-based safeguard, not a guarantee of anonymity.
-Task descriptions remain enabled in Release independently of the extended-analytics switch, with
-disclosure in onboarding and Settings. Debug skips submission and background review. See
-`Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md` and the repository's `SECURITY.md`.
+Local checks constrain phrase length, word count and characters. There is no separate model review.
+The prompt requires generalized descriptions without identifying or sensitive details, but format
+checks and model instructions do not guarantee anonymity. Task outcomes, fixed interruption reasons
+and descriptions remain enabled in Release independently of extended analytics, as disclosed in
+onboarding and Settings. Debug skips submission. See the diagnostics guide and `SECURITY.md`.
 
 ## Rules
 

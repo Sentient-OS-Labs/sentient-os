@@ -107,22 +107,8 @@ nonisolated enum SlackConnector {
     }
 
     static func validateClassification(_ tools: [ConnectorRegistry.ClassifiedTool]) throws {
-        let expected = categories(backend: .claude)
-        guard tools.count == expected.count, Set(tools.map(\.name)).count == tools.count else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "slack_inventory")
-        }
-        for tool in tools {
-            #if DEBUG
-            let bare = String(tool.name.dropFirst(claudePrefix.count))
-            if let wanted = expected[bare], wanted != tool.category {
-                Log("Slack category mismatch: \(bare), expected=\(wanted.rawValue), observed=\(tool.category.rawValue)")
-            }
-            #endif
-            guard tool.name.hasPrefix(claudePrefix),
-                  expected[String(tool.name.dropFirst(claudePrefix.count))] == tool.category else {
-                throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "slack_category")
-            }
-        }
+        try ConnectorClassificationDiagnostics.validateReviewed(tools, expected: categories(backend: .claude),
+                                                               prefix: claudePrefix, slug: slug, rule: .slack)
     }
 
     static func bareName(_ call: MCPCallEvidence.Receipt, backend: ModelBackend) -> String? {

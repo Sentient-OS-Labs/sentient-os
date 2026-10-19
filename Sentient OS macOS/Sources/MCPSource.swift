@@ -141,11 +141,12 @@ enum MCPSource {
     /// `onEvent` gets `(slug, index, count, event)` so the takeover can map windows onto its
     /// bar; the scheduler ignores it and reads the outcomes.
     static func runAll(
+        selectedSlugs: [String]? = nil,
         onEvent: @Sendable @escaping (String, Int, Int, Progress) -> Void = { _, _, _, _ in }
     ) async -> (outcomes: [LegOutcome], hitUsageLimit: Bool) {
         PipelineActivity.begin()
         defer { PipelineActivity.end() }
-        let slugs = kbSlugs()
+        let slugs = selectedSlugs ?? kbSlugs()
         var outcomes: [LegOutcome] = []
         var hitUsageLimit = false
         for (index, slug) in slugs.enumerated() {
@@ -178,6 +179,8 @@ enum MCPSource {
                 let reason: String
                 if ConnectorReadFailure.isConnectionFailure(error) {
                     reason = "connector_auth"
+                } else if case MCPError.invalidResponse = error {
+                    reason = "invalid_response"
                 } else {
                     reason = CodexFailureReason.classify(error).rawValue
                 }
@@ -203,6 +206,7 @@ enum MCPSource {
     /// classified failure reason), duration, token totals. Curated slug or "other" — never a
     /// user-authored name. Extended tier; a no-op in DEBUG and when analytics are opted out.
     private static func signalRead(slug: String, outcome: String, started: Date) {
+        SourceHealth.recordReadOutcome(source: slug, outcome: outcome == "quiet" ? "ok" : outcome)
         let tokens = meter.withLock { $0.removeValue(forKey: slug) } ?? (0, 0)
         // inCount/outCount are model token totals — named around the diagnostics vocabulary
         // rule (a key containing "token" is redacted by Sentry's server-side scrubbing; the

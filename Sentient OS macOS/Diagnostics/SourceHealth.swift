@@ -17,6 +17,24 @@ import Synchronization
 
 nonisolated enum SourceHealth {
     private static let lock = Mutex(())
+    static let readStatusKey = "sources.readStatus"
+
+    /// Closed technical outcomes, independent of telemetry. No content or account identifiers.
+    static func recordReadOutcome(source: String, outcome: String) {
+        let source = Diagnostics.source(source)
+        let allowed = ["ok", "incomplete", "time_cap", "connector_auth", "invalid_response", "skipped",
+                       "unknown", "usage_limit", "timeout_ours", "stream_disconnect"]
+        lock.withLock { _ in
+            var values = readStatuses()
+            values[source] = allowed.contains(outcome) ? outcome : "incomplete"
+            if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: readStatusKey) }
+        }
+    }
+
+    static func readStatuses() -> [String: String] {
+        guard let data = UserDefaults.standard.data(forKey: readStatusKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+    }
     private static let key = "stats.sourceHealth"   // [String: Int]
 
     /// The last listing count we saw for a bucket key (a source's full eligible set, sampled every

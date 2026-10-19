@@ -13,7 +13,7 @@
 //  readout carry the rest.
 //
 //  On by default: an unset `doubletap.enabled` means on, so a fresh install and a Release build
-//  (which has no Dev Tools) ship with Double Tap live; Dev Tools keeps a dev-only off switch, the
+//  (which has no Dev Tools) enable Double Tap after the first analysis completes; Dev Tools keeps a dev-only off switch, the
 //  route picker, and the timing readout. The key listener and the two-presses-in-a-window test
 //  live in CommandCoordinator: one press opens the notch, a second inside `window` retracts it and
 //  fires this instead of the type field (the notch waits out the window before becoming key, so
@@ -40,6 +40,10 @@ final class DoubleTap {
     static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: enabledKey) == nil || UserDefaults.standard.bool(forKey: enabledKey)
     }
+
+    /// Keep this separate from the preference: an early double tap must be consumed silently,
+    /// rather than falling back to Sidekick. The persisted milestone also survives relaunch.
+    static var initialAnalysisComplete: Bool { ProcessingPlan.initialCompletedAt() != nil }
 
     /// Screenshots are shrunk to this long edge before upload; a model downscales past ~2000 px
     /// anyway, so a full Retina frame only costs upload time.
@@ -69,6 +73,7 @@ final class DoubleTap {
     /// flight is ignored rather than restarted: cancelling the first run would fade the ring the
     /// second one just started, and the paste would arrive twice.
     func start(completion: @escaping @MainActor (Result) -> Void) {
+        guard Self.initialAnalysisComplete else { completion(.stopped); return }
         guard task == nil else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
         let provider = DoubleTapProvider.current
         let runID = DiagnosticHistory.begin(.doubleTap, provider: provider.rawValue,

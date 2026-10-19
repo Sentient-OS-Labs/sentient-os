@@ -55,11 +55,24 @@ nonisolated enum CodexFailureReason: String, Sendable {
     case sandboxDenied    = "sandbox_denied"
     case spawnFailed      = "spawn_failed"
     case timeoutOurs      = "timeout_ours"
+    case screenCapture    = "screen_capture"
+    case noWindows        = "no_windows"
     case unknown          = "unknown"
 
     /// Classify a typed spine error. Typed cases are certain; `notAvailable(.notWorking(detail))`,
     /// `exitFailure(_, message)` and `badEnvelope(message)` fall through to the text classifier.
     static func classify(_ error: Error) -> CodexFailureReason {
+        if case VaultGenerator.VaultError.interrupted = error { return .timeoutOurs }
+        if let failure = error as? NativeComputerUseFailure {
+            switch failure.kind {
+            case .capture: return .screenCapture
+            case .noWindows: return .noWindows
+            case .permission: return .sandboxDenied
+            case .connection: return .streamDisconnect
+            case .timeout: return .timeoutOurs
+            case .unknown: return .unknown
+            }
+        }
         switch error {
         case CodexCLI.CLIError.notAvailable(.notInstalled):          return .notInstalled
         case CodexCLI.CLIError.notAvailable(.notWorking(let d)):     return classify(text: d)

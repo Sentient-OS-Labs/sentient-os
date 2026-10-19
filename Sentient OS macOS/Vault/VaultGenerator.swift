@@ -48,9 +48,8 @@ actor VaultGenerator {
     struct ResumeToken: Sendable, Codable {
         let sessionID: String?
         let stagingPath: String
-        /// UPDATE only (B11 freshness check): the live vault's fingerprint captured when staging was
-        /// seeded, carried across a usage-limit resume so the swap can still detect a concurrent
-        /// editor edit made during the (possibly multi-attempt) run. nil for a build.
+        /// Live-vault fingerprint at the start of a build/update, carried across retries so
+        /// publishing can detect user edits made while analysis runs in the background.
         var vaultFingerprint: String? = nil
         /// Corpus slicing (1.0.1): the next UNFED slice of the staging dir's corpus snapshot.
         /// nil = a pre-slicing or single-slice token — session-resume only, nothing left to feed.
@@ -58,10 +57,14 @@ actor VaultGenerator {
         /// worth keeping even without a session id), and `sessionID` (when present) belongs to
         /// slice sliceIndex - 1, still in flight.
         var sliceIndex: Int? = nil
+        /// Persist boundaries so an app update cannot skip/repeat slices of an older resume.
+        var sliceBudget: Int? = nil
+        var sliceItemLimit: Int? = nil
         /// Exact accepted inputs for safe cleanup after a resumed merge. Optional for older tokens.
         var inputSourceIDs: [String]? = nil
         /// Only survivor summaries, keyed by opaque Mail identities. Rechecked before resuming.
         var mailInputHashes: [String: String]? = nil
+        var acceptedInputHashes: [String: String]? = nil
         /// CLI sessions only exist in the runtime that created them. Older tokens have no
         /// scope and must restart from the retained summaries, never import a CLI session.
         var sessionScope: String? = nil
@@ -81,10 +84,12 @@ actor VaultGenerator {
     enum VaultError: LocalizedError {
         case empty
         case usageLimit(message: String, resume: ResumeToken)
+        case interrupted(resume: ResumeToken)
 
         var errorDescription: String? {
             switch self {
             case .empty: return "The cloud returned no vault content."
+            case .interrupted: return "This knowledge-base batch took too long. Completed batches are saved. Run analysis again to continue."
             case .usageLimit(let message, _):
                 return "Your AI hit its usage limit; try again later and the run resumes where it left off. (\(message.prefix(160)))"
             }
@@ -146,7 +151,10 @@ actor VaultGenerator {
     /// swap — the vault ends up with staging's contents and the old vault is removed as one operation;
     /// on ANY throw the existing vault is left intact (and staging survives for a retry). Falls back to
     /// a plain move when no vault exists yet (first build).
-    static func swapStagingIntoVault(_ staging: URL) throws {
+    static func swapStagingIntoVault(_ staging: URL, expectedFingerprint: String? = nil) throws {
+        if let expectedFingerprint, vaultFingerprint(vaultRoot) != expectedFingerprint {
+            throw VaultCloud.CloudError.vaultChanged
+        }
         let fm = FileManager.default
         let root = vaultRoot
         try WritingStyle.preserve(in: staging, from: root)
@@ -182,12 +190,17 @@ actor VaultGenerator {
     /// mapping a usage limit to a resumable `VaultError.usageLimit` carrying the staging path. Shared
     /// by build + update so both get identical resume semantics.
     func runCodexInStaging(_ invocation: CodexCLI.Invocation, staging: URL,
+                           sliceIndex: Int? = nil, sliceBudget: Int? = nil, sliceItemLimit: Int? = nil,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
                            onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         var invocation = invocation
         invocation.claudeModel = .opus     // the Claude engine's heavy leg: vault work earns Opus
         let backend = ModelBackend.current
         let sessionScope = ResumeToken.scope(for: backend)
+        // A timeout never resumes half-written files. Keep the last completed boundary on
+        // the same volume, restore it after the child has stopped, and replay only this slice.
+        let checkpoint = try sliceIndex.map { _ in try VaultSliceCheckpoint(staging: staging) }
+        defer { checkpoint?.discard() }
         onProgress(.calling)
         let poller = Task.detached {
             while !Task.isCancelled {
@@ -206,7 +219,12 @@ actor VaultGenerator {
             Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path,
+                                                            sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
                                                             sessionScope: sessionScope))
+        } catch CodexCLI.CLIError.timedOut where checkpoint != nil {
+            try checkpoint!.restore()
+            throw VaultError.interrupted(resume: ResumeToken(sessionID: nil, stagingPath: staging.path,
+                sliceIndex: sliceIndex, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit, sessionScope: sessionScope))
         }
     }
 
@@ -225,13 +243,23 @@ actor VaultGenerator {
     ) async throws -> Result {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await generatePinned(notes: notes, resume: resume?.matchingRuntime(backend),
-                                     onProgress: onProgress, onLine: onLine)
+            let matching = resume?.matchingRuntime(backend)
+            let baseline = matching?.vaultFingerprint ?? Self.vaultFingerprint(Self.vaultRoot)
+            do {
+                return try await generatePinned(notes: notes, resume: matching, baseline: baseline,
+                                                onProgress: onProgress, onLine: onLine)
+            } catch let VaultError.usageLimit(message, token) {
+                var token = token; token.vaultFingerprint = baseline
+                throw VaultError.usageLimit(message: message, resume: token)
+            } catch let VaultError.interrupted(token) {
+                var token = token; token.vaultFingerprint = baseline
+                throw VaultError.interrupted(resume: token)
+            }
         }
     }
 
     private func generatePinned(
-        notes: [CloudNote], resume: ResumeToken?,
+        notes: [CloudNote], resume: ResumeToken?, baseline: String,
         onProgress: @Sendable @escaping (Progress) -> Void,
         onLine: (@Sendable (String) -> Void)?
     ) async throws -> Result {
@@ -253,6 +281,8 @@ actor VaultGenerator {
         // wrote. A mid-sequence resume re-slices the staging SNAPSHOT, never a fresh CycleStore
         // fetch (newest-first ordering would shift every boundary; see CorpusSlicer.saveCorpus).
         let slices: [[CloudNote]]
+        let sliceBudget = resume?.sliceBudget ?? (resume == nil ? CorpusSlicer.mergeBudget : CorpusSlicer.budget)
+        let sliceItemLimit = resume?.sliceItemLimit ?? (resume == nil ? CorpusSlicer.maximumItems : Int.max)
         var next: Int                               // the next unfed slice
         if let resume {
             if let idx = resume.sliceIndex {
@@ -262,7 +292,7 @@ actor VaultGenerator {
                     try? fm.removeItem(at: staging)
                     return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
                 }
-                slices = CorpusSlicer.slice(corpus)
+                slices = CorpusSlicer.slice(corpus, budget: sliceBudget, maximumItems: sliceItemLimit)
                 next = min(idx, slices.count)
             } else {
                 // Pre-slicing / single-slice token: session-resume only. If that session never wrote
@@ -277,11 +307,11 @@ actor VaultGenerator {
                 next = 0
             }
         } else {
-            slices = CorpusSlicer.slice(notes)
+            slices = CorpusSlicer.slice(notes, budget: sliceBudget, maximumItems: sliceItemLimit)
             next = 0
+            try CorpusSlicer.saveCorpus(notes, in: staging)
             if slices.count > 1 {
-                try CorpusSlicer.saveCorpus(notes, in: staging)
-                Log("VaultGenerator: corpus sliced into \(slices.count) parts (budget \(CorpusSlicer.budget) bytes)")
+                Log("VaultGenerator: corpus sliced into \(slices.count) parts (budget \(sliceBudget) bytes)")
             }
         }
 
@@ -314,7 +344,9 @@ actor VaultGenerator {
             invocation.timeout = 3_600
             invocation.diag = ["slices": "\(max(slices.count, 1))", "slice_index": "\(max(next - 1, 0))"]
             do {
-                record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
+                record(try await runCodexInStaging(invocation, staging: staging,
+                    sliceIndex: resume.sliceIndex.map { max(0, $0 - 1) }, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    onProgress: onProgress, onLine: onLine))
             } catch let VaultError.usageLimit(message, token) {
                 var t = token; t.sliceIndex = resume.sliceIndex      // unchanged — still the same slice
                 throw VaultError.usageLimit(message: message, resume: t)
@@ -349,7 +381,9 @@ actor VaultGenerator {
                 Log("VaultGenerator: feeding slice \(next + 1)/\(slices.count) — \(slices[next].count) summaries, \(prompt.utf8.count) bytes")
             }
             do {
-                record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
+                record(try await runCodexInStaging(invocation, staging: staging,
+                    sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    onProgress: onProgress, onLine: onLine))
             } catch let VaultError.usageLimit(message, token) {
                 guard slices.count > 1 else { throw VaultError.usageLimit(message: message, resume: token) }
                 // A session that never started can't be resumed — its slice stays the next unfed.
@@ -378,7 +412,7 @@ actor VaultGenerator {
         try Task.checkCancellation()
         CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
         do {
-            try Self.swapStagingIntoVault(staging)
+            try Self.swapStagingIntoVault(staging, expectedFingerprint: baseline)
         } catch {
             Log("VaultGenerator: ❌ swap failed, vault left intact — \(ErrorLabel(error))")
             // Structured event, not capture(error): a Cocoa move error embeds the failing note's

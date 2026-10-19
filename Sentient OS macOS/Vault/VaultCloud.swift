@@ -66,7 +66,7 @@ actor VaultCloud {
     private static func loadResume(_ key: String) -> VaultGenerator.ResumeToken? {
         guard let data = UserDefaults.standard.data(forKey: key),
               let t = try? JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: data),
-              t.sessionID != nil || (t.sliceIndex ?? 0) > 0,
+              t.sessionID != nil || t.sliceIndex.map({ $0 >= 0 }) == true,
               FileManager.default.fileExists(atPath: t.stagingPath) else {
             UserDefaults.standard.removeObject(forKey: key)
             return nil
@@ -83,15 +83,22 @@ actor VaultCloud {
         }, uniquingKeysWith: { first, _ in first })
     }
 
+    private static func acceptedHashes(_ notes: [CloudNote]) -> [String: String] {
+        Dictionary(notes.map {
+            ($0.sourceID, AppleMailSource.digest([$0.kind.rawValue, $0.text, $0.title ?? "", String($0.itemDate?.timeIntervalSince1970 ?? 0)].joined(separator: "\u{0}")))
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
     /// A previously accepted input can disappear after account opt-out or Mail reclassification.
     /// Restart that staged merge without touching the live vault or resuming its old cloud session.
     private func validatedResume(_ token: VaultGenerator.ResumeToken?, notes: [CloudNote]) -> VaultGenerator.ResumeToken? {
         // An interrupted slice may be only partly written despite sliceIndex already pointing
         // at its successor. Drop the whole handle on a runtime change, not only its session ID.
         guard let token = token?.matchingRuntime(ModelBackend.current) else { return nil }
-        guard let previous = token.mailInputHashes else { return token }
-        let current = Self.mailHashes(notes)
-        guard previous.allSatisfy({ current[$0.key] == $0.value }) else {
+        let previous = token.acceptedInputHashes ?? token.mailInputHashes ?? [:]
+        let current = token.acceptedInputHashes == nil ? Self.mailHashes(notes) : Self.acceptedHashes(notes)
+        let vaultUnchanged = token.vaultFingerprint.map { $0 == VaultGenerator.vaultFingerprint(VaultGenerator.vaultRoot) } ?? true
+        guard vaultUnchanged, previous.allSatisfy({ current[$0.key] == $0.value }) else {
             let staging = URL(fileURLWithPath: token.stagingPath).standardizedFileURL
             if staging.deletingLastPathComponent() == VaultGenerator.stagingParent.standardizedFileURL,
                staging.lastPathComponent.hasPrefix(VaultGenerator.stagingPrefix) {
@@ -105,7 +112,7 @@ actor VaultCloud {
     /// Persist (only a resumable token — a session id to reopen, or completed slices whose fold
     /// lives in staging) or clear the handle on disk.
     private static func persistResume(_ t: VaultGenerator.ResumeToken?, _ key: String) {
-        if let t, t.sessionID != nil || (t.sliceIndex ?? 0) > 0, let data = try? JSONEncoder().encode(t) {
+        if let t, t.sessionID != nil || t.sliceIndex.map({ $0 >= 0 }) == true, let data = try? JSONEncoder().encode(t) {
             UserDefaults.standard.set(data, forKey: key)
         } else {
             UserDefaults.standard.removeObject(forKey: key)
@@ -152,6 +159,7 @@ actor VaultCloud {
         guard !notes.isEmpty else { throw CloudError.empty }
         let inputIDs = createResume?.inputSourceIDs ?? notes.map(\.sourceID)
         let mailInputs = createResume?.mailInputHashes ?? Self.mailHashes(notes)
+        let acceptedInputs = createResume?.acceptedInputHashes ?? Self.acceptedHashes(notes)
         do {
             let result = try await VaultGenerator().generate(notes: notes, resume: createResume, onProgress: onProgress, onLine: onLine)
             setCreateResume(nil)
@@ -160,8 +168,14 @@ actor VaultCloud {
             return result
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             var token = resume; token.inputSourceIDs = inputIDs; token.mailInputHashes = mailInputs
+            token.acceptedInputHashes = acceptedInputs
             setCreateResume(token)
             throw CloudError.usageLimit(message)
+        } catch let VaultGenerator.VaultError.interrupted(resume) {
+            var token = resume; token.inputSourceIDs = inputIDs; token.mailInputHashes = mailInputs
+            token.acceptedInputHashes = acceptedInputs
+            setCreateResume(token)
+            throw VaultGenerator.VaultError.interrupted(resume: token)
         }
     }
 
@@ -192,6 +206,7 @@ actor VaultCloud {
         guard !notes.isEmpty else { return 0 }
         let inputIDs = updateResume?.inputSourceIDs ?? notes.map(\.sourceID)
         let mailInputs = updateResume?.mailInputHashes ?? Self.mailHashes(notes)
+        let acceptedInputs = updateResume?.acceptedInputHashes ?? Self.acceptedHashes(notes)
         let fm = FileManager.default
         let vault = VaultGenerator.vaultRoot
         guard fm.fileExists(atPath: vault.path) else { throw CloudError.noVault }
@@ -214,6 +229,8 @@ actor VaultCloud {
         let staging: URL
         let baseline: String
         let slices: [[CloudNote]]
+        let sliceBudget = updateResume?.sliceBudget ?? (updateResume == nil ? CorpusSlicer.mergeBudget : CorpusSlicer.budget)
+        let sliceItemLimit = updateResume?.sliceItemLimit ?? (updateResume == nil ? CorpusSlicer.maximumItems : Int.max)
         var next: Int                                   // the next unfed slice
         let inFlight: String?                           // a session to resume first
         if let token = updateResume {
@@ -228,7 +245,7 @@ actor VaultCloud {
                     try? fm.removeItem(at: staging)
                     return try await update(notes: notes, onProgress: onProgress, onLine: onLine)
                 }
-                slices = CorpusSlicer.slice(corpus)
+                slices = CorpusSlicer.slice(corpus, budget: sliceBudget, maximumItems: sliceItemLimit)
                 next = min(idx, slices.count)
             } else {
                 slices = []                             // pre-slicing / single-slice token: session-resume only
@@ -237,11 +254,11 @@ actor VaultCloud {
         } else {
             staging = try VaultGenerator.newStagingDir(seedFrom: vault)
             baseline = VaultGenerator.vaultFingerprint(vault)       // captured at seed (vault == staging)
-            slices = CorpusSlicer.slice(notes)
+            slices = CorpusSlicer.slice(notes, budget: sliceBudget, maximumItems: sliceItemLimit)
             next = 0
+            try CorpusSlicer.saveCorpus(notes, in: staging)
             if slices.count > 1 {
-                try CorpusSlicer.saveCorpus(notes, in: staging)
-                Log("VaultCloud.update: cycle sliced into \(slices.count) parts (budget \(CorpusSlicer.budget) bytes)")
+                Log("VaultCloud.update: cycle sliced into \(slices.count) parts (budget \(sliceBudget) bytes)")
             }
             inFlight = nil
         }
@@ -269,7 +286,9 @@ actor VaultCloud {
                 invocation.resumeSessionID = sid
                 invocation.diag = ["slices": "\(max(slices.count, 1))", "slice_index": "\(max(next - 1, 0))"]
                 do {
-                    _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
+                    _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging,
+                        sliceIndex: updateResume?.sliceIndex.map { max(0, $0 - 1) },
+                        sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit, onLine: onLine)
                 } catch let VaultGenerator.VaultError.usageLimit(message, token) {
                     var t = token; t.sliceIndex = updateResume?.sliceIndex   // unchanged — still the same slice
                     throw VaultGenerator.VaultError.usageLimit(message: message, resume: t)
@@ -287,7 +306,8 @@ actor VaultCloud {
                     Log("VaultCloud.update: feeding slice \(next + 1)/\(slices.count) — \(slices[next].count) summaries")
                 }
                 do {
-                    _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
+                    _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging,
+                        sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit, onLine: onLine)
                 } catch let VaultGenerator.VaultError.usageLimit(message, token) {
                     guard slices.count > 1 else { throw VaultGenerator.VaultError.usageLimit(message: message, resume: token) }
                     // A session that never started can't be resumed — its slice stays the next unfed.
@@ -326,7 +346,7 @@ actor VaultCloud {
                     "files_after": String(staged.files), "bytes_before": String(previous.bytes), "bytes_after": String(staged.bytes),
                     "changed": String(VaultGenerator.vaultFingerprint(staging) != baseline)])
             }
-            try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
+            try VaultGenerator.swapStagingIntoVault(staging, expectedFingerprint: baseline)
             setUpdateResume(nil)
             lastConsumedSourceIDs = Set(inputIDs)
             await markDirty()
@@ -337,8 +357,15 @@ actor VaultCloud {
             // resume's swap still detects a concurrent editor edit. Durable resume continues next run.
             var t = resume; t.vaultFingerprint = baseline
             t.inputSourceIDs = inputIDs; t.mailInputHashes = mailInputs
+            t.acceptedInputHashes = acceptedInputs
             setUpdateResume(t)
             throw CloudError.usageLimit(message)
+        } catch let VaultGenerator.VaultError.interrupted(resume) {
+            var token = resume; token.vaultFingerprint = baseline
+            token.inputSourceIDs = inputIDs; token.mailInputHashes = mailInputs
+            token.acceptedInputHashes = acceptedInputs
+            setUpdateResume(token)
+            throw VaultGenerator.VaultError.interrupted(resume: token)
         } catch {
             // Any other failure: discard the staging copy; the live vault was NEVER modified — no
             // restore dance needed (the whole point of stage-then-swap). Rethrow the TYPED error —

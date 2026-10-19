@@ -2,8 +2,8 @@
 //  SystemPane.swift
 //  Sentient OS macOS
 //
-//  Settings → System: how Sentient lives on this Mac. The overnight-intelligence story (prose,
-//  not a control — 3 AM is our taste, not a dial), the launch-at-login toggle (LoginItem.swift)
+//  Settings → System: how Sentient lives on this Mac. The daily overnight wake time,
+//  the launch-at-login toggle (LoginItem.swift)
 //  with its keep-Sentient-alive confirm, the privacy pledge with the two anonymous-reporting
 //  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck), the
 //  how-we-protect-your-data line with its Read More door to the PrivacyPolicyView sheet, the
@@ -21,6 +21,7 @@ struct SystemPane: View {
     /// carry their choice over. Analytics has its own key since the two toggles split.
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
     @AppStorage("analyticsEnabled") private var analyticsEnabled = true
+    @AppStorage(OvernightScheduler.minutesKey) private var wakeMinutes = OvernightScheduler.defaultMinutes
 
 
     @State private var launchAtLogin = LoginItem.isEnabled
@@ -33,7 +34,6 @@ struct SystemPane: View {
     @State private var exportingDiagnostics = false
     @State private var diagnosticFile: URL?
     @State private var diagnosticError: String?
-    @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
 
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
@@ -63,9 +63,10 @@ struct SystemPane: View {
                 SettingToggleLine(title: "Launch at login",
                                   sub: "Keep Sentient ready in your menu bar.", isOn: $launchAtLogin)
                 SettingsHairline(opacity: 0.10)
-                SettingsRow(title: "Overnight intelligence", subtitle: "New knowledge and morning suggestions, prepared at 3 AM.") {
-                    Text("3:00 AM").font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(SettingsStyle.secondary)
+                SettingsRow(title: "Overnight wake time", subtitle: "Start overnight intelligence daily at this time, in your Mac’s local time zone.") {
+                    DatePicker("Overnight wake time", selection: wakeTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.field).labelsHidden().fixedSize()
+                        .accessibilityIdentifier("settings.overnightWakeTime")
                 }
                 SettingsDetails(title: "When does overnight intelligence run?") {
                     SettingsProse(PrivacyCopy.overnight)
@@ -92,8 +93,23 @@ struct SystemPane: View {
                 }
             }
         } message: {
-            Text("To stay helpful, your Sentient runs its on-device intelligence every night at 3 AM, and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive.")
+            Text("To stay helpful, your Sentient runs its on-device intelligence at your chosen overnight wake time, and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive.")
         }
+    }
+
+    private var wakeTime: Binding<Date> {
+        Binding(get: {
+            let minutes = OvernightScheduler.validatedMinutes(wakeMinutes)
+            // A fixed date keeps the time-only editor independent of today's DST transition.
+            return Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 15,
+                hour: minutes / 60, minute: minutes % 60)) ?? Date()
+        }, set: { date in
+            let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+            let minutes = (components.hour ?? 3) * 60 + (components.minute ?? 0)
+            guard minutes != wakeMinutes else { return }
+            wakeMinutes = minutes
+            appState.scheduler.commit()
+        })
     }
 
     // MARK: - Updates (Sparkle — the story is "we keep you current", not a dial)
@@ -193,18 +209,30 @@ struct SystemPane: View {
 
     private static let dangerRed = Color(red: 1.0, green: 0.36, blue: 0.36)
 
+    // Running analysis is cancellable. Only another teardown blocks these actions.
+    private var maintenanceInProgress: Bool {
+        resetting || appState.processing.isSuspended || appState.isUninstalling
+    }
+
+    private var resetTitle: String {
+        guard resetting else { return "Reset Sentient…" }
+        return appState.processing.isBusy || appState.commandCoordinator.run.isRunning
+            ? "Stopping…" : "Erasing…"
+    }
+
     private var dangerGroup: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsRow(title: "Reset Sentient", subtitle: "Erase learned knowledge and return to setup.") {
-                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…", tint: Self.dangerRed) {
+                SettingsPillButton(title: resetTitle, tint: Self.dangerRed) {
                     confirmReset = true
                 }
-                .disabled(resetting || activity.isRunning)
+                .disabled(maintenanceInProgress)
             }
             SettingsDetails(title: "What gets removed?") { SettingsProse(PrivacyCopy.reset) }
                 .padding(.horizontal, 20).padding(.bottom, 20)
-            if activity.isRunning {
-                SettingsProse("Reset is available after the current run finishes.")
+            if appState.processing.isBusy {
+                SettingsProse(resetting ? "Stopping analysis safely before erasing your knowledge."
+                              : "Reset will stop analysis before erasing your knowledge.")
                     .padding(.horizontal, 20).padding(.bottom, 16)
             }
             if let resetError {
@@ -235,12 +263,12 @@ struct SystemPane: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsRow(title: "Uninstall Sentient", subtitle: "Remove Sentient and its local data from this Mac.") {
                 SettingsPillButton(title: "Uninstall…", tint: Self.dangerRed) { showUninstall = true }
-                    .disabled(activity.isRunning)
+                    .disabled(maintenanceInProgress)
             }
             SettingsDetails(title: "What gets removed?") { SettingsProse(PrivacyCopy.uninstall) }
                 .padding(.horizontal, 20).padding(.bottom, 20)
-            if activity.isRunning {
-                SettingsProse("Uninstall is available after the current run finishes.")
+            if appState.processing.isBusy {
+                SettingsProse("Uninstall will stop analysis before removing Sentient’s data.")
                     .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
