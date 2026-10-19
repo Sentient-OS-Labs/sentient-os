@@ -1,6 +1,6 @@
 # Settings (Views/Settings/)
 
-The two-pane Settings window (windowID `settings`, opened from the home's gear): a quiet sidebar of seven
+The two-pane Settings page in the main window (opened from Home's gear or ⌘,): a quiet sidebar of seven
 sections with an About footer (version, the gold "Open source on GitHub" pride mark, Report an issue),
 the selected pane on the right, and the trust ribbon riding only the two panes where the files story is
 the message (Knowledge Sources, Permissions & Health). Design philosophy: form encodes content. Prose
@@ -8,11 +8,26 @@ for stories, hairline toggle lines for switches, chips for sources, status LEDs 
 surfaces only for real input. Pane titles in the SF display voice, mono-caps group labels, a 640 pt
 measure, one green.
 
+Home ↔ Settings uses one reversible SwiftUI transition. The gear emits an anchor preference;
+`RootView` resolves it in the current canvas, so the capsule-to-page mask follows real layout and
+window resizing. Content scales subtly and unblurs while the surface expands, then returns to the
+same gear on Home. The source glyph briefly bridges the endpoints. `HomePageLayer` shares the reveal
+with Knowledge, which uses its own icon/label anchor and retains its content. Direct Settings/Knowledge
+switches remain immediate; only routes to/from Home morph. Missing/offscreen anchors fall back to a fade,
+Reduce Motion uses a short fade, and external Settings pane links preserve their normal route.
+
+Home stays mounted behind the surface with input/accessibility disabled and its composer unfocused.
+Draft, transcript and card state remain app-owned. SwiftUI manages interruption and removal without
+navigation timers. `MainNavigation` records actual route pairs and fences pending Knowledge approval
+callbacks across reset, so a stale prompt cannot reopen a page after reset. The mandatory update
+gate remains above the transition.
+
 ## Files
 
 | File | Job |
 |---|---|
-| `SettingsView.swift` | The shell: sidebar + detail, the `Pane` enum, `requestedPane` (a one-shot deep link consumed on appear), the `switchPane` notification (a pane deep-linking to a sibling), the update-gate overlay. |
+| `SettingsView.swift` | Sidebar + detail and `Pane`; selection/deep links use `MainNavigation`. |
+| `SettingsPageTransition.swift` · `SettingsTransitionGeometry.swift` | Gear anchor, scoped reversible reveal and bounded geometry. `RootView` owns the page overlay. |
 | `SettingsComponents.swift` | The shared pieces: `SettingsPane`, `SettingsGroup`, `SettingsProse`, `SettingToggleLine`, `SettingsPillButton`, `ChipFlow`, `SettingsChip`, `StatusLine` + `HealthDot`, `InfoTip`, `SettingsTextBox`, `SettingsHairline`, `LockedChipTip`. |
 | `SourcesPane.swift` | Knowledge Sources. |
 | `ConnectorsSection.swift` · `ConnectorConnectSheet.swift` | Connector catalog and account popups. Notion and Granola connect after browser sign-in and a native account check. Tool classification waits until use, and curated knowledge selection is available immediately. |
@@ -77,7 +92,7 @@ Cloud Sync group with the "Set up in 2 minutes" / "Configure" CTA into `ConnectA
 sharing on/off; the pane carries no toggle), live `stats()` activity when sharing is on, and the
 local-folder access explanation when off. A local tool can read the folder directly; whether inference is local depends on that tool’s model. Regenerate has no UI (a support remediation only).
 
-**System.** Three chapters split by two dividers: how Sentient runs (the overnight story as prose, the
+**System.** Three chapters split by two dividers: how Sentient runs (the daily overnight wake-time picker, the
 launch-at-login toggle with a keep-Sentient-alive confirm on the way off, the Updates group with the
 version and Check for Updates Now), privacy (the two toggles: crash reports → Sentry, analytics →
 TelemetryDeck, each applying live; the always-on core-tier disclosure appears under the analytics
@@ -88,14 +103,25 @@ start of onboarding and dismisses Settings; locked while `PipelineActivity` repo
 mirror deletion; uninstall also clears local setup and credentials. Both preserve the founder-feedback
 list and invitation/lifetime-access records. There is no saved-address management pane.
 
+The **overnight wake time** defaults to 3 AM and uses local wall-clock time. It retains the existing
+`dbg.scheduler.minutes` key so earlier configured times survive. Edits re-arm the enabled production
+or developer schedule through the existing loop, never interrupt an active overnight analysis, and
+do not enable scheduling when it is off. The Analysis popover reflects the selected time.
+
+Under **Proactive & Sidekick**, **Open Sidekick by clicking the notch** controls only the idle hover
+and click affordance (`sidekick.notchClickEnabled`, default true). Turning it off immediately releases
+an idle hover and leaves the notch available to other apps. Keyboard shortcuts and active Sidekick
+panels, questions and messages keep their normal behavior; no restart is needed.
+
 **Permissions & Health.** The health board: a "Checking your Sentient…" line during the first probe
 (the codex login check shells out), then rows cascading in. ON-DEVICE INTELLIGENCE: Full Disk Access
 (fix = the drag panel with Sentient as the card + a relaunch link), Overnight wake (green only when the
 daemon answers over XPC; `notSetUp` fixes with the password installer, `disabled` gets a Turn On… into
 Login Items), Launch at login (needs-approval gets the guide's instruction panel). SIDEKICK &
 PROACTIVE: Microphone & Speech, Sentient Screen Recording, and Notifications. A shared Computer Use
-group shows the native helper's Accessibility and Screen Recording grants for every model backend;
-visible setup handles Automation consent through the macOS prompt.
+group shows the native helper's Accessibility, Screen Recording, and Automation grants for every
+model backend. Automation denial links directly to its System Settings pane; first-time consent
+uses the macOS prompt.
 
 The engine group follows the frontier choice. ChatGPT shows Codex CLI, ChatGPT account and plan.
 Claude shows Claude Code CLI, the Claude account, and Codex CLI for computer use, with no ChatGPT
@@ -131,4 +157,14 @@ stays on the Mac), and a tip that appears on several surfaces carries the same c
 
 `Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - MCP Mirror.md`, `System/Documentation - System (Permissions, Health, Uninstall).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md`.
 
-All engines show the native helper's Accessibility and Screen Recording grants, with Automation consent handled by the macOS prompt. Changing engines prepares the selected dependency without rewriting Codex configuration or login.
+All engines show the native helper's Accessibility, Screen Recording, and Automation status.
+Automation consent uses the macOS prompt; an explicit denial has an Open Settings action and
+directions to Privacy & Security → Automation → Sentient OS → ChatGPT/Codex Computer Use.
+
+Permissions & Health also offers **Test & repair computer use**. The shared checkup window uses
+actual native tools on its own marked controls and reports observed results, separately from
+permission/account checks. Only a completed successful check from this exact binary gets a dated
+success note. Interrupted focus/Space checks remain retryable. Report review, local save, and an
+explicit Supabase send are available afterward; no upload occurs just by running the check.
+Permission checks never reset TCC or automatically regrant access. Changing engines prepares
+the selected dependency without rewriting Codex configuration or login.

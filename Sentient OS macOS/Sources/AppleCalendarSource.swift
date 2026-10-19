@@ -54,9 +54,9 @@ nonisolated enum AppleCalendarSource {
         case "limit": "These calendars contain more than 2,000 events in the analysis window. Choose fewer calendars to continue."
         case "changed": "Your calendar changed during analysis. Run Analyze Now to read the updated schedule."
         case "incomplete": "Calendar analysis did not finish. Run Analyze Now again, or choose fewer calendars."
-        case "model": "The on-device model could not finish Calendar analysis. No partial schedule was saved. Try analysis again."
+        case "model": "Calendar analysis did not finish. Completed safe summaries are saved for retry; the schedule appears after the full window is checked."
         case "storage": "Calendar analysis could not save its results. Check available disk space, then try again."
-        case "deadline": "Calendar analysis reached its time limit. Choose fewer calendars or try again."
+        case "deadline": "Calendar analysis reached its time limit. Run analysis again to continue with saved safe summaries."
         default: nil
         }
     }

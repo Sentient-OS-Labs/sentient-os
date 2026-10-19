@@ -102,6 +102,15 @@ struct SentientPermissionRows: View {
 struct NativeComputerUsePermissionRows: View {
     @Environment(\.settingsFormStyle) private var formStyle
     let gate: ComputerUseGate
+    private var automationNote: String {
+        if gate.requestingAutomation || gate.checkingAutomation { return "checking…" }
+        switch gate.automation {
+        case .granted: return "granted"
+        case .denied: return "not allowed"
+        case .notAsked: return "not requested"
+        case .unavailable: return "not checked"
+        }
+    }
     var body: some View {
         SettingsGroup(label: formStyle ? "Computer use" : "Computer Use") {
             VStack(alignment: .leading, spacing: 2) {
@@ -122,13 +131,22 @@ struct NativeComputerUsePermissionRows: View {
                            fix: !gate.setup.ready || gate.helperScreen ? nil : {
                     PermissionGuide.shared.guide(.screenRecording, dragging: OpenAIComputerUse.appURL)
                 })
+                if formStyle { SettingsHairline(opacity: 0.10) }
+                StatusLine(title: "Automation",
+                           health: gate.automation == .granted ? .ok : (gate.automation == .denied ? .bad : .warn),
+                           note: automationNote,
+                           tip: "Allows Sentient OS to control its computer-use helper. This is separate from Screen Recording and Accessibility.",
+                           fixTitle: gate.automation == .denied ? "Open Settings" : (gate.automation == .notAsked ? "Allow…" : "Check again"),
+                           fix: !gate.setup.ready || gate.automation == .granted || gate.requestingAutomation || gate.checkingAutomation ? nil : {
+                    if gate.automation == .denied { Permissions.openAutomationSettings() }
+                    else { gate.requestAutomation() }
+                })
                 if gate.restartingNative {
                     SettingsProse("Restarting computer use…")
                 } else if gate.requestingAutomation {
                     SettingsProse(gate.automation == .granted ? "Checking computer use…" : "Choose Allow in the macOS permission prompt.")
                 } else if gate.automation == .denied {
-                    SettingsProse("Allow Sentient in System Settings to finish setup.")
-                    SettingsPillButton(title: "Open Settings") { Permissions.openAutomationSettings() }
+                    SettingsProse("In System Settings → Privacy & Security → Automation, expand Sentient OS and turn on ChatGPT Computer Use (called Codex Computer Use in some versions).")
                 } else if gate.setup.ready, let error = gate.nativePermissionError {
                     SettingsProse(error)
                     if gate.nativeRestartRequired {

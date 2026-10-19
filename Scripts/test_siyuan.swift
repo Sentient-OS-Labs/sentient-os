@@ -128,14 +128,42 @@ import Foundation
         try note([], to: titleOnly)
         check(SiYuanSource(workspaces: [workspace]).eligibleNotes().count == 3, "title-only notes remain excluded")
 
+        let selected = RunSource.connectors(from: [.siyuan])
+        check(selected.count == 1 && selected[0] is SiYuanConnector, "selected SiYuan uses its production connector")
+        check(selected.first?.kind == .siyuan && RunSource.siyuan.label == "SiYuan", "SiYuan retains source identity and label")
+        check(RunSource.connectors(from: []).isEmpty, "empty selection creates no connectors")
+        let mixed = RunSource.connectors(from: [.files(.init(label: "A")), .siyuan, .notes,
+                                                .files(.init(label: "B"))])
+        check(mixed.map(\.kind) == [.file, .siyuan, .notes], "mixed selection preserves SiYuan and other sources")
+        check((mixed.first as? FixtureConnector)?.roots.count == 2, "file roots still coalesce beside SiYuan")
+
         print("SiYuan: \(passed) passed, \(failed) failed")
         if failed > 0 { exit(1) }
     }
 }
 
-// Only unrelated telemetry and the optional calendar payload are stubbed. No user preferences,
-// models, workspace registry or account services are touched by these offline checks.
+// Unrelated sources, telemetry and the optional calendar payload are inert. SiYuan parsing,
+// connectors and RunSource selection use production code. No user preferences or registry are read.
 enum SourceHealth {
     static func checkListingCollapse(source: String, bucketKey: String, count: Int) {}
 }
 enum AppleCalendarSource { struct Snapshot: Sendable {} }
+struct FileRoot: Hashable, Sendable { let label: String }
+struct FixtureConnector: Connector {
+    let kind: SourceKind
+    var roots: [FileRoot] = []
+    init() { kind = .notes }
+    init(roots: [FileRoot]) { kind = .file; self.roots = roots }
+    init(chatJIDs: Set<String>) { kind = .whatsapp }
+    init(chatGUIDs: Set<String>) { kind = .imessage }
+    init(accounts: Set<String>) { kind = .appleMail }
+    init(calendarIDs: Set<String>) { kind = .appleCalendar }
+    func buckets(since marks: [String: ItemKey]) throws -> [Bucket] { [] }
+    func load(_ item: Candidate) throws -> Artifact { fatalError("Unrelated source must not be loaded") }
+}
+typealias FilesConnector = FixtureConnector
+typealias NotesConnector = FixtureConnector
+typealias WhatsAppConnector = FixtureConnector
+typealias iMessageConnector = FixtureConnector
+typealias AppleMailConnector = FixtureConnector
+typealias AppleCalendarConnector = FixtureConnector

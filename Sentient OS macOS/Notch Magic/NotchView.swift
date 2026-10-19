@@ -68,7 +68,8 @@ struct NotchMetrics: Equatable {
     /// Size for a phase. When a voice read-back is showing, the running notch grows DOWN to fit the whole
     /// heard instruction (capped at `maxReadBackLines`); once it dissolves to the codex line it shrinks back.
     func size(for phase: NotchPhase, readBack: String? = nil, remembering: String? = nil,
-              personalizing: Bool = false, recoveryContent: SidekickRecoveryContent? = nil) -> CGSize {
+              personalizing: Bool = false, recoveryContent: SidekickRecoveryContent? = nil,
+              messageContent: SidekickConversationStore.Record? = nil) -> CGSize {
         switch phase {
         case .hidden:
             // Retract target: collapse to the EXACT hardware notch (radius matched in `radii`) so the black
@@ -93,6 +94,15 @@ struct NotchMetrics: Equatable {
             if let recoveryContent { return SidekickRecoveryLayout(content: recoveryContent, metrics: self).size }
             // Without content, return the maximum so the panel reserves a fixed canvas.
             return CGSize(width: min(520, availableSize.width - 40), height: min(240, availableSize.height - 80))
+        case .message:
+            // A bounded reading surface inside the already-reserved fixed panel canvas.
+            // Long answers scroll here and open at their exact message in the main window.
+            let maximum = CGSize(width: min(520, availableSize.width - 40),
+                                 height: min(SidekickNotchMessageLayout.maximumHeight, availableSize.height - 80))
+            guard let messageContent else { return maximum }
+            return SidekickNotchMessageLayout(markdown: messageContent.event.text, maximumSize: maximum,
+                cameraHeight: topRowHeight, outerTopPad: topPad, outerBottomPad: bottomPad,
+                horizontalPad: hPad).size
         case .notice:
             return CGSize(width: max(baseWidth + 120, 320), height: baseHeight + captionHeight + bottomPad)
         }
@@ -172,6 +182,8 @@ struct NotchView: View {
         NotchContent(phase: coordinator.phase,
                      readBack: coordinator.readBack,
                      statusLine: coordinator.run.statusLine,
+                     activity: coordinator.run.isRunning && !coordinator.run.isOffline
+                         ? coordinator.run.conversation.latestActivity.flatMap { SidekickActivityPresentation.steps([$0]).first } : nil,
                      remembering: coordinator.run.remembering,
                      personalizing: coordinator.run.isPersonalizing,
                      hovering: coordinator.notchHovering,
@@ -179,9 +191,29 @@ struct NotchView: View {
                      showStop: !coordinator.run.isDemo,
                      metrics: metrics,
                      recovery: coordinator.run.recovery,
+                     message: coordinator.notchMessage,
+                     isTaskRunning: coordinator.run.isRunning,
+                     messageReplyFocused: coordinator.messageReplyFocused,
+                     messageReplySelection: coordinator.run.conversation.replyReference?.messageID == coordinator.notchMessage?.event.id
+                         ? coordinator.run.conversation.replyReference?.selectedText : nil,
+                     draft: Binding(get: { coordinator.run.conversation.draft },
+                                    set: { coordinator.run.conversation.draft = $0 }),
                      onBack: { coordinator.backFromRecovery() },
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
+                     onOpenConversation: {
+                         let messageID = coordinator.phase == .message ? coordinator.notchMessage?.event.id : nil
+                         coordinator.run.conversation.show(messageID: messageID)
+                         if coordinator.phase == .message { coordinator.dismissMessagePreview() }
+                     },
+                     onDismissMessage: { coordinator.dismissMessagePreview() },
+                     onMessageSelecting: { coordinator.setMessagePreviewSelecting($0, messageID: $1) },
+                     onMessageReplyFocusChanged: { coordinator.setMessageReplyFocused($0, messageID: $1) },
+                     onMessageReplySubmit: { coordinator.submitMessageReply($0, messageID: $1) },
+                     onReply: { quote in
+                         guard let message = coordinator.notchMessage else { return }
+                         coordinator.prepareMessageReply(quote, messageID: message.event.id)
+                     },
                      onMic: { coordinator.startListening() },
                      onFinishListening: { coordinator.finishListening() },
                      onNotchClick: { coordinator.notchClicked() })
@@ -194,6 +226,7 @@ struct NotchContent: View {
     let phase: NotchPhase
     let readBack: String?
     let statusLine: String
+    var activity: SidekickActivityPresentation.Step? = nil
     var remembering: String? = nil
     var personalizing = false
     /// The cursor is over the IDLE notch (the click-to-type affordance): the shell swells with a
@@ -207,23 +240,36 @@ struct NotchContent: View {
     var showStop: Bool = true
     let metrics: NotchMetrics
     var recovery: SidekickRecovery? = nil
+    var message: SidekickConversationStore.Record? = nil
+    var isTaskRunning = false
+    var messageReplyFocused = false
+    var messageReplySelection: String? = nil
+    var draft: Binding<String> = .constant("")
     var onBack: () -> Void = {}
     var onStop: () -> Void = {}
-    var onSubmitText: (String) -> Void = { _ in }
+    var onSubmitText: (String) -> Bool = { _ in false }
+    var onOpenConversation: () -> Void = {}
+    var onDismissMessage: () -> Void = {}
+    var onMessageSelecting: (Bool, String) -> Void = { _, _ in }
+    var onMessageReplyFocusChanged: (Bool, String) -> Void = { _, _ in }
+    var onMessageReplySubmit: (String, String) -> Bool = { _, _ in false }
+    var onReply: (String?) -> Void = { _ in }
     /// The field's mic button → open the mic; the listening stop button → transcribe and fire.
     var onMic: () -> Void = {}
     var onFinishListening: () -> Void = {}
     var onNotchClick: () -> Void = {}
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var draft = ""
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
+    @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
         let hoverIdle = hovering && phase == .hidden     // the swollen click affordance — idle only
         let size = hoverIdle ? metrics.hoverSize
                              : metrics.size(for: phase, readBack: readBack, remembering: remembering, personalizing: personalizing,
-                                            recoveryContent: recovery?.content)
+                                            recoveryContent: recovery?.content, messageContent: message)
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: phase)
         let visible = phase != .hidden
         // The notch sits FLUSH at the screen's top edge — its concave top corners visible on the bezel
@@ -257,12 +303,14 @@ struct NotchContent: View {
             glow(radii, lineWidth: 3,  blur: 0.6, strength: 1.0)   // crisp bright rim, over the fill
             content(size: size)
                 .opacity(visible ? 1 : 0)              // icons + caption dissolve as the shell retracts into the cutout
+                .blur(radius: reduceMotion || visible ? 0 : 7)
+                .scaleEffect(reduceMotion || visible ? 1 : 0.97, anchor: .top)
                 .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom))
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .contain)        // on the notch itself, never the full canvas
         .accessibilityLabel(a11yLabel)
-        .scaleEffect(visible || hoverIdle ? 1 : 0.94, anchor: .top)
+        .scaleEffect(reduceMotion || visible || hoverIdle ? 1 : 0.94, anchor: .top)
         .opacity(shellOpacity)                           // shell stays opaque & MERGES into a real notch on dismiss (fades only if there's none)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(morph, value: phase)
@@ -270,21 +318,31 @@ struct NotchContent: View {
         .animation(morph, value: personalizing)
         .animation(morph, value: remembering)            // shrink back to one line when "Remembering" takes over
         .animation(morph, value: recovery?.content?.id) // successive presentations can need different heights
+        .animation(morph, value: message?.event.id)
         .animation(hoverMorph, value: hovering)          // the hover swell/settle — snappier than the phase morph
         .onChange(of: phase) { _, newPhase in
             if newPhase == .typing {
-                draft = ""
                 DispatchQueue.main.async { fieldFocused = true }   // focus once the panel has become key
             } else {
                 fieldFocused = false
             }
         }
-        // The onboarding demo types through the real field: the draft mirrors the scripted text
-        // while it's set (the field renders + measures exactly as if the user typed it).
-        .onChange(of: demoText) { _, text in
-            if let text { draft = text }
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+            lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         }
     }
+
+    private var ambientAnimationPaused: Bool {
+        if reduceMotion || lowPowerMode { return true }
+        switch phase {
+        case .running, .listening, .transcribing, .finishing: return false
+        default: return true // no clocks behind an ordered-out panel or while reading/typing
+        }
+    }
+
+    /// The same brand mark drifts slowly while waiting for a prompt. Keep the larger
+    /// ambient effects paused during typing, and stop every clock when the notch is hidden.
+    private var identityAnimationPaused: Bool { reduceMotion || lowPowerMode || phase == .hidden }
 
     private var morph: Animation {
         // Longer + bouncier than a flat ease — fast out of the gate, then a gentle overshoot-and-settle
@@ -311,41 +369,70 @@ struct NotchContent: View {
             HStack(spacing: 0) {
                 if phase == .recovery {
                     Button(action: onBack) {
-                        Image(systemName: "chevron.left")
+                        Image(systemName: isTaskRunning ? "stop.fill" : "chevron.left")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: metrics.controlSlot, height: metrics.controlSlot)
                             .contentShape(Rectangle().inset(by: -6))
                     }
-                    .buttonStyle(.plain).help("Back to Sidekick").accessibilityLabel("Back to Sidekick")
+                    .buttonStyle(.plain)
+                    .help(isTaskRunning ? "Stop this task and write a new request" : "Write a new request")
+                    .accessibilityLabel(isTaskRunning ? "Stop this task and write a new request" : "Write a new request")
                 } else {
-                    SpinningLogo(size: metrics.controlSlot, fast: phase == .running)
+                    NotchIdentityMark(size: metrics.controlSlot, working: phase == .running || isTaskRunning,
+                        animated: !identityAnimationPaused)
                 }
                 Spacer(minLength: metrics.centerGap)
-                rightControl
-                    .frame(width: metrics.controlSlot, height: metrics.controlSlot)   // same square as the logo → twinned size + center axis
-                    .id(controlKey)
-                    .transition(.opacity.combined(with: .scale(scale: 0.7)))
+                HStack(spacing: 12) {
+                    if showsHistoryControl {
+                        Button(action: onOpenConversation) {
+                            Image(systemName: "arrow.up.forward.app")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+                        }
+                        .buttonStyle(NotchIconButtonStyle())
+                        .help("Open conversation in Sentient")
+                        .accessibilityLabel("Open Sidekick conversation in Sentient")
+                    }
+                    rightControl
+                        .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+                        .id(controlKey)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.85)))
+                }
             }
             .frame(height: metrics.topRowHeight)
 
-            if phase == .recovery, let recovery, let content = recovery.content {
+            if phase == .message, let message {
+                SidekickNotchMessageView(message: message, isTaskRunning: isTaskRunning,
+                    onOpen: onOpenConversation, onReply: onReply, onStop: onStop,
+                    onSelecting: { onMessageSelecting($0, message.event.id) },
+                    draft: draft, replyFocused: messageReplyFocused,
+                    replyingToSelection: messageReplySelection != nil,
+                    onReplyFocusChanged: { onMessageReplyFocusChanged($0, message.event.id) },
+                    onSend: { onMessageReplySubmit($0, message.event.id) })
+                    // Layout at the final readable width before the shell reveals it. The
+                    // contents never rewrap through the intermediate notch-morph widths.
+                    .frame(width: size.width - metrics.hPad * 2,
+                           height: size.height - metrics.topRowHeight - metrics.topPad - metrics.bottomPad)
+                    .id(message.event.id)
+                    .transition(contentReveal)
+            } else if phase == .recovery, let recovery, let content = recovery.content {
                 SidekickRecoveryView(recovery: recovery, content: content,
                                      layout: SidekickRecoveryLayout(content: content, metrics: metrics))
                     .id(content.id)
-                    .transition(.opacity)
+                    .transition(contentReveal)
             } else if phase == .typing {
                 typingField
                     .frame(height: metrics.fieldRowHeight)
-                    .transition(.opacity)
+                    .transition(contentReveal)
             } else if phase == .listening || phase == .transcribing {
                 voiceRow
                     .frame(height: metrics.fieldRowHeight)
-                    .transition(.opacity)
+                    .transition(contentReveal)
             } else if showsCaption {
                 caption
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .transition(.opacity)
+                    .transition(contentReveal)
             }
         }
         .padding(.horizontal, metrics.hPad)
@@ -362,7 +449,7 @@ struct NotchContent: View {
             // send (a typed draft, or an open mic, where a click ends the recording and fires, same
             // as the stop button), a faint ghost otherwise. Transcribing has nothing to send yet, so
             // it waits dim.
-            NotchSendButton(enabled: phase == .listening || (phase == .typing && !draft.isEmpty),
+            NotchSendButton(enabled: phase == .listening || (phase == .typing && !isTaskRunning && !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
                             help: phase == .listening ? "Stop and send" : "Send") {
                 if phase == .listening { onFinishListening() } else { submitDraft() }
             }
@@ -381,6 +468,15 @@ struct NotchContent: View {
                     .contentShape(Rectangle().inset(by: -6))
             }
             .buttonStyle(.plain).help("Hide for now").accessibilityLabel("Hide for now")
+        case .message:
+            Button(action: onDismissMessage) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+            }
+            .buttonStyle(NotchIconButtonStyle())
+            .help("Hide response")
+            .accessibilityLabel("Hide response. It stays in your conversation history.")
         case .hidden, .opening, .notice:
             Color.clear.frame(width: 1, height: 18)
         }
@@ -394,36 +490,52 @@ struct NotchContent: View {
     private var typingField: some View {
         HStack(spacing: 10) {
             ZStack(alignment: .leading) {
-                if draft.isEmpty {
+                if draftText.isEmpty {
                     Text("What can I take over for you?")
                         .font(.system(size: 13, design: .serif)).italic()
                         .foregroundStyle(.white.opacity(0.4))
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
-                TextField("", text: $draft)
+                TextField("", text: draftBinding)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(.white)
-                    .tint(Theme.accent)
+                    .tint(.white)
                     .focused($fieldFocused)
                     .onSubmit(submitDraft)
+                    .accessibilityLabel("Message Sidekick")
             }
             ZStack {
-                if draft.isEmpty {
+                if draftText.isEmpty {
                     NotchMicButton(action: onMic)
-                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.85)))
                 }
             }
             .frame(width: metrics.controlSlot, height: metrics.controlSlot)
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: draft.isEmpty)
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.3, dampingFraction: 0.8), value: draftText.isEmpty)
         }
     }
 
     /// Fire the typed draft (the field's ⏎ and the send button land here) and clear the field.
     private func submitDraft() {
-        let text = draft
-        draft = ""
-        onSubmitText(text)
+        guard demoText == nil else { return }
+        let text = draft.wrappedValue
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if onSubmitText(text) { draft.wrappedValue = "" }
+    }
+
+    private var draftText: String { demoText ?? draft.wrappedValue }
+    private var draftBinding: Binding<String> {
+        Binding(get: { draftText }, set: { if demoText == nil { draft.wrappedValue = $0 } })
+    }
+
+    private var contentReveal: AnyTransition { reduceMotion ? .opacity : .blurDissolve }
+    private var showsHistoryControl: Bool {
+        switch phase {
+        case .typing, .running, .message, .recovery: true
+        default: false
+        }
     }
 
     /// The field row while the mic is open, and while the transcript finalizes: the same row, its
@@ -433,9 +545,9 @@ struct NotchContent: View {
         HStack(spacing: 10) {
             Group {
                 if phase == .listening {
-                    TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0)) { ctx in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
                         let t = ctx.date.timeIntervalSinceReferenceDate
-                        let breathe = reduceMotion ? 0.5 : (sin(t * 2 * .pi / 1.6) + 1) / 2   // the "I'm hearing you" breath
+                        let breathe = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 1.6) + 1) / 2   // the "I'm hearing you" breath
                         Text("Listening…")
                             .opacity(0.55 + 0.35 * breathe)
                     }
@@ -463,7 +575,7 @@ struct NotchContent: View {
         }
     }
 
-    /// The bottom-row text. Running shows the serif read-back, dissolving into the mono codex line.
+    /// Read-back dissolves into the same app icon and readable activity used in chat.
     @ViewBuilder private var caption: some View {
         switch phase {
         case .running:
@@ -483,23 +595,35 @@ struct NotchContent: View {
                         .lineLimit(metrics.maxReadBackLines)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 } else {
-                    Text(statusLine.isEmpty ? "working…" : statusLine)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .lineLimit(2).truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .contentTransition(.interpolate)             // morph only the CHANGED glyphs in place; shared text stays put
+                    HStack(spacing: 7) {
+                        if let shownActivity {
+                            ZStack {
+                                SidekickActivityIcon(identifier: shownActivity.appIdentifier, symbol: shownActivity.symbol)
+                                    .id(shownActivity.appIdentifier ?? shownActivity.symbol)
+                                    .transition(contentReveal)
+                            }.frame(width: 16, height: 16)
+                        }
+                        ZStack(alignment: .leading) {
+                            Text(progressCaption)
+                                .font(.system(size: 12, weight: shownActivity == nil ? .regular : .medium))
+                                .lineLimit(shownActivity == nil ? 2 : 1).truncationMode(.tail)
+                                .id(progressCaption)
+                                .transition(contentReveal)
+                        }
+                    }
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(reduceMotion ? .easeOut(duration: 0.12) : .easeInOut(duration: 0.22), value: progressCaption)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .id(runningCaptionKey)
-            .transition(.blurDissolve)                               // remembering ⇄ read-back ⇄ codex line: a fancy blur-dissolve-pop
-            .animation(.spring(duration: 0.7, bounce: 0.35), value: runningCaptionKey)
+            .transition(contentReveal)
+            .animation(reduceMotion ? .easeOut(duration: 0.18) : .spring(duration: 0.55, bounce: 0.18), value: runningCaptionKey)
             .animation(.easeInOut(duration: 0.35), value: statusLine)
             .allowsHitTesting(false)
         case .finishing(let outcome):
-            // Failures get a second line: the ✗ statusLine carries the give-up reason (the sentinel's
-            // COULD_NOT text or the error), and one truncated line usually eats it.
+            // Failures get a second line so the reason remains readable.
             Text(statusLine)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
@@ -516,6 +640,14 @@ struct NotchContent: View {
         }
     }
 
+    /// Narration and connection notices keep their own words. Raw tool IDs use durable
+    /// structured activity; while its projection catches up, show a quiet working label.
+    private var notchStatus: SidekickActivityPresentation.NotchStatus {
+        SidekickActivityPresentation.notchStatus(statusLine, activity: activity)
+    }
+    private var shownActivity: SidekickActivityPresentation.Step? { notchStatus.activity }
+    private var progressCaption: String { notchStatus.text }
+
     /// Distinct identities let personalization, remembering, read-back and progress blur-dissolve.
     /// (note / status changes WITHIN a state morph in place instead).
     private var runningCaptionKey: Int {
@@ -530,9 +662,9 @@ struct NotchContent: View {
     /// screen's "Everything." palette.
     private func rememberingCaption(_ note: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
-                let bloom = reduceMotion ? 0.5 : (sin(t * 2 * .pi / 1.5) + 1) / 2   // a 1.5s breathing glow
+                let bloom = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 1.5) + 1) / 2   // a 1.5s breathing glow
                 Text("Remembering")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Self.rememberingGradient)
@@ -581,10 +713,10 @@ struct NotchContent: View {
         // right at the notch's frame edge. So we grow the layer (negative padding) and inset the skirt mask
         // by the same margin: the gradient then bleeds beyond ALL sides equally (no thin bottom edge).
         let m = lineWidth / 2 + blur + 6
-        return TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0)) { ctx in
+        return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            let angle = reduceMotion ? 0 : (t.truncatingRemainder(dividingBy: 6.5) / 6.5) * 360
-            let breathe = (sin(t * 2 * .pi / 3.2) + 1) / 2   // gentle alive-ness
+            let angle = ambientAnimationPaused ? 0 : (t.truncatingRemainder(dividingBy: 6.5) / 6.5) * 360
+            let breathe = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 3.2) + 1) / 2
             AngularGradient(colors: GlowHalo.stops, center: .center, angle: .degrees(angle))
                 .opacity(0.88 + 0.12 * breathe)
         }
@@ -600,6 +732,7 @@ struct NotchContent: View {
     private var glowStrength: Double {
         switch phase {
         case .hidden:    return 0
+        case .message, .recovery: return 0.35
         case .finishing: return 0.9
         default:         return 1.0   // alive from the moment the notch appears — opening, listening, typing, running…
         }
@@ -630,6 +763,7 @@ struct NotchContent: View {
         case .finishing: return 4
         case .notice: return 5
         case .recovery: return 6
+        case .message: return 7
         }
     }
 
@@ -640,10 +774,11 @@ struct NotchContent: View {
         case .typing: return "Type a task for Sentient, or click the microphone to say it"
         case .listening: return "Sentient is listening. Click stop, or press Return, when you're done"
         case .transcribing: return "Sentient is transcribing"
-        case .running: return "Sentient is working. \(statusLine)"
+        case .running: return "Sentient is working. \(progressCaption)"
         case .finishing: return statusLine
         case .notice(let m): return m
         case .recovery: return "Sidekick needs your help"
+        case .message: return "A response from Sidekick. Open it in Sentient or reply."
         }
     }
 
@@ -661,6 +796,38 @@ struct NotchContent: View {
 
 // MARK: - The notch's interactive elements (each fills the 17 pt control slot, like the logo)
 
+/// The brand stays still when Reduce Motion is enabled, including its wall-clock spin.
+private struct NotchIdentityMark: View {
+    let size: CGFloat
+    let working: Bool
+    let animated: Bool
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
+
+    var body: some View {
+        SpinningLogo(size: size, fast: working, paused: reduceMotion || !animated)
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct NotchIconButtonStyle: ButtonStyle {
+    @State private var hovering = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white.opacity(configuration.isPressed ? 1 : (hovering ? 0.96 : 0.58)))
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.white.opacity(hovering ? 0.09 : 0))
+                    .padding(-4)
+            }
+            .contentShape(Rectangle().inset(by: -5))
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.13), value: hovering)
+    }
+}
+
 /// The running STOP: a circle, because it interrupts the work.
 private struct NotchStopButton: View {
     let action: () -> Void
@@ -676,6 +843,7 @@ private struct NotchStopButton: View {
         }
         .buttonStyle(.plain)
         .help("Stop")
+        .accessibilityLabel("Stop current Sidekick task")
     }
 }
 
@@ -698,12 +866,14 @@ private struct NotchSendButton: View {
                 .contentShape(Circle().inset(by: -6))
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
         .allowsHitTesting(enabled)
         .onHover { hovering = $0 }
         .onChange(of: enabled) { _, on in if !on { hovering = false } }   // hover exits don't reach a hit-transparent view
         .animation(.easeOut(duration: 0.15), value: hovering)
         .animation(.easeOut(duration: 0.15), value: enabled)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -724,6 +894,7 @@ private struct NotchMicButton: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .help("Say it instead")
+        .accessibilityLabel("Speak to Sidekick")
     }
 }
 
@@ -749,6 +920,7 @@ private struct NotchListenStopButton: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .help("Stop and send")
+        .accessibilityLabel("Finish recording and send to Sidekick")
     }
 }
 

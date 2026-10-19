@@ -6,7 +6,7 @@
 //  vault (~/Sentient OS - Knowledge Base/). Two-pane split: a folder tree (pinned "Overview" = the
 //  root README, search, disclosure folders; create via the header "+", a folder-hover "+", or
 //  right-click) and a rendered-markdown reader on the right. [[Wikilinks]] jump between notes (Back walks the trail);
-//  the page header carries Home / Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
+//  the page header carries Home / optional AI connections / Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
 //  locally and DEBOUNCE-syncs to the cloud MCP (VaultActivity.markChanged → the sidebar status line).
 //  The page opens in the "Constellation View" graph (Graph/NightSkyView.swift — the default);
 //  SkyDoor buttons in its header swap between it and the reader (⌘⇧G). Click a star to read that note; Back (or Esc) returns to the sky where you left it.
@@ -21,6 +21,16 @@ import AppKit
 
 struct KnowledgeView: View {
     var isPresented = true
+    var animateEntrance = false
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reducedMotion: Bool { motionOverride ?? systemReducedMotion }
+    @State private var entranceReady = false
+    private struct EntranceKey: Equatable {
+        let presented: Bool
+        let animated: Bool
+        let reduced: Bool
+    }
 
     @State private var vault: KnowledgeVault?
     @State private var loaded = false
@@ -28,6 +38,7 @@ struct KnowledgeView: View {
     @State private var expanded: Set<URL> = []
     @State private var search = ""
     @State private var sidebarVisible = true
+    @State private var showAIConnections = false
 
     // Navigation history (back / forward), so a wikilink jump can be undone.
     @State private var history: [URL] = []
@@ -71,30 +82,33 @@ struct KnowledgeView: View {
     private enum PendingNav { case open(URL), follow(URL), back, sky, leave((Bool) -> Void) }
 
     var body: some View {
-        Group {
-            if isPresented {
-                VStack(spacing: 0) {
-                    pageHeader
-                    if mode == .sky {
-                        skyPane
-                    } else {
-                        splitView
-                    }
-                }
-                .frame(minWidth: 900, minHeight: 600)
-                .background(Theme.bg)
+        VStack(spacing: 0) {
+            pageHeader
+            if mode == .sky {
+                skyPane
+            } else {
+                splitView
             }
         }
-        .task(id: isPresented) {
-            guard isPresented else { return }
+        .frame(minWidth: 900, minHeight: 600)
+        .background(Theme.bg)
+        .allowsHitTesting(isPresented)
+        .disabled(!isPresented)
+        .accessibilityHidden(!isPresented)
+        .task(id: EntranceKey(presented: isPresented, animated: animateEntrance, reduced: reducedMotion)) {
+            guard isPresented else { deactivate(); return }
+            entranceReady = false
             MainNavigation.shared.leaveKnowledge = requestLeave
+            VaultActivity.shared.editorBusy = editing
             await loadVault()
+            guard !Task.isCancelled,
+                  await HomePageEntrance.wait(animate: animateEntrance, reducedMotion: reducedMotion) else { return }
+            entranceReady = true
         }
-        .onDisappear {
-            cancelPendingNavigation()
-            MainNavigation.shared.leaveKnowledge = nil
-            VaultActivity.shared.editorBusy = false
+        .onChange(of: ProcessingCoordinator.shared.knowledgeRevision) { _, _ in
+            if isPresented && !editing { Task { await loadVault() } }
         }
+        .onDisappear(perform: deactivate)
         .alert("You have unsaved edits", isPresented: $showDiscardPrompt) {
             Button("Save") { promptSave() }
             Button("Discard", role: .destructive) { promptDiscard() }
@@ -111,6 +125,9 @@ struct KnowledgeView: View {
         .onChange(of: showCreatePrompt) { _, shown in
             if shown { claimCreateFieldFocus() }
         }
+        .onChange(of: isPresented) { _, shown in
+            if !shown { deactivate() }
+        }
     }
 
     /// The reader half: the familiar sidebar + rendered-markdown split.
@@ -122,9 +139,12 @@ struct KnowledgeView: View {
         // Window-open focus lands in the search box, not the sidebar's "+" button. defaultFocus
         // declares it; the delayed onAppear claim backs it up (AppKit assigns the initial key
         // view a beat after SwiftUI's appear — same pattern as PromptBar's launch focus).
-        .defaultFocus($searchFocused, true)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
+        .defaultFocus($searchFocused, isPresented)
+        .task(id: isPresented) {
+            guard isPresented else { return }
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard !Task.isCancelled else { return }
+            searchFocused = true
         }
     }
 
@@ -132,6 +152,7 @@ struct KnowledgeView: View {
     /// "Reader" door, Esc, and ⌘⇧G all lead back.
     private var skyPane: some View {
         NightSkyView(vault: vault, vaultLoaded: loaded, model: skyModel,
+                     entranceReady: entranceReady, isActive: isPresented,
                      onOpen: { openFromSky($0) },
                      onExit: { requestMode(.reader) })
 
@@ -142,7 +163,9 @@ struct KnowledgeView: View {
         let v = KnowledgeVault.load()
         vault = v
         loaded = true
-        mirrorEnabled = await MirrorClient.shared.isEnabled
+        let enabled = await MirrorClient.shared.isEnabled
+        guard !Task.isCancelled else { return }
+        mirrorEnabled = enabled
         // A nightly refresh may replace files while this page is away. Keep the reading place
         // when it still exists, refresh its content, and recover to Overview when it vanished.
         if let selection, v?.allNotes.contains(where: { $0.url == selection }) == true || selection == v?.readme {
@@ -153,6 +176,18 @@ struct KnowledgeView: View {
         selection = nil; note = nil
         if let r = v?.readme { open(r) }                          // greet with the portrait
         else if let first = v?.allNotes.first { open(first.url) }
+    }
+
+    /// The retained page cannot rely on disappearance for cleanup. Keep its draft/camera,
+    /// but release transient focus, sheets, hover, and the app-wide editing/navigation gates.
+    private func deactivate() {
+        showAIConnections = false; showCreatePrompt = false; showDiscardPrompt = false
+        editorFocused = false; searchFocused = false; createFieldFocused = false
+        cancelPendingNavigation()
+        MainNavigation.shared.leaveKnowledge = nil
+        VaultActivity.shared.editorBusy = false
+        skyModel.endDrag(); skyModel.clearHover()
+        // Do not clear entranceReady here: the outgoing sky must survive the reverse reveal.
     }
 
     // MARK: Navigation + a wikilink back-trail
@@ -359,7 +394,7 @@ struct KnowledgeView: View {
         let placeholder = createIsFolder ? "Folder name" : "Note name"
         for delay: TimeInterval in [0.1, 0.35] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard showCreatePrompt else { return }
+                guard isPresented, showCreatePrompt else { return }
                 createFieldFocused = true
                 for window in NSApp.windows where window.isVisible {
                     guard let field = Self.editableField(in: window.contentView,
@@ -610,7 +645,7 @@ struct KnowledgeView: View {
     /// Page chrome stays inside the main canvas, so Knowledge never installs a window toolbar
     /// that could resize Home or Settings. The note's Back trail remains distinct from Home.
     private var pageHeader: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             HomeNavigationButton()
             Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 20)
             Text("Knowledge").font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
@@ -628,6 +663,13 @@ struct KnowledgeView: View {
                     .help(canGoBack ? "Previous note" : "Back to the constellation")
             }
             Spacer(minLength: 20)
+            Button { showAIConnections = true } label: {
+                Label("Use with your AIs", systemImage: "link")
+            }
+            .labelStyle(.titleAndIcon)
+            .help("Optionally connect this knowledge base to ChatGPT, Claude, or another AI.")
+            .accessibilityIdentifier("knowledge.connectAIs")
+            .popover(isPresented: $showAIConnections, arrowEdge: .bottom) { ShareKnowledgePopover() }
             SkyDoor(icon: mode == .sky ? "doc.plaintext" : "sparkles",
                     label: mode == .sky ? "Reader View" : "Constellation View") {
                 requestMode(mode == .sky ? .reader : .sky)
@@ -666,7 +708,7 @@ struct KnowledgeView: View {
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
             }
-            .labelStyle(.titleAndIcon)
+            .labelStyle(.iconOnly)
             .help("Reveal in Finder")
         }
     }
@@ -714,7 +756,7 @@ struct KnowledgeView: View {
             }
         } else if loaded && vault == nil {
             emptyState(title: "No knowledge base yet",
-                       subtitle: "Once Sentient has read your life, your private knowledge base shows up here.")
+                       subtitle: "Your knowledge will appear here after analysis. You can use Sidekick while it is being built.")
         } else if loaded {
             emptyState(title: "Select a note", subtitle: nil)
         } else {
@@ -742,13 +784,13 @@ struct KnowledgeView: View {
         .frame(maxWidth: 760, alignment: .leading)
         .padding(.horizontal, 44).padding(.top, 18).padding(.bottom, 18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .onAppear { editorFocused = true }
+        .onAppear { if isPresented { editorFocused = true } }
         .onExitCommand { cancelEdit() }
     }
 
     private func emptyState(title: String, subtitle: String?) -> some View {
         VStack(spacing: 14) {
-            Orb(size: 92)
+            Orb(size: 92, paused: !isPresented)
             Text(title).font(.system(size: 20, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
             if let subtitle {
                 Text(subtitle).font(.system(size: 13)).foregroundStyle(Theme.secondary)

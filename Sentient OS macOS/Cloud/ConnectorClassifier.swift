@@ -31,6 +31,7 @@ import Foundation
 import os
 
 nonisolated enum ConnectorClassifier {
+    private typealias Failure = ConnectorClassificationDiagnostics.Failure
 
     // MARK: The classification core
 
@@ -55,7 +56,8 @@ nonisolated enum ConnectorClassifier {
 
     static func classificationSchema(inventory: [String]) throws -> String {
         guard !inventory.isEmpty, Set(inventory).count == inventory.count else {
-            throw CodexCLI.CLIError.badEnvelope("invalid native classification inventory")
+            throw Failure(stage: .inventory, reason: .invalidNativeInventory,
+                          metrics: [.observed: inventory.count, .duplicate: inventory.count - Set(inventory).count])
         }
         let item: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["name", "category"],
             "properties": ["name": ["type": "string", "enum": inventory.sorted()],
@@ -111,44 +113,66 @@ nonisolated enum ConnectorClassifier {
     /// additions or removals need another review before its action policy can activate.
     static func validate(_ tools: [ConnectorRegistry.ClassifiedTool], slug: String,
                          inventory: [String]? = nil) throws {
-        if slug == "slack" { try SlackConnector.validateClassification(tools) }
-        if Microsoft365Connector.contains(slug) { try Microsoft365Connector.validateClassification(tools) }
-        guard let identity = ConnectorRegistry.claudeIdentity(slug: slug), !tools.isEmpty,
-              tools.allSatisfy({ normalizedName($0.name, prefix: identity.toolPrefix) == $0.name }),
-              Set(tools.map(\.name)).count == tools.count else {
-            throw CodexCLI.CLIError.badEnvelope("classification has an invalid or duplicate inventory")
+        guard let identity = ConnectorRegistry.claudeIdentity(slug: slug) else {
+            throw Failure(stage: .validate, reason: .missingIdentity)
+        }
+        let actual = Set(tools.map(\.name))
+        let invalid = tools.count { normalizedName($0.name, prefix: identity.toolPrefix) != $0.name }
+        guard !tools.isEmpty, invalid == 0 else {
+            throw Failure(stage: .validate, reason: tools.isEmpty ? .noMatchingNames : .invalidNames,
+                          metrics: [.classified: tools.count, .invalid: invalid])
+        }
+        guard actual.count == tools.count else {
+            throw Failure(stage: .validate, reason: .duplicateNames,
+                          metrics: [.classified: tools.count, .duplicate: tools.count - actual.count])
         }
         if let inventory {
             guard !inventory.isEmpty, Set(inventory).count == inventory.count,
-                  Set(inventory) == Set(tools.map(\.name)) else {
-                throw CodexCLI.CLIError.badEnvelope("classification does not match the observed inventory")
+                  Set(inventory) == actual else {
+                throw Failure(stage: .validate, reason: .observedInventoryMismatch,
+                              metrics: [.observed: inventory.count, .classified: tools.count,
+                                        .missing: Set(inventory).subtracting(actual).count,
+                                        .extra: actual.subtracting(inventory).count])
             }
         }
+        // Distinguish an incomplete model reply from a complete surface that disagrees with review.
+        if slug == "slack" { try SlackConnector.validateClassification(tools) }
+        if Microsoft365Connector.contains(slug) { try Microsoft365Connector.validateClassification(tools) }
         let prefix = identity.toolPrefix
         let reads = Set(ConnectorRegistry.pack(forSlug: slug)?.readTools ?? [])
         let names = Set(tools.map { String($0.name.dropFirst(prefix.count)) })
         guard reads.isSubset(of: names) else {
-            throw CodexCLI.CLIError.badEnvelope("classification omitted a curated read tool")
+            throw Failure(stage: .validate, reason: .missingCuratedRead,
+                          metrics: [.classified: tools.count, .expected: reads.count,
+                                    .missing: reads.subtracting(names).count], rule: .curatedReads)
         }
         let knownDestructive = reviewedDestructiveTools(slug: slug)
         for tool in tools where knownDestructive.contains(String(tool.name.dropFirst(prefix.count))) {
             guard tool.category == .destructive else {
-                throw CodexCLI.CLIError.badEnvelope("classification did not deny a reviewed destructive tool")
+                throw Failure(stage: .validate, reason: .categoryMismatch,
+                              metrics: [.classified: tools.count], rule: .destructive,
+                              mismatches: [.init(tool: String(tool.name.dropFirst(prefix.count)), slug: slug,
+                                                 expected: .destructive, observed: tool.category)])
             }
         }
         guard slug == "google-drive" else { return }
         let required = reads.union(["copy_file", "create_file", "share_file", "update_file", "trash_file"])
         guard required.isSubset(of: names) else {
-            throw CodexCLI.CLIError.badEnvelope("classification omitted a reviewed Drive tool")
+            throw Failure(stage: .validate, reason: .missingReviewedTool,
+                          metrics: [.classified: tools.count, .expected: required.count,
+                                    .missing: required.subtracting(names).count], rule: .drive)
         }
         for tool in tools {
             let name = String(tool.name.dropFirst(prefix.count))
             if reads.contains(name) {
                 guard tool.category == .read else {
-                    throw CodexCLI.CLIError.badEnvelope("classification disagrees with a reviewed Drive read")
+                    throw Failure(stage: .validate, reason: .categoryMismatch,
+                                  metrics: [.classified: tools.count], rule: .drive,
+                                  mismatches: [.init(tool: name, slug: slug, expected: .read, observed: tool.category)])
                 }
             } else if tool.category == .read {
-                throw CodexCLI.CLIError.badEnvelope("classification contains an unreviewed Drive read")
+                throw Failure(stage: .validate, reason: .unreviewedRead,
+                              metrics: [.classified: tools.count], rule: .drive)
             }
         }
     }
@@ -188,16 +212,37 @@ nonisolated enum ConnectorClassifier {
     static func ensureClassified(slug: String) async -> Bool {
         if let direct = DirectMCPStore.connection(slug) { return direct.usable }
         guard ModelBackend.current == .claude else { return false }
-        guard let version = await refreshCLIVersion() else { return false }
+        return await Diagnostics.withOperation("connector_classification") {
+            await ConnectorClassificationDiagnostics.$ownsFailures.withValue(true) {
+                await refreshClassification(slug: slug)
+            }
+        }
+    }
+
+    private static func refreshClassification(slug: String) async -> Bool {
+        guard let version = await refreshCLIVersion() else {
+            if !Task.isCancelled {
+                let failure = ClaudeCLI.locateBinary() == nil
+                    ? Failure.execution(CodexCLI.CLIError.notAvailable(.notInstalled), stage: .version)
+                    : Failure(stage: .version, reason: .versionUnavailable)
+                await ConnectorClassificationDiagnostics.record(failure, slug: slug, version: nil, attempt: 0, terminal: true)
+            }
+            return false
+        }
         if let cached = ConnectorRegistry.classification(for: slug), isFresh(cached, slug: slug, version: version) {
             return true
         }
         // Retain an older record for diagnostics, but isClassified excludes it from actions.
         // One retry handles transient first-attach failures without accepting a partial surface.
         for attempt in 1...2 {
+            var inventoryCount: Int?
             do {
                 try Task.checkCancellation()
+                CrashReporting.diagnosticBreadcrumb("connector.classification.attempt_begin",
+                    data: ["source": Diagnostics.source(ConnectorRegistry.telemetrySlug(slug)), "attempted": String(attempt)])
+                Diagnostics.step(.inventory, source: slug)
                 let inventory = try await listTools(slug: slug)
+                inventoryCount = inventory.count
                 let tools = try await classify(slug: slug, inventory: inventory)
                 try validate(tools, slug: slug, inventory: inventory)
                 ConnectorRegistry.saveClassification(
@@ -205,12 +250,13 @@ nonisolated enum ConnectorClassifier {
                 logCounts(slug: slug, tools: tools)
                 return true
             } catch {
-                if Task.isCancelled || error is CancellationError { return false }
-                Log("classifier: \(ConnectorRegistry.telemetrySlug(slug)) attempt \(attempt) \(ErrorLabel(error))")
-                if attempt == 2, !Diagnostics.isExpected(error) {
-                    Diagnostics.report(.connectorFailed, phase: .validate, reason: "classification_failed", error: error,
-                                       source: ConnectorRegistry.telemetrySlug(slug), counts: [.attempted: attempt])
+                if Task.isCancelled || Diagnostics.isCancellation(error) {
+                    Diagnostics.current?.finish(outcome: "cancelled")
+                    return false
                 }
+                let failure = Failure.execution(error, stage: inventoryCount == nil ? .inventory : .classify)
+                await ConnectorClassificationDiagnostics.record(failure, slug: slug, version: version, attempt: attempt,
+                                                          inventoryCount: inventoryCount, terminal: attempt == 2)
                 if attempt == 1 { try? await Task.sleep(for: .seconds(2)) }
             }
         }
@@ -239,7 +285,7 @@ nonisolated enum ConnectorClassifier {
     /// builtin may wait for schemas; no connector operation is executed. Structured output.
     static func classify(slug: String, inventory: [String]) async throws -> [ConnectorRegistry.ClassifiedTool] {
         guard let identity = ConnectorRegistry.claudeIdentity(slug: slug) else {
-            throw CodexCLI.CLIError.badEnvelope("no claude identity for connector")
+            throw Failure(stage: .classify, reason: .missingIdentity)
         }
         let prompt = """
         You can see tools from the "\(identity.name)" connector in your context (named
@@ -268,8 +314,10 @@ nonisolated enum ConnectorClassifier {
         Include every connector tool exactly once; exclude built-ins and other
         connectors' tools.
         """
-        let envelope = try await run(prompt: prompt, schema: try classificationSchema(inventory: inventory), slug: slug)
+        let envelope = try await run(prompt: prompt, schema: try classificationSchema(inventory: inventory), slug: slug, stage: .classify)
+        Diagnostics.step(.parse, source: slug)
         let tools = try parse(envelope.jsonResult, prefix: identity.toolPrefix)
+        Diagnostics.step(.validate, source: slug)
         try validate(tools, slug: slug, inventory: inventory)
         return tools
     }
@@ -278,7 +326,7 @@ nonisolated enum ConnectorClassifier {
     /// classification quality, so a classify miss shows up as a diff against this.
     static func listTools(slug: String) async throws -> [String] {
         guard let identity = ConnectorRegistry.claudeIdentity(slug: slug) else {
-            throw CodexCLI.CLIError.badEnvelope("no claude identity for connector")
+            throw Failure(stage: .inventory, reason: .missingIdentity)
         }
         let prompt = """
         You can see tools from the "\(identity.name)" connector in your context (named
@@ -292,33 +340,76 @@ nonisolated enum ConnectorClassifier {
         Include every connector tool's full name exactly once; exclude built-ins and
         other connectors' tools.
         """
-        for _ in 0..<2 {
-            let envelope = try await run(prompt: prompt, schema: listSchema, slug: slug)
-            if let names = nativeInventory(raw: envelope.raw, prefix: identity.toolPrefix,
-                                           serverName: "claude.ai " + identity.name) { return names }
+        var failure = Failure(stage: .inventory, reason: .inventoryNotReady)
+        for probe in 1...2 {
+            let envelope = try await run(prompt: prompt, schema: listSchema, slug: slug, stage: .inventory)
+            let observation = nativeObservation(raw: envelope.raw, prefix: identity.toolPrefix,
+                                                serverName: "claude.ai " + identity.name)
+            failure = observation.failure
+            failure.metrics[.probes] = probe
+            let fields = ConnectorClassificationDiagnostics.payload(failure, slug: slug, version: currentCLIVersion, attempt: probe)
+            var details = fields.tags.merging(fields.extra) { _, new in new }
+            details.removeValue(forKey: "attempted")
+            if observation.names != nil {
+                details["reason"] = "inventory_verified"
+                details.removeValue(forKey: "classification_kind")
+            }
+            CrashReporting.diagnosticBreadcrumb("connector.classification.inventory", data: details)
+            if let names = observation.names { return names }
         }
-        throw CodexCLI.CLIError.badEnvelope("native connector inventory is not ready")
+        throw failure
     }
 
     /// Classification must cover the CLI's actual attached surface, not another model's
     /// recollection of it. Pending or missing init snapshots cannot certify completeness.
     static func nativeInventory(raw: String, prefix: String, serverName: String) -> [String]? {
+        nativeObservation(raw: raw, prefix: prefix, serverName: serverName).names
+    }
+
+    /// Only the native init snapshot certifies readiness. Model claims and later tool results
+    /// cannot establish completeness or prove that the user has (or has not) linked an account.
+    static func nativeObservation(raw: String, prefix: String, serverName: String)
+        -> (names: [String]?, failure: ConnectorClassificationDiagnostics.Failure) {
+        var failure = Failure(stage: .inventory, reason: .inventoryNotReady, nativeState: .snapshotMissing)
         for line in raw.split(separator: "\n") {
             guard let event = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  event["type"] as? String == "system", event["subtype"] as? String == "init",
-                  let servers = event["mcp_servers"] as? [[String: Any]],
-                  servers.contains(where: { $0["name"] as? String == serverName && $0["status"] as? String == "connected" }),
-                  let tools = event["tools"] as? [String] else { continue }
+                  event["type"] as? String == "system", event["subtype"] as? String == "init" else { continue }
+            guard let servers = event["mcp_servers"] as? [[String: Any]] else {
+                failure = Failure(stage: .inventory, reason: .inventoryNotReady, nativeState: .unknown)
+                continue
+            }
+            let matching = servers.filter { $0["name"] as? String == serverName }
+            let connected = matching.contains { $0["status"] as? String == "connected" }
+            let state: ConnectorClassificationDiagnostics.NativeState
+            switch matching.first?["status"] as? String {
+            case "connected": state = .connected
+            case "pending": state = .pending
+            case "failed": state = .failed
+            case "disabled": state = .disabled
+            case "needs-auth": state = .needsAuth
+            default: state = matching.isEmpty ? .serverMissing : .unknown
+            }
+            failure = Failure(stage: .inventory, reason: state == .needsAuth && !connected ? .authenticationRequired : .inventoryNotReady,
+                              nativeState: connected ? .connected : state)
+            guard connected else { continue }
+            guard let tools = event["tools"] as? [String] else {
+                failure = Failure(stage: .inventory, reason: .nativeToolsMissing, nativeState: .connected)
+                continue
+            }
             let names = tools.filter { $0.hasPrefix(prefix) }
-            guard !names.isEmpty, Set(names).count == names.count,
-                  names.allSatisfy({ normalizedName($0, prefix: prefix) == $0 }) else { return nil }
-            return names.sorted()
+            let invalid = names.count { normalizedName($0, prefix: prefix) != $0 }
+            failure.metrics = [.observed: names.count, .duplicate: names.count - Set(names).count, .invalid: invalid]
+            guard !names.isEmpty, Set(names).count == names.count, invalid == 0 else {
+                return (nil, Failure(stage: .inventory, reason: .invalidNativeInventory, nativeState: .connected,
+                                     metrics: failure.metrics))
+            }
+            return (names.sorted(), failure)
         }
-        return nil
+        return (nil, failure)
     }
 
     private static func run(prompt: String, schema: String,
-                            slug: String) async throws -> CodexCLI.Envelope {
+                            slug: String, stage: ConnectorClassificationDiagnostics.Stage) async throws -> CodexCLI.Envelope {
         var invocation = CodexCLI.Invocation(prompt: prompt)
         invocation.feature = "classify"
         invocation.model = .gpt6luna          // → haiku on the Claude tier map
@@ -332,10 +423,16 @@ nonisolated enum ConnectorClassifier {
         invocation.mcpAttachServer = slug      // the ATTACH recipe: walled in alone, zero allows
         invocation.connectorOnlyRead = true
         invocation.outputSchema = schema
+        Diagnostics.step(stage == .inventory ? .inventory : .generate, source: slug)
         // trigger=probe: a failed classification is a quiet retry-later, never filed as an
         // analysis failure (the census warm run's posture).
         return try await CodexTrigger.$current.withValue(.probe) {
-            let result = try await FrontierRun.run(invocation)
+            let result: CodexCLI.Envelope
+            do { result = try await FrontierRun.run(invocation) }
+            catch {
+                if Diagnostics.isCancellation(error) { throw error }
+                throw Failure.execution(error, stage: stage)
+            }
             #if DEBUG
             if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
                let path = ProcessInfo.processInfo.environment["LAB_CLASSIFICATION_OUTPUT"] {
@@ -355,18 +452,21 @@ nonisolated enum ConnectorClassifier {
         struct Reply: Codable { let tools: [ConnectorRegistry.ClassifiedTool] }
         guard let data = json.data(using: .utf8),
               let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
-            throw CodexCLI.CLIError.badEnvelope("classification did not parse")
+            throw Failure(stage: .parse, reason: .invalidJSON)
         }
         var known: [String: ConnectorRegistry.ToolCategory] = [:]
         for tool in reply.tools {
             guard let name = normalizedName(tool.name, prefix: prefix) else { continue }
             if let previous = known[name], previous != tool.category {
-                throw CodexCLI.CLIError.badEnvelope("classification contains conflicting duplicate verdicts")
+                throw Failure(stage: .parse, reason: .conflictingVerdicts,
+                              metrics: [.classified: reply.tools.count, .duplicate: 1])
             }
             known[name] = tool.category
         }
         let tools = known.keys.sorted().map { ConnectorRegistry.ClassifiedTool(name: $0, category: known[$0]!) }
-        guard !tools.isEmpty else { throw CodexCLI.CLIError.badEnvelope("classification has no matching names") }
+        guard !tools.isEmpty else {
+            throw Failure(stage: .parse, reason: .noMatchingNames, metrics: [.classified: reply.tools.count])
+        }
         return tools
     }
 

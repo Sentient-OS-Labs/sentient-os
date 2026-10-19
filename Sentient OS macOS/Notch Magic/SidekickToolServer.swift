@@ -3,6 +3,7 @@
 // Doc: Documentation - Sidekick - General.md
 
 import Foundation
+import CoreFoundation
 
 actor SidekickToolServer {
     nonisolated static let name = "sentient_recovery"
@@ -43,6 +44,7 @@ actor SidekickToolServer {
 
     func start() async throws -> Connection {
         var tools = ["ask_user"]
+        if interaction.conversationRun != nil { tools += SidekickConversationTools.names }
         if interaction.personalization != nil { tools.append(SidekickPersonalization.toolName) }
         if interaction.taskSummary != nil { tools.append(SidekickTaskSummary.toolName) }
         let transport = LocalMCPServer(name: Self.name, tools: tools, timeout: Self.maximumWait, maximumBody: 1_048_576) { [weak self] data in
@@ -61,6 +63,7 @@ actor SidekickToolServer {
 
     func response(_ rpc: [String: Any]) async throws -> Data {
         guard !closed, let id = rpc["id"], id is String || id is NSNumber else { throw CancellationError() }
+        if let number = id as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { throw CancellationError() }
         func reply(_ result: [String: Any]) throws -> Data { try Self.json(["jsonrpc": "2.0", "id": id, "result": result]) }
         switch rpc["method"] as? String {
         case "initialize":
@@ -70,48 +73,101 @@ actor SidekickToolServer {
         case "ping": return try reply([:])
         case "tools/list":
             return try reply(["tools": [Self.tool]
+                + (interaction.conversationRun == nil ? [] : SidekickConversationTools.schemas)
                 + (interaction.personalization == nil ? [] : [SidekickPersonalization.tool])
                 + (interaction.taskSummary == nil ? [] : [SidekickTaskSummary.tool])])
         case "tools/call":
-            guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String,
-                  let arguments = params["arguments"] as? [String: Any] else {
+            guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String else {
+                return try reply(Self.invalidArguments)
+            }
+            guard let arguments = params["arguments"] as? [String: Any] else {
+                if name == SidekickTaskSummary.toolName {
+                    interaction.taskSummary?.reject(.invalidArguments)
+                    return try reply(Self.rejectedSummary)
+                }
                 return try reply(Self.invalidArguments)
             }
             let key = String(decoding: try Self.json(id), as: UTF8.self)
             let fingerprint = try Self.json(["name": name, "arguments": arguments])
             let call: Call
             if let existing = calls[key] {
-                guard existing.fingerprint == fingerprint else { return try reply(Self.invalidArguments) }
+                guard existing.fingerprint == fingerprint else {
+                    if name == SidekickTaskSummary.toolName {
+                        interaction.taskSummary?.reject(.invalidArguments)
+                        return try reply(Self.rejectedSummary)
+                    }
+                    return try reply(Self.invalidArguments)
+                }
                 call = existing
             } else {
-                guard activeCall == nil, !interaction.hasActiveTools, !interaction.isWaiting, calls.count < 64 else {
-                    if name == SidekickTaskSummary.toolName { return try reply(Self.rejectedSummary) }
+                let quietMessage = name == "message_user"
+                guard activeCall == nil, (quietMessage || !interaction.hasActiveTools), !interaction.isWaiting, calls.count < 512 else {
+                    if name == SidekickTaskSummary.toolName {
+                        interaction.taskSummary?.reject(.toolBusy)
+                        return try reply(Self.rejectedSummary)
+                    }
                     if name == SidekickPersonalization.toolName {
-                        return try reply(await Self.rejectedPersonalization(SidekickPersonalization.Failure.unavailable))
+                        let message = await Self.rejectedPersonalization(SidekickPersonalization.Failure.unavailable)
+                        return try reply(Self.toolError(message))
                     }
                     return try reply(Self.invalidArguments)
                 }
                 let action: @Sendable () async throws -> Data
-                if name == "ask_user" {
-                    guard let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
-                          Set(arguments.keys) == ["error", "question", "answers"],
-                          arguments["error"] is NSNull || arguments["error"] is String,
-                          let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
-                        return try reply(Self.invalidArguments)
-                    }
-                    action = { [interaction] in
-                        let answer = try await interaction.ask(value)
-                        var payload: [String: Any] = ["text": answer.text, "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull()]
-                        if interaction.personalization != nil {
-                            payload["personalization_evidence_id"] = SidekickPersonalization.answerSource(value.id)
+                if SidekickConversationTools.names.contains(name), let run = interaction.conversationRun {
+                    let encoded = try Self.json(arguments)
+                    action = {
+                        guard let values = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+                            throw SidekickConversationRun.Failure.invalidMessage
                         }
-                        return try Self.json(payload)
+                        return try SidekickConversationTools.invoke(name, arguments: values, run: run)
+                    }
+                } else if name == "ask_user" {
+                    let consentArgument = ComputerUseDiagnosticConsent.argument
+                    if let raw = arguments[consentArgument] {
+                        guard Set(arguments.keys) == ["error", "question", "answers", consentArgument],
+                              let raw = raw as? String, let id = UUID(uuidString: raw),
+                              let pending = interaction.computerUseCheckConsent.pending(id: id) else {
+                            return try reply(Self.invalidArguments)
+                        }
+                        // Model prose is intentionally ignored for this permission question.
+                        // The app explains the window/focus change and supplies both choices.
+                        let question = try SidekickQuestion(id: pending.id, error: nil,
+                            question: ComputerUseDiagnosticConsent.question, answers: ComputerUseDiagnosticConsent.answers)
+                        action = { [interaction] in
+                            do {
+                                let answer = try await interaction.ask(question)
+                                interaction.computerUseCheckConsent.recordAnswer(id: id,
+                                    selectedAnswer: answer.selectedAnswer, text: answer.text)
+                                return try Self.json(["text": answer.text,
+                                    "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull(),
+                                    "computer_use_check_id": id.uuidString])
+                            } catch {
+                                interaction.computerUseCheckConsent.decline(id: id)
+                                throw error
+                            }
+                        }
+                    } else {
+                        guard let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
+                              Set(arguments.keys) == ["error", "question", "answers"],
+                              arguments["error"] is NSNull || arguments["error"] is String,
+                              let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
+                            return try reply(Self.invalidArguments)
+                        }
+                        action = { [interaction] in
+                            let answer = try await interaction.ask(value)
+                            var payload: [String: Any] = ["text": answer.text, "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull()]
+                            if interaction.personalization != nil {
+                                payload["personalization_evidence_id"] = SidekickPersonalization.answerSource(value.id)
+                            }
+                            return try Self.json(payload)
+                        }
                     }
                 } else if name == SidekickPersonalization.toolName, interaction.personalization != nil {
                     let review: SidekickPersonalization.Review
                     do { review = try SidekickPersonalization.decode(arguments) }
                     catch {
-                        return try reply(await Self.rejectedPersonalization(error))
+                        let message = await Self.rejectedPersonalization(error)
+                        return try reply(Self.toolError(message))
                     }
                     action = { [interaction] in
                         let message = try await interaction.updateInstructions(review)
@@ -121,7 +177,7 @@ actor SidekickToolServer {
                     do { try summary.stage(arguments) }
                     catch { return try reply(Self.rejectedSummary) }
                     action = {
-                        try Self.json(["message": "Description received for privacy review after task completion. Emit the original task's final STATUS now."])
+                        try Self.json(["message": "Description received for reporting after the attempt ends. Continue the original task; if it has ended, emit its final answer and STATUS."])
                     }
                 } else { return try reply(Self.invalidArguments) }
                 activeCall = key
@@ -135,7 +191,16 @@ actor SidekickToolServer {
             } catch {
                 if activeCall == key { activeCall = nil }
                 if name == SidekickPersonalization.toolName {
-                    return try reply(await Self.rejectedPersonalization(error))
+                    let message = await Self.rejectedPersonalization(error)
+                        return try reply(Self.toolError(message))
+                }
+                if SidekickConversationTools.names.contains(name) {
+                    SidekickDiagnostics.failure(name == "message_user" ? .messageDelivery : .historyRead,
+                        reason: error is SidekickConversationRun.Failure ? .invalidInput : .persistence,
+                        taskID: interaction.conversationRun?.taskID,
+                        backend: .init(rawValue: interaction.conversationRun?.backend ?? "unknown") ?? .unknown)
+                    return try reply(["isError": true, "content": [["type": "text", "text":
+                        "The conversation operation could not be completed. Check its arguments and the supplied size limits. Do not claim a message was saved unless the tool returned saved=true. Original history has not been overwritten."]]])
                 }
                 throw error
             }
@@ -144,33 +209,27 @@ actor SidekickToolServer {
     }
 
     private static var invalidArguments: [String: Any] {
-        ["isError": true, "content": [["type": "text", "text": "Ask one nonempty question with exactly two distinct, concise answers. Only one question may be pending, and all other tool calls must finish first. Do not reuse an earlier request ID with changed arguments."]]]
+        ["isError": true, "content": [["type": "text", "text": "Use this tool's declared schema. Only one Sidekick tool call may be pending. Questions require all actions to finish first. Do not reuse an earlier request ID with changed arguments."]]]
     }
     private static var rejectedSummary: [String: Any] {
         ["isError": true, "content": [["type": "text",
-            "text": "Description not accepted. Do not retry for analytics. Finish the original task with its required STATUS."]]]
+            "text": "Description not accepted. Do not retry for analytics. Continue the original task; when it ends, give its final answer and required STATUS."]]]
     }
-    @MainActor private static func rejectedPersonalization(_ error: Error) -> [String: Any] {
+    @MainActor private static func rejectedPersonalization(_ error: Error) -> String {
         let code = SidekickPersonalization.rejectionCode(error)
         Log("Sidekick personalization: tool rejected reason=\(code)")
-        let hint: String
-        switch code {
-        case "invalid_review":
-            hint = "Use the exact tool schema. With changes, skip_reason must be null. With changes=[], supply skip_reason with a supported code and nonempty detail."
-        case "invalid_evidence":
-            hint = "Use the supplied revision and quote real user evidence exactly. Starting screens support observed choices only; a user-requested app needs no screenshot evidence."
-        case "invalid_change", "size_limit":
-            hint = "Use the supplied editable IDs and scopes. Keep changes small, single-line and within the tool limits. Preserve manual instructions."
-        default:
-            hint = "Settings changed, a preference was removed, or the task is unavailable. Finish the original task honestly without claiming a save."
-        }
-        return ["isError": true, "content": [["type": "text", "text": "Instructions were not saved (\(code)). \(hint)"]]]
+        return SidekickPersonalization.failureMessage(error)
+    }
+
+    private static func toolError(_ message: String) -> [String: Any] {
+        ["isError": true, "content": [["type": "text", "text": message]]]
     }
     private static var tool: [String: Any] {
         ["name": "ask_user", "description": "Ask only when a specific missing fact, consequential ambiguity, or user-only action blocks the task after relevant context and reasonable safe checks. Handle routine obstacles yourself; do not repeat answered questions or use this for generic failure/retry prompts. Ask one concrete question with two useful choices. Returns only the user’s actual answer. Call alone after other tools finish; never act while waiting.",
          "inputSchema": ["type": "object", "properties": [
             "error": ["type": ["string", "null"], "description": "The complete error to display, or null for a clarification."],
             "question": ["type": "string", "minLength": 1, "maxLength": 500],
+            ComputerUseDiagnosticConsent.argument: ["type": "string", "description": "Only the approval ID returned by diagnose_computer_use when a diagnostic is eligible. The app supplies the actual consent question; only the user's Run check choice authorizes it."],
             "answers": ["type": "array", "minItems": 2, "maxItems": 2, "items": ["type": "string", "minLength": 1, "maxLength": 160]]],
             "required": ["error", "question", "answers"], "additionalProperties": false]]
     }

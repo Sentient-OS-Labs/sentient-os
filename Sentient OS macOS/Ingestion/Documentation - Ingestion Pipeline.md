@@ -1,8 +1,8 @@
 # Ingestion Pipeline (Ingestion/)
 
 The one on-device reading pipeline: **Connector → IterativeRun → CycleStore**. Every local source
-(Files, Apple Notes, WhatsApp, iMessage, Apple Mail, Apple Calendar) is a connector on this core. One screen
-(`ProcessingView`) drives both Analyze Now and the dev buttons; the scheduler uses the same code.
+(Files, Apple Notes, SiYuan, WhatsApp, iMessage, Apple Mail, Apple Calendar) is a connector on this core. `ProcessingCoordinator` owns analysis independently of the visible window. Analyze Now, onboarding
+and the overnight scheduler submit work to the same owner; `ProcessingView` observes its progress.
 Timeline sources commit each survivor and progress marker together. Apple Mail has a dedicated checkpoint path; Apple Calendar commits
 an entire validated snapshot with its coverage checkpoint because events can change or disappear.
 
@@ -10,11 +10,13 @@ an entire validated snapshot with its coverage checkpoint because events can cha
 
 | File | Job |
 |---|---|
+| `ProcessingPlan.swift` · `ProcessingCoordinator.swift` · `ProcessingRun.swift` | Durable analysis intent, admission and lifecycle, and the shared local/cloud/preparation sequence. Windows can close without cancelling analysis. |
+| `RunSource.swift` | Selected local sources and connector construction, including the SiYuan reader. |
 | `Connector.swift` | The `Connector` protocol and `Bucket`. A connector is deliberately dumb: it lists its current work items per bucket (newest first) and loads one item's content. All pointer logic lives in `IterativeRun`. |
 | `ItemKey.swift` | A work item's position in its connector's timeline: `(order, tiebreak)`. Files use (date added, path), Notes (creation date, uuid), chats (row id, ""). |
 | `CycleStore.swift` | The pipeline's own SwiftData store: durable per-bucket pointers + ephemeral survivor summaries, with the atomic per-item commit. |
 | `IterativeRun.swift` | The orchestrator: drives any connectors through one `Engine`, per bucket, in `.initial` / `.iterative` / `.auto` mode. Owns the GPU-wedge recovery, per-item extraction timeout, per-source time budget, and progress reporting. |
-| `Connectors/FilesConnector.swift` · `NotesConnector.swift` · `ChatConnectors.swift` · `AppleMailConnector.swift` · `AppleCalendarConnector.swift` | Thin adapters over the `Sources/` readers: one bucket per folder root, Notes, chat, or selected Calendar snapshot. |
+| `Connectors/FilesConnector.swift` · `NotesConnector.swift` · `ChatConnectors.swift` · `AppleMailConnector.swift` · `AppleCalendarConnector.swift` · `SiYuanConnector.swift` | Thin adapters over the `Sources/` readers: one bucket per folder root, Notes, chat, or selected Calendar snapshot. |
 | `LifetimeStats.swift` | The lifetime counters ("I've read 12,438 things"). Verdict counts without source contents; source-specific progress checkpoints are separate. |
 | `PipelineActivity.swift` | A tiny "is a run active?" counter (`IterativeRun` and `ProactiveCycle` bump it). Settings disables Reset and Uninstall while it is non-zero; the updater also refuses to relaunch during a run. |
 | `FactoryReset.swift` | The one full wipe shared by Settings → System → Reset and Dev Tools → Reset everything: cycle store, knowledge base folder, proactive traces, counters, cloud copy (best-effort), and the rewind to the start of onboarding. |
@@ -103,7 +105,7 @@ snapshot, never a live availability check.
 
 - Home Analyze Now, onboarding's first analysis, the 3 AM run: `.auto`.
 - Dev Tools "start / resume (top → bottom)": `.auto`; "start on device (bottom → top)": `.iterative`; "Reset everything" then a run: a fresh first run everywhere.
-- The Gmail and Calendar legs are not connectors; `ProcessingView` and the scheduler run them after the on-device leg, and they land in the same `CycleStore` (see the cloud sources doc).
+- The Gmail and Calendar legs are not connectors; `ProcessingRun` runs them after the on-device leg, and they land in the same `CycleStore` (see the cloud sources doc).
 
 ## The cycle
 

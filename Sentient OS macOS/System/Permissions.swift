@@ -83,17 +83,28 @@ enum Permissions {
     /// correct database for the service (system DB for Accessibility/ScreenCapture, else the user DB).
     /// Requires Full Disk Access to read; any failure ⇒ false (treated as not-granted).
     static func isTCCGranted(service: String, clientBundleID: String) -> Bool {
+        tccState(service: service, clientBundleID: clientBundleID) == .granted
+    }
+
+    enum TCCState: String { case granted, denied, notAsked, unavailable }
+    /// Diagnostic reads distinguish a denied grant from a database we cannot inspect.
+    /// The existing admission check above retains its conservative Boolean behavior.
+    static func tccState(service: String, clientBundleID: String) -> TCCState {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(tccDBPath(for: service), &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { sqlite3_close(db); return false }
+        guard sqlite3_open_v2(tccDBPath(for: service), &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { sqlite3_close(db); return .unavailable }
         defer { sqlite3_close(db) }
         var stmt: OpaquePointer?
         let sql = "SELECT auth_value FROM access WHERE service=? AND client=? AND client_type=0 LIMIT 1;"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return .unavailable }
         defer { sqlite3_finalize(stmt) }
         let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         sqlite3_bind_text(stmt, 1, service, -1, TRANSIENT)
         sqlite3_bind_text(stmt, 2, clientBundleID, -1, TRANSIENT)
-        return sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 2
+        switch sqlite3_step(stmt) {
+        case SQLITE_ROW: return sqlite3_column_int(stmt, 0) == 2 ? .granted : .denied
+        case SQLITE_DONE: return .notAsked
+        default: return .unavailable
+        }
     }
 
     // MARK: - Sentient's own Screen Recording (Notch Magic captures the screen for computer-use context)

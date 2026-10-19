@@ -18,9 +18,14 @@ extension IterativeRun {
         var diagnosticPhase: Diagnostics.Phase = .snapshot
         await store.invalidateCalendarSnapshot()
         AppleCalendarSource.recordIssue()
+        SourceHealth.recordReadOutcome(source: "apple_calendar", outcome: "incomplete")
         do {
             let buckets = try await withExtractionTimeout(Self.extractionTimeoutSeconds) { try connector.buckets(since: [:]) }
             guard buckets.count == 1, let snapshot = buckets.first?.snapshot else { throw AppleCalendarSource.ReadError.invalidEvent }
+            var cache = try await store.calendarRetryCache(for: snapshot)
+            // Remove stale accepted content before any model work, including content that is
+            // now sensitive. A failed save stops the source instead of publishing stale data.
+            guard await store.saveCalendarRetryCache(cache) == .saved else { throw CalendarRunFailure.storage }
             p.total = snapshot.events.count
             onProgress(p)
             for event in snapshot.events.sorted(by: { ($0.start, $0.id) < ($1.start, $1.id) }) {
@@ -33,6 +38,9 @@ extension IterativeRun {
                     let artifact = try await withExtractionTimeout(Self.extractionTimeoutSeconds) { try connector.load(event.candidate) }
                     loaded = true
                     var decision = Triage.calendarInputDecision(for: artifact)
+                    if decision == nil, let saved = cache.survivors[event.id] {
+                        decision = Triage.Outcome(verdict: .survivor, title: saved.title, summary: saved.summary, reason: .survivor)
+                    }
                     if decision == nil {
                         if generations >= Self.preemptiveReloadEvery {
                             try await engine.reload(); generations = 0
@@ -60,6 +68,10 @@ extension IterativeRun {
                     runtimeFailures = 0
                     switch decision.verdict {
                     case .survivor:
+                        if !event.revision.isEmpty, cache.survivors[event.id] == nil {
+                            cache.survivors[event.id] = .init(revision: event.revision, summary: decision.summary, title: decision.title)
+                            guard await store.saveCalendarRetryCache(cache) == .saved else { throw CalendarRunFailure.storage }
+                        }
                         notes.append(NoteDraft(kind: .appleCalendar, sourceID: event.id, folder: name,
                             itemDate: event.start, text: decision.summary + "\n" + event.schedule,
                             title: decision.title, reminderFlagged: false))
@@ -71,6 +83,7 @@ extension IterativeRun {
                     p.lastVerdict = decision.verdict
                 } catch is CancellationError { throw CancellationError() }
                 catch let error as AppleCalendarSource.ReadError { throw error }
+                catch CalendarRunFailure.storage { throw CalendarRunFailure.storage }
                 catch {
                     Diagnostics.report(.sourceReadFailed, phase: diagnosticPhase, error: error, source: "apple_calendar", flags: [.retriable: true], terminal: true)
                     p.failed += 1
@@ -83,7 +96,7 @@ extension IterativeRun {
                         Log("Apple Calendar event deferred: \(String(describing: type(of: error)))")
                     } else if let reason = error as? Triage.ReplyFailure {
                         p.parseFailures += 1; runtimeFailures = 0
-                        p.lastSummary = "The local model returned an incomplete answer. This calendar window will be analyzed again."
+                        p.lastSummary = "The local model returned an incomplete answer. Completed safe summaries are saved for the next attempt."
                         Log("Apple Calendar analysis deferred: \(reason.rawValue)")
                     } else {
                         runtimeFailures += 1
@@ -122,6 +135,7 @@ extension IterativeRun {
             for _ in 0..<p.sensitive { LifetimeStats.bump(.sensitive) }
             p.successfulSources.insert(name)
             UserDefaults.standard.removeObject(forKey: AppleCalendarSource.issueKey)
+            SourceHealth.recordReadOutcome(source: "apple_calendar", outcome: "ok")
             if snapshot.events.isEmpty {
                 p.quietReads += 1
                 p.finishSourceRead(name: name, label: name, summary: nil, items: 0)
@@ -132,7 +146,7 @@ extension IterativeRun {
             AppleCalendarSource.recordIssue()
             p.lastPath = name; p.lastPrompt = nil; p.lastVerdict = nil
             p.lastTitle = "Calendar analysis paused"
-            p.lastSummary = "No partial schedule was saved. Run analysis again to read the complete calendar window."
+            p.lastSummary = "Completed safe summaries are saved for retry. The schedule will appear after the full window is checked."
             p.sourceReadFailures[name] = p.lastSummary
         } catch {
             Diagnostics.report(.sourceReadDegraded, phase: diagnosticPhase, error: error, source: "apple_calendar",

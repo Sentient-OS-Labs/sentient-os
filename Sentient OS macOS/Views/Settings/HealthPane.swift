@@ -68,11 +68,12 @@ struct HealthPane: View {
             && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
             && engineAllGreen
+            && sourceIssues.isEmpty
     }
 
     var body: some View {
         SettingsPane(title: "Permissions & Health",
-                     whisper: allGreen ? "All clear. Your Sentient is healthy."
+                     whisper: allGreen ? "Your permissions and account checks have passed."
                                        : "Manage access and check that everything is ready.") {
             if !checked {
                 checkingLine
@@ -81,6 +82,14 @@ struct HealthPane: View {
                     onDeviceGroup
                     sidekickGroup
                     NativeComputerUsePermissionRows(gate: computerGate)
+                    ComputerUseCheckRow()
+                    if !sourceIssues.isEmpty {
+                        SettingsGroup(label: "Sources to retry") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(sourceIssues, id: \.self) { SettingsProse($0) }
+                            }
+                        }
+                    }
                     Group {
                         if engineAllGreen && !codexExpanded {
                             SettingsGroup(label: engineSummaryLabel) { engineSummaryLine }
@@ -101,7 +110,7 @@ struct HealthPane: View {
         .onChange(of: wakeSetup.ready) { _, ready in
             if ready {
                 let needsSetup = appState?.scheduler.needsSchedulerSetup == true
-                appState?.scheduler.maybeAutoEnable()
+                appState?.scheduler.enableAfterSetup()
                 if needsSetup { appState?.scheduler.reevaluate() }
             }
         }
@@ -131,6 +140,39 @@ struct HealthPane: View {
     }
 
     // MARK: - SENTIENT (severity order)
+
+    @AppStorage(AppleCalendarSource.issueKey) private var calendarIssue = ""
+    @AppStorage(AppleMailHealth.key) private var mailHealth = ""
+    @AppStorage(AppleMailHealth.needsRetryKey) private var mailNeedsRetry = false
+    @AppStorage(SourceHealth.readStatusKey) private var readStatusData = Data()
+
+    private var sourceIssues: [String] {
+        var issues: [String] = []
+        if AppleCalendarSource.isEnabled, let message = AppleCalendarSource.issueMessage(calendarIssue) {
+            issues.append("Apple Calendar: " + message)
+        }
+        if !AppleMailSelection.accounts.isEmpty, mailNeedsRetry, !mailHealth.isEmpty { issues.append(mailHealth) }
+        let statuses = (try? JSONDecoder().decode([String: String].self, from: readStatusData)) ?? [:]
+        for slug in MCPSource.kbSlugs() {
+            guard let status = statuses[Diagnostics.source(slug)], status != "ok" else { continue }
+            let name = ConnectorRegistry.displayName(slug: slug)
+            issues.append(status == "connector_auth" ? "\(name): reconnect this source in Knowledge Sources."
+                : "\(name): the last analysis did not finish. Run analysis to retry; saved knowledge is retained.")
+        }
+        let defaults = UserDefaults.standard
+        let filesEnabled = !CustomRoots.urls.isEmpty || ["desktop", "documents", "downloads"].contains {
+            (defaults.object(forKey: "dbg.run." + $0) as? Bool) ?? true
+        }
+        for (source, name, enabled) in [("file", "Files", filesEnabled),
+            ("whatsapp", "WhatsApp", defaults.bool(forKey: "dbg.run.whatsapp")),
+            ("imessage", "iMessage", defaults.bool(forKey: "dbg.run.imessage")),
+            ("notes", "Notes", defaults.bool(forKey: "dbg.run.notes"))] {
+            guard enabled, let status = statuses[source], status != "ok" else { continue }
+            issues.append(status == "time_cap" ? "\(name): more items remain. Run analysis to continue from saved progress."
+                : "\(name): the last analysis did not finish. Check access and run analysis again.")
+        }
+        return issues
+    }
 
     /// The first probe's stand-in — the codex login check shells out and takes seconds; without
     /// this the full board flashes and re-collapses.

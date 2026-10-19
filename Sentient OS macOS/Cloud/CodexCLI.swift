@@ -114,7 +114,7 @@ actor CodexCLI {
                                                // config.toml). Use the curated presets below.
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
-        var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
+        var timeout: TimeInterval = 3_600      // positive: execution budget; zero: unlimited user task
         var feature: String = "unknown"        // §7.9: which caller — so a codex.failure is attributable
                                                // (gmail / calendar / vault / proactive / …). Diagnostics
                                                // tag ONLY; never affects the run.
@@ -677,7 +677,9 @@ actor CodexCLI {
                                               observeAgentTools: true,
                                               onStdoutLine: stdoutLine)
         AgentRunDiagnostics.current?.recordProcess(status: out.status)
-        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
+            completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
+                ? nil : SidekickInteraction.current?.conversationRun?.completionStatus)
         sessionHadSuccess = true
         Log("codex exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
         return env
@@ -698,14 +700,18 @@ actor CodexCLI {
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
                                effortArg: String,
                                providerOverrides: [String] = [],
-                               nativeConfiguration: OpenAIComputerUse.Configuration? = nil) throws -> [String] {
+                               nativeConfiguration: OpenAIComputerUse.Configuration? = nil,
+                               nativeConnection: LocalMCPServer.Connection? = nil) throws -> [String] {
         var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
-        for override in try (nativeConfiguration ?? .resolve()).codexOverrides { args += ["-c", override] }
+        let nativeOverrides = try nativeConnection?.codexOverrides ?? (nativeConfiguration ?? .resolve()).codexOverrides
+        for override in nativeOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
+            // Research and app actions share one task; do not depend on CLI search defaults.
+            args += ["-c", "web_search=\"live\""]
             var hooks: [HostedToolPolicy.Rule] = []
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
@@ -740,11 +746,12 @@ actor CodexCLI {
         return args
     }
 
-    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
+    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 0,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         let backend = ModelBackend.current
         var nativeTask: UUID?
+        var nativeServer: NativeComputerUseServer?
         var nativeLease: CodexRuntime.FileLock?
         defer { nativeLease?.unlock() }
         let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
@@ -761,6 +768,9 @@ actor CodexCLI {
             nativeLease = try await CodexRuntime.sharedRuntimeLease()
             let nativeConfiguration = try OpenAIComputerUse.Configuration.resolve()
             nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration)
+            let server = NativeComputerUseServer(configuration: nativeConfiguration)
+            nativeServer = server
+            let connection = try await server.start()
             try Task.checkCancellation()
             var overrides = SidekickToolServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
@@ -780,7 +790,7 @@ actor CodexCLI {
             }
             let args = try Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
                 modelID: modelID, effortArg: effortArg, providerOverrides: overrides,
-                nativeConfiguration: nativeConfiguration)
+                nativeConfiguration: nativeConfiguration, nativeConnection: connection)
             let modelTag = backend == .custom ? "custom" : modelID
             Log("codex exec: start feature=computer runtime=openAI model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let ownedBridge = bridge
@@ -791,20 +801,24 @@ actor CodexCLI {
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
+                Task { await server.stop() }
             }
             try Task.checkCancellation()
             if let error = await bridge?.failure { throw error }
             await bridge?.stop()
+            await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
             if let error = Self.agentFailure(out) { throw error }
-            let result = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000)).result
+            let result = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000),
+                completion: SidekickInteraction.current?.conversationRun?.completionStatus).result
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return result
         } catch {
             await bridge?.stop()
+            await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             if Task.isCancelled { throw CancellationError() }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
@@ -1165,17 +1179,23 @@ actor CodexCLI {
         return .staleClient
     }
 
-    private static func parseEnvelope(_ out: ExecResult, durationMS: Int) throws -> Envelope {
+    private static func parseEnvelope(_ out: ExecResult, durationMS: Int,
+                                      completion: AgentStatus? = nil) throws -> Envelope {
         var sessionID: String?
         var lastMessage: String?
         var completedItems = 0
         var usage: [String: Any]?
         var errors: [String] = []
+        var cleanTerminalTurn = false
+        var terminalFailure = false
 
         for line in out.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let type = obj["type"] as? String else { continue }
+                  let type = obj["type"] as? String else { cleanTerminalTurn = false; continue }
+            // A receipt cannot stand in for a truncated or still-active provider turn.
+            // A subsequent turn.completed may recover ordinary mid-turn error events.
+            cleanTerminalTurn = type == "turn.completed"
             switch type {
             case "thread.started":
                 sessionID = obj["thread_id"] as? String
@@ -1189,6 +1209,7 @@ actor CodexCLI {
             case "turn.completed":
                 usage = obj["usage"] as? [String: Any]
             case "turn.failed", "error":
+                if type == "turn.failed" { terminalFailure = true }
                 if let err = obj["error"] as? [String: Any], let m = err["message"] as? String {
                     errors.append(m)
                 } else if let m = obj["message"] as? String {
@@ -1201,10 +1222,12 @@ actor CodexCLI {
 
         noteStaleSignatureIfPresent(out.stderr)   // success or failure: the drift nudge either way
 
-        // Failure = non-zero exit OR no final message (a recovered mid-run error that still
-        // produced an answer with exit 0 counts as success). The thread id arrives in the very
-        // first event, so even a mid-run usage limit keeps its resume handle.
-        if out.status != 0 || lastMessage == nil {
+        // Action tasks may deliver their entire final answer through message_user. Accept
+        // its explicit outcome only with a clean terminal protocol event and process exit;
+        // a zero exit or durable message alone cannot bless a truncated/failed stream.
+        let toolOnlyCompletion = cleanTerminalTurn && (completion.map { $0 != .none } ?? false)
+        let missingMessage = lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        if out.status != 0 || terminalFailure || (missingMessage && !toolOnlyCompletion) {
             let detail = errors.isEmpty ? failureDetail(out) : errors.joined(separator: " · ")
             let lowered = detail.lowercased()
             // Belt-and-suspenders behind the pre-spawn guard: if a prompt still reached the
@@ -1259,8 +1282,8 @@ actor CodexCLI {
         case "command_execution", "local_shell_call":
             return nonEmpty(item["command"] as? String).map { "$ \($0)" }
         case "mcp_tool_call", "tool_call", "function_call":
-            if item["server"] as? String == SidekickToolServer.name,
-               item["tool"] as? String == SidekickTaskSummary.toolName { return nil }
+            if SidekickConversationRun.hidden(server: item["server"] as? String ?? "",
+                                              tool: (item["tool"] as? String) ?? (item["name"] as? String) ?? "") { return nil }
             let label = [(item["server"] as? String) ?? "",
                          (item["tool"] as? String) ?? (item["name"] as? String) ?? ""]
                 .filter { !$0.isEmpty }.joined(separator: ".")
@@ -1395,11 +1418,15 @@ actor CodexCLI {
         // whole; stdout LINE-streams to `onStdoutLine` (when present) so callers see codex's --json
         // play-by-play live, while still accumulating the full buffer for parseEnvelope.
         let outDrain = PipeDrain(), errDrain = PipeDrain()
-        let interactionViolated = OSAllocatedUnfairLock(initialState: false)
+        let interactionFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
+        let streamID = UUID()
+        defer { interaction?.endExecution(streamID: streamID) }
         let observeInteraction: @Sendable (String) -> Void = { line in
-            do { try interaction?.observeToolEvent(line) }
+            // Drain remaining bytes after failure, but never record more task activity.
+            guard interactionFailure.withLock({ $0 == nil }) else { return }
+            do { try interaction?.observeToolEvent(line, streamID: streamID) }
             catch {
-                interactionViolated.withLock { $0 = true }
+                interactionFailure.withLock { if $0 == nil { $0 = error } }
                 procHolder?.terminate()
             }
         }
@@ -1469,7 +1496,7 @@ actor CodexCLI {
         watchdog.cancel()
         drained.wait()
 
-        if interactionViolated.withLock({ $0 }) { throw SidekickInteraction.Failure.toolWhileWaiting }
+        if let error = interactionFailure.withLock({ $0 }) { throw error }
         if timedOut.withLock({ $0 }) { throw CLIError.timedOut(after: timeout) }
         return ExecResult(status: proc.terminationStatus, stdout: outDrain.text, stderr: errDrain.text)
     }

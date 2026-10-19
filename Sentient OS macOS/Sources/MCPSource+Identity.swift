@@ -73,17 +73,16 @@ extension MCPSource {
     /// response is a failed read. Account changes between successful calls are refused.
     static func profileFingerprint(raw: String) throws -> String? {
         struct Profile: Decodable { let id: String?; let email: String?; let workspace_id: String? }
-        struct Reply: Decodable { let result: Profile }
         func profile(_ value: Any) -> Profile? {
-            guard JSONSerialization.isValidJSONObject(value),
-                  let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
-            if let wrapped = try? JSONDecoder().decode(Reply.self, from: data) { return wrapped.result }
-            if let object = value as? [String: Any],
-               Set(object.keys).isSubset(of: ["id", "email", "name", "nickname", "picture", "workspace_id", "workspace_name"]),
-               object["id"] != nil || object["email"] != nil {
-                return try? JSONDecoder().decode(Profile.self, from: data)
-            }
-            return nil
+            guard let envelope = value as? [String: Any] else { return nil }
+            let object = envelope["result"] as? [String: Any] ?? envelope
+            // Profile metadata is additive (for example workspace_picture). Verify typed
+            // identity fields instead of rejecting a valid account when metadata expands.
+            // A wrapper alone is not proof of an empty profile: identity keys must be present.
+            guard object["id"] != nil || object["email"] != nil,
+                  JSONSerialization.isValidJSONObject(object),
+                  let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+            return try? JSONDecoder().decode(Profile.self, from: data)
         }
         var identities = Set<String?>()
         for reply in successfulCodexMCPResults(raw: raw)
@@ -98,7 +97,7 @@ extension MCPSource {
                     }
                 }
             }
-            guard let found else { throw MCPError.invalidResponse(slug: "google-drive", rule: "identity") }
+            guard let found else { throw MCPError.invalidResponse(slug: "google-drive", rule: "identity_shape") }
             let id = found.id?.trimmingCharacters(in: .whitespacesAndNewlines)
             let email = found.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let stable = id.flatMap { $0.isEmpty ? nil : "id:" + $0 }

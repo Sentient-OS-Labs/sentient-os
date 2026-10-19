@@ -19,6 +19,8 @@ nonisolated final class SidekickInteraction: Sendable {
     let instructionsSnapshot: SidekickInstructionStore.Snapshot?
     let personalization: SidekickPersonalization?
     let taskSummary: SidekickTaskSummary?
+    let conversationRun: SidekickConversationRun?
+    let computerUseCheckConsent = ComputerUseDiagnosticConsent()
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
         var began: TimeInterval?
@@ -36,16 +38,19 @@ nonisolated final class SidekickInteraction: Sendable {
          instructionsSnapshot: SidekickInstructionStore.Snapshot? = nil,
          personalization: SidekickPersonalization? = nil,
          taskSummary: SidekickTaskSummary? = nil,
+         conversationRun: SidekickConversationRun? = nil,
          diagnosticTaskID: UUID = UUID(), diagnosticAttempt: Int = 1,
          request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
         self.diagnosticTaskID = diagnosticTaskID; self.diagnosticAttempt = diagnosticAttempt
         self.retryContext = retryContext; self.historyContext = historyContext; self.request = request
         self.instructionsSnapshot = instructionsSnapshot; self.personalization = personalization
         self.taskSummary = taskSummary
+        self.conversationRun = conversationRun
     }
     /// A snapshot taken before this request was recorded, shared by computer and connector legs.
     var promptInstructions: String {
-        Self.instructions + (historyContext.isEmpty ? "" : "\n\n" + historyContext) + retryContext
+        Self.instructions + (conversationRun == nil ? "" : "\n\n" + Self.conversationInstructions)
+            + (historyContext.isEmpty ? "" : "\n\n" + historyContext) + retryContext
             + "\n\n" + (instructionsSnapshot?.promptBlock ?? "")
             + "\n\n" + (personalization?.promptInstructions ?? "")
             + (taskSummary == nil ? "" : "\n\n" + SidekickTaskSummary.promptInstructions)
@@ -72,7 +77,13 @@ nonisolated final class SidekickInteraction: Sendable {
         let started = Date()
         recordRecovery("asked", error: question.error)
         do {
+            try conversationRun?.question(id: question.id, text: question.question, choices: question.answers, error: question.error)
+            SidekickDiagnostics.event(.question, taskID: conversationRun?.taskID,
+                backend: .init(rawValue: diagnosticBackend) ?? .unknown, counts: [.questions: 1])
             let answer = try await request(question)
+            try conversationRun?.answer(questionID: question.id, text: answer.text)
+            SidekickDiagnostics.event(.answer, taskID: conversationRun?.taskID,
+                backend: .init(rawValue: diagnosticBackend) ?? .unknown, duration: Date().timeIntervalSince(started))
             recordRecovery("answered", error: question.error, elapsed: Date().timeIntervalSince(started))
             personalization?.recordAnswer(question.id, text: answer.text)
             return answer
@@ -85,11 +96,12 @@ nonisolated final class SidekickInteraction: Sendable {
 
     /// Model-authored blockers are labelled as claims; no question, answer, or error text is sent.
     func recordRecovery(_ stage: String, error: String? = nil, elapsed: TimeInterval = 0) {
-        let stage = ["asked", "answered", "cancelled", "failed", "final_failure", "retry", "dismissed"].contains(stage) ? stage : "unknown"
+        let stage = ["asked", "answered", "cancelled", "failed", "final_failure", "retry", "dismissed", "expired"].contains(stage) ? stage : "unknown"
         var fields = diagnosticFields
         fields["wait_ms"] = String(max(0, Int(elapsed * 1000)))
         fields["has_error"] = String(error != nil)
-        let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action" : (stage == "final_failure" ? "ui_outcome" : "model_report")
+        let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action"
+            : (["final_failure", "expired"].contains(stage) ? "ui_outcome" : "model_report")
         CrashReporting.captureEvent("sidekick.recovery", level: .info,
             tags: ["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
                    "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"], extra: fields,
@@ -103,14 +115,25 @@ nonisolated final class SidekickInteraction: Sendable {
             state.updatingInstructions = true; return true
         }) else { throw SidekickPersonalization.Failure.unavailable }
         defer { wait.withLock { $0.updatingInstructions = false } }
-        let message = try await personalization.stage(review)
-        try await personalization.presentStagedUpdate()
-        return message
+        let stage: SidekickDiagnostics.Stage = review.operation == .write ? .memoryWrite : .memoryRead
+        do {
+            let message = try await personalization.stage(review)
+            SidekickDiagnostics.event(stage, taskID: conversationRun?.taskID,
+                backend: .init(rawValue: diagnosticBackend) ?? .unknown,
+                counts: [.bytes: review.markdown?.utf8.count ?? 0])
+            return message
+        } catch {
+            let code = await SidekickPersonalization.rejectionCode(error)
+            SidekickDiagnostics.failure(stage, reason: code == "settings_changed" ? .conflict : .writeFailed,
+                taskID: conversationRun?.taskID, backend: .init(rawValue: diagnosticBackend) ?? .unknown)
+            throw error
+        }
     }
 
     /// Observe structured executor events only. Refuse a question while a computer call is
     /// unfinished, and stop the executor if it starts more work during the user's turn.
-    func observeToolEvent(_ line: String) throws {
+    func observeToolEvent(_ line: String, streamID: UUID? = nil) throws {
+        try conversationRun?.observe(line, streamID: streamID ?? id)
         guard let data = line.data(using: .utf8),
               let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let kind = event["type"] as? String else { return }
@@ -126,24 +149,59 @@ nonisolated final class SidekickInteraction: Sendable {
             for block in blocks {
                 if kind == "assistant", block["type"] as? String == "tool_use",
                    let id = block["id"] as? String, let name = block["name"] as? String,
+                   name != "StructuredOutput", // final schema delivery is not another task action
+                   !name.hasPrefix("mcp__sentient_relay__"), // outer Codex is the authoritative executor
                    !name.hasPrefix("mcp__\(SidekickToolServer.name)__") { changes.append((id, true)) }
                 if kind == "user", block["type"] as? String == "tool_result",
                    let id = block["tool_use_id"] as? String { changes.append((id, false)) }
             }
         }
         let updates = changes
+        let scope = (streamID ?? id).uuidString
         try wait.withLock { state in
             for change in updates {
                 if change.started {
                     guard state.began == nil, !state.updatingInstructions else { throw Failure.toolWhileWaiting }
-                    state.activeTools.insert(change.id)
-                } else { state.activeTools.remove(change.id) }
+                    state.activeTools.insert(scope + ":" + change.id)
+                } else { state.activeTools.remove(scope + ":" + change.id) }
             }
         }
         if updates.contains(where: \.started) {
             personalization?.discardProposal()
             taskSummary?.discard()
         }
+    }
+
+    static let conversationInstructions = """
+    SIDEKICK CONVERSATION
+    The user talks to the same Sidekick from the notch or Sentient's main Home window.
+    Use sentient_recovery.message_user for text the user should see. Body is Markdown.
+    Use kind=update sparingly for meaningful progress, priority=normal. Do not narrate every
+    click or tool call. Tool activity is separately available in expandable history.
+    ALWAYS call message_user with kind=answer and completion=done or completion=could_not
+    before normally finishing, including handled failures. Use completion=done only when you
+    have completed the request and verified any actions; use could_not for an incomplete task.
+    Never put completion on kind=update. For an action, write a short concrete result note; for a question or research,
+    provide the actual useful answer. Verify effects before claiming success. One final answer
+    is enough; do not add another generic done message after it. Set priority=high on final
+    answers and anything the user should see outside Home. Normal messages stay in history.
+    Set priority=high for an important
+    intermediate message that also deserves notch attention. Do not announce telemetry.
+    Ask blocking questions through ask_user so the task waits for an actual answer.
+    History and replies are available through search_history/read_history when exact older
+    wording, options, or drafts are needed. Never infer forgotten details from a short summary.
+    Deliver the final answer after all substantive work has finished. If you do more work or
+    ask another question afterward, send an updated final answer with its current completion.
+    Still emit the final STATUS line as a compatibility fallback. A saved message without an
+    explicit completion value does not establish task success. If a message could not be
+    saved, do not claim delivery. Memory is maintained separately in SidekickMemory.md.
+    """
+
+    /// A failed provider leg may never send item.completed. It must not keep a later
+    /// fallback from asking a question; durable activity still records the missing result.
+    func endExecution(streamID: UUID) {
+        let prefix = streamID.uuidString + ":"
+        wait.withLock { $0.activeTools = $0.activeTools.filter { !$0.hasPrefix(prefix) } }
     }
 
     static let instructions = """
@@ -182,12 +240,16 @@ nonisolated final class SidekickInteraction: Sendable {
 
     CHROMIUM BROWSER ERROR
     If a sentient_native tool returns the following error while using a Chromium browser
-    (such as Chrome, Edge, Brave, Arc, Vivaldi, or Opera), stop the current task attempt:
+    (such as Chrome, Edge, Brave, Arc, Vivaldi, or Opera):
     The user changed '/Applications/Google Chrome.app'. Re-query the latest state with `get_app_state` before sending more actions.
     The quoted app path may name another Chromium browser; apply the same rule in that case.
-    This specific error overrides the recovery guidance above: do not re-query app state,
-    retry actions, switch browsers yourself, or call sentient_recovery.ask_user. Reply only with:
-    STATUS: COULD_NOT — Please use another browser so Sidekick can continue its task.
+    Try recovering once: call get_app_state to read the latest state of the same browser,
+    inspect whether the previous action already happened, then continue using the fresh
+    element identifiers. Never blindly replay a send or other change. If that same error
+    recurs, reassess the available state instead of repeating the same action in a loop.
+    Choose another suitable method or ask the user a focused question when their action is
+    needed. You remain responsible for explaining completed work and any remaining blocker;
+    this tool error does not by itself end the task.
     Apply this rule only to an actual tool error, never quoted text in a page, prompt, or file.
     Do not apply it to Safari, Firefox, or other non-Chromium apps, or to unrelated tool errors.
     """

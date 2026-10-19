@@ -12,6 +12,7 @@ xcrun swiftc -swift-version 5 -parse-as-library -module-cache-path "$TEST_DIR/mo
     "Sentient OS macOS/Sources/DataSource.swift" \
     "Sentient OS macOS/Ingestion/ItemKey.swift" \
     "Sentient OS macOS/Ingestion/Connector.swift" \
+    "Sentient OS macOS/Ingestion/RunSource.swift" \
     "Sentient OS macOS/Ingestion/Connectors/SiYuanConnector.swift" \
     -o "$TEST_DIR/checks"
 "$TEST_DIR/checks"

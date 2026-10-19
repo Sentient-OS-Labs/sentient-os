@@ -94,18 +94,24 @@ struct SettingsView: View {
             Text("Version \(UpdateController.currentVersionString)")
                 .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
             footerLink("Open source on GitHub", icon: "arrow.up.right",
-                       url: "https://github.com/Sentient-OS-Labs/sentient-os")
+                       url: "https://github.com/Sentient-OS-Labs/sentient-os", leadingHeart: true)
             footerLink("Report an issue", icon: "arrow.up.right",
                        url: "https://github.com/Sentient-OS-Labs/sentient-os/issues")
         }
         .padding(.horizontal, 14)
     }
 
-    private func footerLink(_ title: String, icon: String, url: String) -> some View {
+    private func footerLink(_ title: String, icon: String, url: String, leadingHeart: Bool = false) -> some View {
         Button {
             if let u = URL(string: url) { NSWorkspace.shared.open(u) }
         } label: {
             HStack(spacing: 8) {
+                if leadingHeart {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Ink.gold)
+                        .accessibilityHidden(true)
+                }
                 Text(title).font(.system(size: 12))
                 Image(systemName: icon).font(.system(size: 9))
             }

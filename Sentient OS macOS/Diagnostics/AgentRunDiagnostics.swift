@@ -13,15 +13,21 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         case unknown, appUnavailable = "app_unavailable", staleTarget = "stale_target"
         case permission, authentication = "login_required", quota, timeout, connection, invalidArguments = "invalid_arguments"
         case unavailableTool = "unavailable_tool", outputSchema = "output_schema", cancelled
+        case screenCapture = "screen_capture", noWindows = "no_windows"
 
         /// A text-derived category is a hint, never proof of an OS or permission state.
         static func classify(_ text: String) -> Self {
             let text = String(text.prefix(8192)).lowercased()
+            let native = NativeComputerUseFailure.classify(text)
+            if native.kind == .capture { return .screenCapture }
+            if native.kind == .noWindows { return .noWindows }
             if text.contains("does not match required schema") || text.contains("structured output validation") { return .outputSchema }
             if text.contains("not running") || text.contains("app not found") || text.contains("application not found") || text.contains("can't be reached") { return .appUnavailable }
             if text.contains("re-query") || text.contains("stale") || text.contains("element not found") { return .staleTarget }
             if text.contains("permission") || text.contains("accessibility") || text.contains("not authorized") { return .permission }
-            if text.contains("unauthorized") || text.contains("sign in") || text.contains("not logged in") { return .authentication }
+            if text.contains("unauthorized") || text.contains("not logged in")
+                || text.range(of: #"\b(?:sign[ -]?in|log[ -]?in|authentication|reauthenticate)\b"#,
+                              options: .regularExpression) != nil { return .authentication }
             if text.contains("rate limit") || text.contains("usage limit") || text.contains("quota") { return .quota }
             if text.contains("timed out") || text.contains("timeout") { return .timeout }
             if text.contains("connection") || text.contains("disconnected") { return .connection }
@@ -74,7 +80,9 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         return try await $current.withValue(run) {
             do {
                 let value = try await body()
-                run.finish(action ? (computer ? AgentStatus.parse(result(value)) : AgentStatus.parseConnector(result(value))) : nil)
+                run.finish(action ? AgentStatus.resolve(result(value),
+                    completion: SidekickInteraction.current?.conversationRun?.completionStatus,
+                    providerSucceeded: true, connector: !computer) : nil)
                 return value
             } catch {
                 run.finish(nil, error: error)
@@ -91,7 +99,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     /// Only fixed native tool names are emitted. Connector-defined names may contain account labels.
     static func toolIdentity(server: String, tool: String) -> (family: String, tool: String) {
         if server == "sentient_native" {
-            let known: Set<String> = ["get_app_state", "list_apps", "list_windows", "get_desktop_state", "click", "double_click", "right_click", "drag", "scroll", "type_text", "set_value", "press_key", "key_press", "launch_app", "open_app", "get_screenshot", "screenshot", "get_app_info", "get_window_state", "select_menu_item", "invoke_menu"]
+            let known: Set<String> = ["get_app_state", "list_apps", "list_windows", "get_desktop_state", "click", "double_click", "right_click", "drag", "scroll", "type_text", "set_value", "press_key", "key_press", "launch_app", "open_app", "get_screenshot", "screenshot", "get_app_info", "get_window_state", "select_menu_item", "invoke_menu", "select_text", "perform_secondary_action", "diagnose_computer_use"]
             return ("native", known.contains(tool) ? tool : "other")
         }
         if server == "sentient_recovery" { return ("recovery", ["ask_user", "update_instructions"].contains(tool) ? tool : "other") }
@@ -110,7 +118,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     }
 
     func observe(_ line: String) {
-        guard CrashReporting.diagnosticsEnabled else { return }
+        // The bounded local export ledger is independent of Sentry upload consent.
         guard line.utf8.count <= 16_777_216 else {
             state.withLock { $0.omitted += 1 }
             return
@@ -132,9 +140,20 @@ nonisolated final class AgentRunDiagnostics: Sendable {
                 let exit = item["exit_code"] as? Int
                 let failed = error != nil || item["error"] is String || status == "failed" || result?["isError"] as? Bool == true || result?["is_error"] as? Bool == true || (exit != nil && exit != 0)
                 let known = failed || status == "completed" || result != nil || exit == 0
+                let native = NativeComputerUseFailure.from(item: item)
                 // Read error text only after the protocol explicitly identifies a failure.
-                end(id, failed: failed, known: known, reason: failed ? Self.errorReason(error ?? result ?? item) : .unknown,
-                    code: error?["code"] as? Int)
+                let failureReason = native.map { failure -> Reason in
+                    switch failure.kind {
+                    case .capture: return .screenCapture
+                    case .noWindows: return .noWindows
+                    case .permission: return .permission
+                    case .connection: return .connection
+                    case .timeout: return .timeout
+                    case .unknown: return [.focusChanged, .inputInterrupted, .elementUnavailable, .staleState].contains(failure.detail) ? .staleTarget : .unknown
+                    }
+                } ?? Self.errorReason(error ?? result ?? item)
+                end(id, failed: failed, known: known, reason: failed ? failureReason : .unknown,
+                    code: native?.code ?? error?["code"] as? Int, nativeFields: native?.fields ?? [:])
             }
         } else if let message = event["message"] as? [String: Any], let blocks = message["content"] as? [[String: Any]] {
             for block in blocks {
@@ -200,7 +219,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         }
     }
 
-    private func end(_ id: String, failed: Bool, known: Bool, reason: Reason, code: Int? = nil) {
+    private func end(_ id: String, failed: Bool, known: Bool, reason: Reason, code: Int? = nil, nativeFields: [String: String] = [:]) {
         // A changed or truncated stream can omit the start. Its explicit failure still counts.
         start(id, server: "", tool: "", arguments: [:], observedStart: false)
         let call = state.withLock { state -> Call? in
@@ -214,7 +233,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
             return call
         }
         guard let call else { return }
-        var details = fields(call)
+        var details = fields(call).merging(nativeFields) { _, new in new }
         details["result"] = failed ? "failed" : (known ? "completed" : "unknown")
         details["reason"] = reason.rawValue
         if let code { details["error_code"] = String(code) }
@@ -222,7 +241,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         breadcrumb("agent.tool_finished", details)
         // Preserve a failure even if the user stops later or no unrelated error follows it.
         if failed {
-            emit("agent.tool_failed", tags: ["tool": call.tool, "tool_family": call.family, "reason": reason.rawValue, "evidence": "tool_result"], extra: details, affectsOperation: false)
+            emit("agent.tool_failed", tags: ["tool": call.tool, "tool_family": call.family, "reason": reason.rawValue, "evidence": "tool_result"], extra: details, informational: true, affectsOperation: false)
         }
     }
 
@@ -266,11 +285,19 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         if let error { details.merge(Diagnostics.errorFields(error)) { _, new in new } }
         breadcrumb("agent.run_finished", details.merging(["outcome": outcome]) { _, new in new })
         let toolFailure = details["tool_failed"] != "0"
+        let recovery: String = !toolFailure ? "not_needed" : (cancelled ? "stopped" :
+            (error != nil ? "runtime_failed" : (modelStatus == "done_claimed" ? "recovered" : "unconfirmed")))
+        details["tool_recovery"] = recovery
+        if feature == "computer" {
+            let measurements = ["outcome": outcome, "tool_recovery": recovery, "backend": backend,
+                "tool_errors": details["tool_failed"] ?? "0", "tool_omitted": details["tool_omitted"] ?? "0"]
+            Task { @MainActor in Analytics.signal("ComputerUse.recovery", parameters: measurements) }
+        }
         guard (!cancelled && (error != nil || modelStatus == "could_not" || modelStatus == "unconfirmed")) || toolFailure else { return }
         let recovered = error == nil && modelStatus != "could_not" && modelStatus != "unconfirmed"
         emit("agent.run_diagnostic", tags: ["outcome": outcome, "reason": error.map { CodexFailureReason.classify($0).rawValue } ?? (recovered ? details["last_tool_reason"] ?? reason : reason),
              "evidence": error != nil ? "runtime_error" : (recovered ? "tool_result" : "model_status")], extra: details,
-             informational: expected && !toolFailure,
+             informational: recovered || cancelled || (expected && !toolFailure),
              affectsOperation: !cancelled && !expected && (error != nil || modelStatus == "could_not" || modelStatus == "unconfirmed"))
     }
 
@@ -281,6 +308,9 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     }
 
     private func emit(_ name: String, tags: [String: String], extra: [String: String], informational: Bool = false, affectsOperation: Bool = true) {
+        guard !ConnectorClassificationDiagnostics.ownsFailures else { return }
+        DiagnosticHistory.recordAgentFailure(name, fields: correlation.merging(extra) { _, new in new }
+            .merging(tags) { _, new in new }.merging(["backend": backend, "feature": feature]) { _, new in new })
         Diagnostics.$current.withValue(operation) {
             CrashReporting.captureEvent(name, level: informational ? .info : .warning,
                 tags: tags.merging(["backend": backend, "trigger": trigger, "feature": feature, "diagnostic_schema": "2"]) { _, new in new },

@@ -1,14 +1,14 @@
 # Diagnostics (Diagnostics/): crash reporting, structured events, and product analytics
 
-Basic usage counts, reviewed Sidekick workflow descriptions and optional technical reports help us
+Basic usage counts, AI-written Sidekick workflow descriptions and optional technical reports help us
 improve this open-source app. **Sentry** reports crashes, hangs and structured errors.
-**TelemetryDeck** reports usage and reviewed workflow phrases, plus optional timings, setup progress
-and app health. Raw task content is not an analytics payload; the phrase review and its limits are
+**TelemetryDeck** reports usage and locally format-validated workflow phrases, plus optional timings, setup progress
+and app health. Raw task content is not an analytics payload; the phrase checks and their limits are
 described below.
 
 Both run in Release builds. Crash reports and extended analytics have separate Settings → System
 controls, enabled by default. Turning crash reports off stops Sentry. Turning extended analytics off
-leaves basic usage, launch/session and install/uninstall counts and reviewed task descriptions enabled.
+leaves basic usage, launch/session and install/uninstall counts and format-validated task descriptions enabled.
 Onboarding and Settings show that disclosure beside the extended-analytics switch. The services use a generated
 per-install identifier, separate from the mirror secret and feedback list, rather than a name or email.
 
@@ -22,7 +22,7 @@ per-install identifier, separate from the mirror secret and feedback list, rathe
 | `Diagnostics.swift` | Operation scopes, parent/root correlation, error classification, expected blockers and bounded reporting fields. |
 | `AgentRunDiagnostics.swift` | Parses Codex and Claude tool events into a bounded timeline and distinguishes process exit, model completion claims and tool results. |
 | `ChildProcessDiagnostics.swift` | Collects owned helper exit metadata through a private temporary channel, excluding intentional stops and cancelled collection. |
-| `Notch Magic/SidekickTaskSummary.swift` | Stages one workflow phrase, invalidates stale candidates and obtains a separate review before the typed analytics sink can accept text. |
+| `Notch Magic/SidekickTaskSummary.swift` | Retains intent/final workflow phrases through interruption, validates their format locally and emits one typed report at task end. |
 | `ExecutorScoreboard.swift` | Records action outcomes, with fallback diagnostics for paths not already reported by the frontier boundary. Expected blockers use informational events; successes go to TelemetryDeck. |
 | `SourceHealth.swift` | The sensors' memory: run-over-run listing counts per source (a healthy count that craters to zero = `<source>.listing_collapsed`) and a rolling 7-day file-extraction rate. |
 
@@ -42,7 +42,7 @@ UUID; its own defaults cannot enable reporting. TelemetryDeck runs in the GUI ro
 The reporting contract permits structured technical fields: counts, ratios, booleans, enums, durations, byte buckets, HTTP / exit /
 sqlite codes, error type or case names, versions, fingerprints. Never message or note text, file names
 or paths, contact names, chat ids, drafts, codex output, transcripts, or the mirror token. This is the
-technical-event and ordinary-signal contract. Reviewed task descriptions have one separate, typed
+technical-event and ordinary-signal contract. Format-validated task descriptions have one separate, typed
 entry point; they do not relax the contract for other reporting. The implementation uses these defenses:
 
 - **Clean at the source.** `captureEvent` takes only enums and counts the caller controls. Content-bearing `Log()` lines are `#if DEBUG` (Sentry never boots in DEBUG, so they can never become a breadcrumb). Error paths log `ErrorLabel(error)`, never `\(error)` or `localizedDescription`: in Release it renders the enum case or type name only ("CLIError.exitFailure"), because error payloads embed content (codex stderr, note titles in file paths). The pipeline logs only a bucket key's scheme (`CycleStore.scheme`), never the key.
@@ -116,28 +116,27 @@ throwaway random hash, separate from the persistent diagnostics identifier, an e
 per install (latched only after a 2xx) even when analytics are opted out; the one number that is
 attempted across installs independently of the extended-analytics setting. `countUninstall` is its farewell twin, fired as the teardown begins.
 
-## Reviewed Sidekick task descriptions
+## Sidekick task descriptions and outcomes
 
-For an eligible user-requested Sidekick attempt, the selected AI can stage a short, generalized
-workflow phrase through `describe_task_usage`. It runs after task actions and instruction updates,
-before the final status. Further tool activity or a user answer invalidates a stale candidate.
-Completion consumes the candidate once, and background review does not retain the task lock.
+For an eligible user-requested attempt, the selected task model can call `describe_task_usage` with
+an initial `intent` phrase and a later `final` phrase. The prompt requires a generalized workflow,
+without identifying or sensitive details. This tool neither marks success nor adds visible activity.
+Further actions invalidate a final phrase while retaining a valid intent for interrupted attempts.
+A null or rejected replacement withdraws earlier text. Completion consumes the report once.
 
-`SidekickTaskSummary` first checks the phrase's size, word count and character envelope. A separate
-tool-free model call receives only that phrase and the review rules, without the original prompt,
-screens, history or tools. The rules exclude identifying and sensitive details and require rejection
-when uncertain. A strictly parsed Boolean response can approve only the original phrase. Errors,
-malformed responses, rejection or missing text produce no phrase and no rejection reason downstream.
+`SidekickTaskSummary.checkedPhrase` checks the byte length, word count and character envelope.
+`Analytics.recordTaskSummary` accepts only the resulting `Validated` value within a typed report.
+There is no separate inference or model review. Invalid or unavailable descriptions are omitted;
+fixed availability/reason fields distinguish them. Outcomes and interruption reasons use their own
+bounded categories, including whether evidence came from the app or the model.
 
-`Analytics.recordTaskSummary` accepts only the reviewer's `Approved` value. Its event contains the
-approved phrase, if available, plus bounded source, method, outcome, availability and schema fields.
-The phrase is the sole free-text analytics exception. The local checks and model review reduce
-disclosure risk; they do not prove anonymity or rule out every identifying or sensitive meaning.
-Generated identifiers can associate repeated events and do not sanitize text.
+Workflow phrases are the sole free-text analytics exception. Prompt instructions and format checks
+do not prove anonymity or exclude every sensitive meaning. Original requests, conversation text,
+screenshots, knowledge files and final answers are not accepted by this sink. Generated identifiers
+can associate repeated events and do not sanitize the phrase.
 
-This reporting remains enabled in Release when extended analytics is off. Debug neither sends the
-event nor spends a background model call on its review. The UI disclosure is shared through
-`PrivacyCopy`; keep it and `SECURITY.md` consistent with this behavior.
+This reporting remains enabled in Release when extended analytics is off. Debug does not submit
+these events. Keep `PrivacyCopy` and `SECURITY.md` consistent with these boundaries.
 
 The App ID and the Sentry DSN are ingest-only and safe in the public repo; the Sentry Auth Token used for
 dSYM upload is a real secret and lives only in the gitignored `.sentryclirc`.
@@ -154,7 +153,7 @@ test with the standalone `.app`.
 ## Rules
 
 - `Log()` everywhere; bare `print()` is a code smell. Error paths use `ErrorLabel`.
-- Structure only in technical events and ordinary signals; reviewed task descriptions use their
+- Structure only in technical events and ordinary signals; format-validated task descriptions use their
   typed sink exclusively. Content-bearing logs are `#if DEBUG`.
 - Never re-enable the SDK's network breadcrumbs, failed-request capture, or auto session tracking.
 - Sentry gets technical failures and explicitly classified blockers; usage and successes go to TelemetryDeck.
@@ -162,3 +161,89 @@ test with the standalone `.app`.
 ## Related docs
 
 `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md` (the release gate on dSYMs), `Cloud/Documentation - Cloud - MCP Mirror.md` (the URL invariant), the repo's `SECURITY.md`.
+
+## Sidekick conversation backend
+
+`SidekickDiagnostics.swift` is the structure-only boundary for conversation storage, legacy
+migration, explicit message delivery, questions/answers, attention, memory, context construction,
+history retrieval, background compaction, task lifecycle and reset. It does not replace existing
+provider, native-capture or connector diagnostics, and never records an additional tool transcript.
+
+Call `SidekickDiagnostics.event(stage, outcome:reason:taskID:attemptID:backend:source:counts:duration:)`
+at a meaningful lifecycle boundary or durable commit. Call `failure(stage, reason:...)` for a
+backend defect. The stage, outcome, reason, provider, source and count keys are closed enums;
+identifiers are UUIDs; measurements are nonnegative bounded integers or finite bounded durations.
+No API accepts arbitrary extra fields, an `Error`, message text, memory text, quoted replies,
+paths, tool arguments/results, screenshots or provider output. Invalid measurements reject the
+whole observation before reaching any sink. The return value reports whether a structurally
+valid observation was accepted, not whether consent permitted an upload.
+
+| Signal | Purpose and consent |
+|---|---|
+| `sidekick.backend` breadcrumb | Structure-only lifecycle context, subject to existing Sentry startup/crash-report consent. |
+| `sidekick.backend_failed` | Defects grouped by phase, reason, backend and source; task and attempt UUIDs are extras, never issue fingerprints. Uses existing operation deduplication and a 15-minute repeat cooldown. |
+| `Sidekick.backend` | Counts, duration and categorical outcomes through **extended** TelemetryDeck consent. Task/attempt UUIDs are removed. Existing core task-end and submission signals stay independent. |
+| Local `DiagnosticHistory` error | Backend defects pass through the existing bounded, scrubbed technical ledger, independently of upload consent. No conversation or memory content is added to exports. |
+
+Expected Stop, cancellation, interruption, stale callbacks, duplicate delivery, exhausted budget,
+changed sources, foreground contention, quota and unavailable-provider outcomes become ordinary
+health observations rather than Sentry defects. Failures require an explicit reason; `.none`
+is rejected. Do not log a provider failure again here when its existing owner already explains
+it, except to record a distinct backend consequence such as failure to preserve a message.
+
+Useful instrumentation points:
+
+* Store open/migration: schema outcome, imported task/event counts, and elapsed time. Report
+  corruption/newer schema/failed persistence accurately; success follows commit.
+* Delivery: committed message/question/answer counts; a failed write never reports delivery
+  success. Attention reports requests/presentation outcomes without the message body.
+* Lifecycle: task/attempt start and terminal outcome, recovered unfinished tasks, and resets.
+  Keep stable logical-task and per-attempt UUIDs distinct.
+* Memory: successful read/write byte counts, conflict or atomic-write failure. A save is
+  independent of the eventual task outcome.
+* Context: encoded UTF-8 byte size, retained messages and omitted events. These measurements
+  are not token counts; no tokenizer estimate is reported as measured provider usage.
+* Compaction: start, completed-prefix installation, covered sequence, event/summary byte counts,
+  duration and stale/skipped/failure outcomes. Do not
+  report a snapshot as installed before its generation/sequence check and durable commit.
+
+Use commit/batch totals rather than per-token, per-poll or raw tool-stream reporting. These
+signals supplement existing task metrics; do not add their counts to `Sidekick.taskEnded`.
+
+`Scripts/test_sidekick_diagnostics.py` compiles the complete production Sidekick diagnostics
+implementation with inert sinks. It reuses the production Sentry dispatch guards, analytics
+consent-tier guard and shared repeat limiter, checking typed payloads, rejected measurements,
+UUID exclusion from analytics/fingerprints, expected outcomes, independent opt-outs, concurrent
+failure deduplication and cooldown boundaries. It neither starts SDKs nor sends external events.
+
+Clear chat emits `Sidekick.backend` with phase `chat_clear` at start/completion, plus bounded elapsed
+time. Busy or canceled operations use skipped outcomes; stop timeout/storage failure use the existing
+Sentry warning and deduplication path. No message, instruction, knowledge content or path is logged.
+
+Foreground route loss/recovery emits phase `connectivity` with started/unavailable or completed/none
+through the same consent-controlled breadcrumbs and extended analytics. A route hint does not emit
+a failure or cancel the task. Native tool failures retain categorical evidence independently of
+the eventual task outcome; classification no longer decides whether the agent continues.
+Raw native error excerpts are reserved for the model's local tool response and never enter these sinks.
+## Computer-use recovery and explicit support reports
+
+Native tool errors are observations, not task endings. Individual `agent.tool_failed` and native
+capture failures are informational and do not mark their operation failed. Recovered runs are
+informational too; unresolved task outcomes retain their own severity. Extended analytics
+`ComputerUse.recovery` records task outcome, tool recovery category, error count and omitted-event
+count. `ComputerUse.checkFinished` records only the explicit check's source, backend, outcome and
+repair verification. Neither event contains tool arguments, raw errors or app/window content.
+
+`BuildIdentity.identifier` is the loaded Mach-O binary UUID (the app's debug dylib in Xcode Debug
+builds). It is an artifact identifier, not an installation or device identifier. Sentry and
+TelemetryDeck include `app_binary_id`, and schema-4 diagnostic exports include it alongside the
+last content-free computer-use check. Version/build numbers alone can identify several distinct
+development binaries.
+
+The optional **Send report** flow is independent of automatic Sentry/analytics consent. It sends
+only the report the user just previewed, to Supabase, with a dedicated anonymous support identity.
+It never uploads the existing full export, which can contain prompts and an account email.
+`ComputerUseCheckReport` retains structured native/RPC/system codes but excludes `modelError`.
+The server accepts only this schema; clients cannot read other users' reports or overwrite a
+receipt. No credentials are persisted in the report, logged, or followed across HTTP redirects.
+The new backend migration must be applied by the release owner; it is not deployed by local tests.

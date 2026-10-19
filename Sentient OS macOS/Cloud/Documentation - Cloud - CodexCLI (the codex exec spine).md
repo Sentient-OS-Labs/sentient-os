@@ -35,6 +35,21 @@ The native client is registered directly as the required `sentient_native` MCP s
 a per-task local Responses provider backed by the official Claude CLI; custom endpoints retain their
 provider overrides. No active computer task launches CUA.
 
+User-owned Sidekick and card actions pass `timeout: 0`, meaning no overall execution watchdog.
+`RunWatchdog` creates no timer for zero; explicit cancellation and process cleanup remain active.
+Finite background-job budgets are unchanged. `ClaudeSubscriptionTimeouts` preserves zero through
+both the bridge child and its supervising process; cleanup grace must not turn zero into a deadline.
+Per-request/helper startup waits and transport idle limits remain finite. Direct MCP authorization
+capabilities retain their existing maximum six-hour-plus-thirty-second lease independently of task
+duration; zero must not accidentally reduce that lease to thirty seconds.
+
+Normal completion accepts explicit `message_user(kind=answer, completion=done|could_not)` metadata
+only after the answer is saved and the provider returns successfully. New substantive tools,
+questions or provider legs invalidate earlier metadata. The final exact `STATUS` line remains a
+compatible fallback; explicit incomplete claims win conflicts, and provider errors never become
+success because an earlier answer said done. Slack/Outlook/Calendar action verification uses the
+same resolver before checking its independent mutation evidence.
+
 The run remains hermetic (`--ignore-user-config`). ChatGPT hosted connector policies and prepared
 direct MCP accounts remain attached. Claude-hosted connector tasks use the separate structured path.
 

@@ -74,14 +74,17 @@ private struct GlowPressStyle: ButtonStyle {
     }
 }
 
-/// Rotating conic-gradient halo — exact color stops & 3.5s timing from the website's GlowButton.
+/// Conic-gradient halo. Defaults match the website; navigation cues can turn more slowly.
 struct GlowHalo: View {
     let active: Bool
     var reversed: Bool = false
     var colors: [Color]? = nil
     var intensity: Double = 0.85     // halo opacity when active
+    var period: Double = 3.5
+    var animating = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appearsActive) private var appearsActive
+    @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
 
     /// The canonical warm→cool AI-gradient stops (shared: the Analyze Now CTA + the For You
     /// command bar's glow both use these).
@@ -95,14 +98,12 @@ struct GlowHalo: View {
         Color(red: 0.290, green: 0.565, blue: 0.886),  // #4a90e2 blue
         Color(red: 0.992, green: 0.886, blue: 0.639)   // wrap → smooth seam
     ]
-    private static let period: Double = 3.5
-
     var body: some View {
         GeometryReader { geo in
             TimelineView(.animation(minimumInterval: 1.0 / 30.0,
-                                    paused: !active || reduceMotion || !appearsActive)) { ctx in
+                                    paused: !active || !animating || reduceMotion || !appearsActive || lowPower)) { ctx in
                 let t = reduceMotion ? 0 : ctx.date.timeIntervalSinceReferenceDate
-                let base = (t.truncatingRemainder(dividingBy: GlowHalo.period) / GlowHalo.period) * 360.0
+                let base = (t.truncatingRemainder(dividingBy: period) / period) * 360.0
                 let angle = reversed ? -base : base
                 Capsule(style: .continuous)
                     .fill(AngularGradient(colors: colors ?? GlowHalo.stops, center: .center, angle: .degrees(angle)))
@@ -114,5 +115,9 @@ struct GlowHalo: View {
             .animation(.easeInOut(duration: 0.6), value: active)
         }
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+            lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
     }
 }

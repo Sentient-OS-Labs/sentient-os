@@ -1,13 +1,6 @@
-//
-//  PowerState.swift  ·  Scheduling/
-//
-//  The overnight run's go/no-go gates (B6; doc: Scheduling/Documentation - Overnight Scheduler & Wake Helper.md).
-//  A lid-shut 3am run holds the Mac fully awake
-//  and hammers the GPU, so we only do it when it's safe: on AC power (not in Low Power Mode), or on
-//  battery above a charge floor when the user has opted in; never thermally critical. Thermal is a
-//  START condition only (we don't abort a run that heats up mid-flight — lid-shut runs hotter; we
-//  just log it). Pure reads, no side effects.
-//
+// Reads Mac power and thermal state and applies shared analysis admission/stop rules.
+// Overnight work starts at 50% initially and 30% for updates; manual runs ignore battery level.
+// Doc: Documentation - Overnight Scheduler & Wake Helper.md
 
 import Foundation
 import IOKit.ps
@@ -53,22 +46,43 @@ enum PowerState {
         }
     }
 
-    /// The charge floor for a battery night: below this we don't start (a heavy night can drain
-    /// 15–30%, and waking up to a near-dead Mac would be worse than a skipped run).
-    static let batteryFloorPercent = 40
+    static let initialBatteryFloor = 50
+    static let iterativeBatteryFloor = 30
+    static let reserveBatteryFloor = 20
 
-    /// Overnight go/no-go. Returns the blocking reason, or nil if it's safe to start a run.
-    /// `allowBattery` is the user's opt-in (the home's Analysis dropdown): with it, a battery night
-    /// runs above the charge floor, and Low Power Mode doesn't gate it — LPM is commonly set to
-    /// "Only on Battery", which would silently kill every battery night; the run just goes slower.
+    struct Snapshot: Sendable {
+        let onAC: Bool
+        let percent: Int?
+        let critical: Bool
+    }
+
+    static func snapshot() -> Snapshot {
+        Snapshot(onAC: onACPower(), percent: batteryPercent(), critical: thermalState == .critical)
+    }
+
+    enum Block: String, Codable, Sendable {
+        case onBattery = "on_battery", batteryLow = "battery_low", unknown = "power_unknown"
+        case thermal = "thermal_critical"
+    }
+
+    /// Explicit Run now bypasses power requirements. Thermal protection applies to every run.
+    static func block(_ power: Snapshot, initial: Bool, allowBattery: Bool = true, scheduled: Bool = true) -> Block? {
+        if power.critical { return .thermal }
+        guard scheduled else { return nil }
+        if power.onAC { return nil }
+        if !allowBattery { return .onBattery }
+        guard let percent = power.percent else { return .unknown }
+        return percent < (initial ? initialBatteryFloor : iterativeBatteryFloor) ? .batteryLow : nil
+    }
+
+    /// Only unattended runs pause at the battery reserve; manual work continues at any charge.
+    static func shouldPause(_ power: Snapshot, scheduled: Bool = true) -> Bool {
+        power.critical || (scheduled && !power.onAC && (power.percent.map { $0 <= reserveBatteryFloor } ?? true))
+    }
+
+    /// Diagnostic compatibility for callers that need a stable blocking reason.
     static func overnightBlockReason(allowBattery: Bool) -> String? {
-        if !onACPower() {
-            guard allowBattery else { return "on_battery" }
-            guard let pct = batteryPercent(), pct >= batteryFloorPercent else { return "battery_low" }   // unreadable → fail safe
-        } else if lowPowerMode {
-            return "low_power"
-        }
-        if thermalState == .critical { return "thermal_critical" }
-        return nil
+        block(snapshot(), initial: ProcessingPlan.initialCompletedAt() == nil,
+              allowBattery: allowBattery)?.rawValue
     }
 }

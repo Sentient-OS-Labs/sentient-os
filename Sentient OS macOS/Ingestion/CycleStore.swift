@@ -48,6 +48,8 @@ final class BucketPointer {
     var mcpReadOrigin: String? = nil
     /// Versioned Int64 Mail traversal state. Nil for every pre-existing source.
     var appleMailState: Data? = nil
+    /// Unpublished, vetted Calendar survivors only. Never a rejected-event ledger.
+    var appleCalendarRetry: Data? = nil
 
     init(bucketKey: String, mark: ItemKey, floor: ItemKey? = nil, updatedAt: Date = Date()) {
         self.bucketKey = bucketKey
@@ -171,6 +173,27 @@ struct NoteDraft: Sendable {
 actor CycleStore {
     private var calendarSnapshotReady = false
     func invalidateCalendarSnapshot() { calendarSnapshotReady = false }
+
+    func calendarRetryCache(for snapshot: AppleCalendarSource.Snapshot) throws -> CalendarRetryCache {
+        var cache = try fetchRow(AppleCalendarSource.bucketKey)?.appleCalendarRetry
+            .flatMap { try? JSONDecoder().decode(CalendarRetryCache.self, from: $0) }
+            ?? CalendarRetryCache(coverage: snapshot.coverage)
+        if cache.coverage != snapshot.coverage || cache.version != 1 {
+            cache = CalendarRetryCache(coverage: snapshot.coverage)
+        }
+        cache.validate(against: snapshot)
+        return cache
+    }
+
+    func saveCalendarRetryCache(_ cache: CalendarRetryCache) -> CommitOutcome {
+        guard let data = try? JSONEncoder().encode(cache) else { return .failed }
+        return commit(bucketKey: AppleCalendarSource.bucketKey, note: nil,
+            apply: { $0.appleCalendarRetry = data }, make: {
+                let row = BucketPointer(bucketKey: AppleCalendarSource.bucketKey, mark: ItemKey(order: 0, tiebreak: ""))
+                row.appleCalendarRetry = data
+                return row
+            })
+    }
 
     func mailCheckpoint(_ bucketKey: String) throws -> AppleMailCheckpoint? {
         guard let data = try fetchRow(bucketKey)?.appleMailState else { return nil }
@@ -443,6 +466,7 @@ actor CycleStore {
         }, apply: { r in
             r.order = mark.order; r.tiebreak = mark.tiebreak
             r.floorOrder = nil; r.floorTiebreak = nil; r.mcpReadOrigin = nil; r.updatedAt = Date()
+            r.appleCalendarRetry = nil
         }, make: { BucketPointer(bucketKey: key, mark: mark) })
         calendarSnapshotReady = result == .saved
         return result

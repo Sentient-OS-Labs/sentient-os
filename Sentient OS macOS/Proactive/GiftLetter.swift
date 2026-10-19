@@ -90,19 +90,39 @@ actor GiftLetter {
     // MARK: Persistence (the home reads this to render the welcome card)
 
     private static let latestKey = "gift.latestLetter"
+    private static let completedKey = "gift.completed"
 
-    static func saveLatest(_ letter: String) {
-        UserDefaults.standard.set(letter, forKey: latestKey)
+    static func saveLatest(_ letter: String, defaults: UserDefaults = .standard) {
+        guard !letter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        defaults.set(letter, forKey: latestKey)
+        defaults.set(true, forKey: completedKey)
     }
 
-    /// The last generated letter (markdown), or nil if it's never run (so the cycle writes it once).
-    static func latest() -> String? {
-        let s = UserDefaults.standard.string(forKey: latestKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The current display card, independent of whether a welcome was already delivered.
+    static func latest(defaults: UserDefaults = .standard) -> String? {
+        let s = defaults.string(forKey: latestKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (s?.isEmpty == false) ? s : nil
     }
 
-    /// Forget the welcome letter (the dev "Reset everything" path) — so it's rewritten next cycle.
-    static func clear() { UserDefaults.standard.removeObject(forKey: latestKey) }
+    /// Migrate existing installations even when an earlier version already retired their card.
+    static func needsWelcome(defaults: UserDefaults = .standard) -> Bool {
+        if defaults.object(forKey: completedKey) == nil {
+            defaults.set(latest(defaults: defaults) != nil || defaults.object(forKey: ProactiveCycle.lastCycleKey) != nil,
+                         forKey: completedKey)
+        }
+        return !defaults.bool(forKey: completedKey)
+    }
+
+    static func retire(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: completedKey)
+        defaults.removeObject(forKey: latestKey)
+    }
+
+    /// Only an explicit reset makes a new welcome eligible.
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: latestKey)
+        defaults.removeObject(forKey: completedKey)
+    }
 
     // MARK: Output cleanup
 
