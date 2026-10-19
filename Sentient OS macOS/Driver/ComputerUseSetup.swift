@@ -145,20 +145,20 @@ final class ComputerUseSetup {
     /// The install's own network deadline is authoritative; a slow connection must not hit the
     /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
-    func ensureInstalled() async -> Bool {
+    func ensureInstalled(force: Bool = false) async -> Bool {
         if backend == .openAI, await !CodexSetup.shared.ensureComputerUseCLI() {
             failure = OpenAIComputerUse.RuntimeError.cliUnavailable
             status = "Computer use needs Codex CLI. Prepare it in Permissions & Health."
             return false
         }
-        if !isInstalling, backend.isInstalled {
+        if !force, !isInstalling, backend.isInstalled {
             // Runtime.start verifies the selected bundle under its runtime lease, once for
             // all callers sharing that startup. Do not also initialize an MCP client here.
             failure = nil
             ready = true
             return !Task.isCancelled
         }
-        beginInstall()
+        beginInstall(force: force)
         while isInstalling {
             do { try await Task.sleep(for: .milliseconds(100)) }
             catch { return false }

@@ -16,6 +16,12 @@ struct SentientOSApp: App {
     @NSApplicationDelegateAdaptor(SentientAppDelegate.self) private var appDelegate
     @State private var appState = AppState()
 
+    private var mainWindowInitialSize: CGSize {
+        guard !appState.hasCompletedOnboarding else { return OnboardingWindowLayout.canvas }
+        return OnboardingWindowLayout.initialSize(
+            visibleSize: NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
+    }
+
     /// Scene id for the primary home window, so the menu bar's "Open Sentient OS" can reopen/focus it.
     static let homeWindowID = "home"
 
@@ -49,7 +55,7 @@ struct SentientOSApp: App {
         }
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 1100, height: 820)   // the proactive home's canvas
+        .defaultSize(width: mainWindowInitialSize.width, height: mainWindowInitialSize.height)
         // Launch presentation is decided after AppKit delivers the opening Apple event, when
         // login-item launches can be distinguished reliably. Explicit reopen uses our router.
         .defaultLaunchBehavior(.suppressed)

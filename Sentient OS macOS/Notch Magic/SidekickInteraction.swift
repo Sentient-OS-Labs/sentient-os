@@ -20,6 +20,7 @@ nonisolated final class SidekickInteraction: Sendable {
     let personalization: SidekickPersonalization?
     let taskSummary: SidekickTaskSummary?
     let conversationRun: SidekickConversationRun?
+    let computerUseCheckConsent = ComputerUseDiagnosticConsent()
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
         var began: TimeInterval?

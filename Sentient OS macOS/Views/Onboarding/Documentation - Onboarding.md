@@ -21,16 +21,32 @@ Full Disk Access requires resumes exactly where the user left off.
 
 ## The steps
 
-**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key` in
+`OnboardingWindowLayout` fits the 1100 × 820 design canvas into the display's usable area,
+including the Dock and title-bar allowance. Smaller displays get roughly 80% scale, with a
+scaled minimum window size and a fully laid-out logical canvas so bottom actions stay visible.
+The main window's initial size follows the same policy. `OnboardingWindowFit` responds to display,
+Dock, and window-size changes; moving to a larger display restores 100%. Home and Settings retain
+their existing sizing after setup. The notch pointer converts its measured margins to the current
+canvas scale, so it still points at physical screen coordinates.
+
+**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native` in
 a webview that is a movie, not a page (hit-testing off, off-host navigation blocked, fades in only after
 the page reports ready). The page's autopilot scrolls the film and posts "parked" at each rest, which
 blooms the native Continue: leg 1 (the night film → the morning home), leg 2 (the Sidekick scene: it
-rides to the invitation whisper, "Click the notch" on a lone notched display or "Press the right ⌘ key"
-otherwise, then WAITS for the user's real answer: the coordinator's armed one-shot demo takes a bezel
+rides to the native invitation, **Click your notch** on a lone notched display or **Press right Command**
+(the actual configured key) otherwise, then WAITS for the user's real answer: the coordinator's armed one-shot demo takes a bezel
 click or a hotkey press and performs the shopping story on the user's own notch while the film rides on),
 The final Sidekick park is `0.999`, followed by the native Double Tap lesson. The current native
 sequence does not visit the website's Under-the-hood exhibit, FAQ or footer. The film is passive;
 native controls handle progression.
+`OnboardingSidekickInvitation` keeps the recipe fully visible with one prominent native CTA at the
+very top: Click your notch, or Press right Command with a compact keycap. Its straight vertical arrow
+is a separate transparent, click-through `NSPanel`. The measured CTA aligns to the hardware's
+centerline, with 12 pt between its top edge and the arrow's tail and 10 pt below the notch at the tip.
+The arrow resizes when the app moves; the native film reserves a clear header above the recipe. It cannot become key, hides when onboarding loses focus, and is removed as Sidekick opens
+or the step exits. Display changes and disabled notch clicks switch to the keyboard instruction.
+The arrow draws once and respects Reduce Motion. The website hides its older text/chevron only when
+the new `invitation=native` parameter accompanies the embedded notch cut; older apps keep their cues.
 Watchdogs bound every wait (12 s to load, 40 s to park); offline or a failed load falls back to a quiet
 branded slide, so onboarding is never blocked on the network. The parked beats are addresses into the
 film's scroll timeline and must be re-derived if the website re-paces the film. `dev.film.url` (DEBUG)

@@ -18,6 +18,7 @@ import Foundation
 import AppKit
 
 nonisolated enum OpenAIComputerUse {
+    static let bundleID = "fixture.native"
     struct Configuration: Sendable { let script: Script }
 }
 
@@ -60,6 +61,7 @@ actor OpenAIComputerUseSession {
         try await script.call(tool, arguments: arguments, timeout: timeout)
     }
     func close() {}
+    func isUsable() -> Bool { true }
 }
 
 actor LocalMCPServer {
@@ -110,12 +112,11 @@ nonisolated enum CodexCLI {
         return ExecResult(status: 0)
     }
 }
-nonisolated enum SidekickInteraction {
-    struct Context: Sendable {
-        func endExecution(streamID: UUID) {}
-        func observeToolEvent(_ line: String, streamID: UUID) throws {}
-    }
-    static let current: Context? = nil
+nonisolated final class SidekickInteraction: Sendable {
+    func endExecution(streamID: UUID) {}
+    func observeToolEvent(_ line: String, streamID: UUID) throws {}
+    static let current: SidekickInteraction? = nil
+    let computerUseCheckConsent = ComputerUseDiagnosticConsent()
 }
 nonisolated enum AgentRunDiagnostics {
     struct Context: Sendable {
@@ -152,6 +153,24 @@ _hidden_start = _run_source.index("    static func hidden(server:")
 _hidden_end = _run_source.index("    static func answerText(", _hidden_start)
 SUPPORT = SUPPORT.replace("__ACTUAL_HIDDEN_TOOL_POLICY__", _run_source[_hidden_start:_hidden_end])
 
+SUPPORT += r'''
+nonisolated enum ModelBackend: Sendable { case chatgpt; static let current = ModelBackend.chatgpt }
+
+nonisolated enum Permissions {
+    enum TCCState { case granted, denied, notAsked, unavailable }
+    enum AutomationState { case granted, denied, notAsked, unavailable }
+    static func nativeAutomationState(ask: Bool) async -> AutomationState { .granted }
+    static func hasScreenRecording() -> Bool { true }
+    static func tccState(service: String, clientBundleID: String) -> TCCState { .granted }
+}
+
+@MainActor final class ComputerUseDoctor {
+    static let shared = ComputerUseDoctor()
+    func checkFromAgent(authorization: ComputerUseDiagnosticAuthorization, backend: ModelBackend, call: @escaping @Sendable (String, Data) async throws -> Data) async throws -> Data {
+        fatalError("A normal failed tool must never automatically trigger diagnostics")
+    }
+}
+'''
 TESTS = r'''
 import Foundation
 import AppKit
@@ -509,6 +528,8 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-read-retry-") as direct
         "xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-target",
         f"{platform.machine()}-apple-macos15.0", str(root / "Support.swift"), str(root / "Tests.swift"),
         str(APP / "Diagnostics/NativeComputerUseFailure.swift"),
+        str(APP / "Diagnostics/ComputerUseDiagnosticConsent.swift"),
+        str(APP / "Diagnostics/ComputerUseDiagnosticPolicy.swift"),
         str(APP / "Driver/OpenAIComputerUseProbe.swift"),
         str(APP / "Driver/NativeAppStateRetry.swift"),
         str(APP / "Driver/NativeComputerUseServer.swift"),

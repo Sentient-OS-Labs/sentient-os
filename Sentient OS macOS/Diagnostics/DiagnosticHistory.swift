@@ -128,7 +128,7 @@ nonisolated enum DiagnosticHistory {
     static func recordAgentFailure(_ event: String, fields supplied: [String: String], defaults: UserDefaults = .standard) {
         guard ["agent.tool_failed", "agent.run_diagnostic"].contains(event) else { return }
         let categories: Set<String> = ["reason", "tool", "tool_family", "backend", "feature", "outcome",
-            "model_outcome", "runtime_outcome", "process_outcome", "error_type", "error_domain", "error_case"]
+            "model_outcome", "runtime_outcome", "process_outcome", "error_type", "error_domain", "error_case", "tool_recovery"]
         let numbers: Set<String> = ["call_index", "duration_ms", "error_code", "process_exit_code", "tool_calls",
             "tool_completed", "tool_failed", "tool_incomplete", "tool_omitted", "tool_unknown"]
         let booleans: Set<String> = ["helper_running_at_start", "helper_running_at_end"]
@@ -156,7 +156,7 @@ nonisolated enum DiagnosticHistory {
             "error_code", "system_error_code", "exit_code", "stderr_native_code", "recovery_ax_lookup_code", "recovery_ax_restore_code",
             "display_index", "image_width", "image_height"]
         let booleans: Set<String> = ["native_code_present", "underlying_error_available", "helper_expected_path",
-            "helper_screen_granted_cached", "helper_accessibility_granted_cached", "sentient_screen_preflight",
+            "helper_screen_granted_cached", "helper_accessibility_granted_cached", "sentient_screen_preflight", "stage_manager_enabled_cached",
             "target_running", "target_hidden", "target_active", "recovery_open_dispatched", "recovery_ax_available",
             "recovery_activated", "image_valid", "probe_requires_capture", "watchdog_fired"]
         var fields: [String: String] = [:]

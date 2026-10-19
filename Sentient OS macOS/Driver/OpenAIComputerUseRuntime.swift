@@ -24,6 +24,15 @@ final class OpenAIComputerUseRuntime {
     private var checkingConfiguration: OpenAIComputerUse.Configuration?
     private var checkingFresh = false
     private var restarting = false
+    private var diagnosticLease: UUID?
+
+    /// A user-requested repair owns the idle runtime. Ordinary tasks wait cancellably;
+    /// repairs never tear down a helper underneath an existing agent.
+    func reserveDiagnostic() -> UUID? {
+        guard activeTasks.isEmpty, diagnosticLease == nil, !restarting else { return nil }
+        let id = UUID(); diagnosticLease = id; return id
+    }
+    func endDiagnostic(_ id: UUID) { if diagnosticLease == id { diagnosticLease = nil } }
 
     @discardableResult
     func start(configuration selected: OpenAIComputerUse.Configuration,
@@ -189,6 +198,8 @@ final class OpenAIComputerUseRuntime {
     }
 
     func beginTask(configuration: OpenAIComputerUse.Configuration) async throws -> UUID {
+        while diagnosticLease != nil { try await Task.sleep(for: .milliseconds(100)) }
+        try Task.checkCancellation()
         if let activeConfiguration, !activeTasks.isEmpty, activeConfiguration != configuration {
             throw OpenAIComputerUse.RuntimeError.helperRunning
         }
@@ -224,15 +235,45 @@ final class OpenAIComputerUseRuntime {
 
     func invalidate() { checked = nil }
 
-    /// Explicit repair respects Sentient's active-task lease and takes over competing helpers
-    /// just like task startup, then gracefully restarts only the private helper.
-    func restart(configuration selected: OpenAIComputerUse.Configuration) async throws {
-        let lease = try await CodexRuntime.sharedRuntimeLease()
-        defer { lease.unlock() }
-        let configuration = try selected.afterRuntimeLease()
+    /// An invalid helper cannot pass restart()'s signature check. Before replacing it,
+    /// take the same exclusive file lock used by the installer, then stop ONLY our bundle.
+    /// Another process's live task makes this fail as busy rather than disrupting its work.
+    func prepareForReinstall(configuration: OpenAIComputerUse.Configuration) async throws {
         guard activeTasks.isEmpty, starting == nil, checking == nil, !restarting else {
             throw OpenAIComputerUse.RuntimeError.helperRunning
         }
+        try Task.checkCancellation()
+        guard let lease = try CodexRuntime.executionLease(for: CodexRuntime.executable.path, exclusive: true) else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        defer { lease.unlock() }
+        _ = try configuration.afterRuntimeLease()
+        restarting = true
+        defer { restarting = false }
+        let own = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+            .filter { !$0.isTerminated && $0.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL }
+        for app in own {
+            _ = app.terminate()
+            for _ in 0..<20 where !app.isTerminated { try await Task.sleep(for: .milliseconds(100)) }
+            if !app.isTerminated { _ = app.forceTerminate() }
+            for _ in 0..<20 where !app.isTerminated { try await Task.sleep(for: .milliseconds(100)) }
+            guard app.isTerminated else { throw OpenAIComputerUse.RuntimeError.helperRunning }
+        }
+        launched = nil; checked = nil
+    }
+
+    /// Explicit repair respects Sentient's active-task lease and takes over competing helpers
+    /// just like task startup, then gracefully restarts only the private helper.
+    func restart(configuration selected: OpenAIComputerUse.Configuration) async throws {
+        guard activeTasks.isEmpty, starting == nil, checking == nil, !restarting else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        // Also respect a task in another Sentient process, not only this instance's IDs.
+        guard let lease = try CodexRuntime.executionLease(for: CodexRuntime.executable.path, exclusive: true) else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        defer { lease.unlock() }
+        let configuration = try selected.afterRuntimeLease()
         restarting = true
         checked = nil
         defer { restarting = false }

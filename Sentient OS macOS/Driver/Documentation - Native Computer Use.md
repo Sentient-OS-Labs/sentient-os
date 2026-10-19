@@ -155,6 +155,12 @@ call timeout; each native session request receives the remaining budget. A clien
 closes the broken session, but its tool error still reaches the agent so it can explain or choose
 another available route. It does not terminate the model process.
 
+If the agent next requests `get_app_state` or `list_apps`, the broker replaces a dead model-free
+session before that read. It clears verified app state and never replays the failed call. A new
+mutation still requires a successful fresh state read. Ordinary tool errors do not restart healthy
+sessions. STOP cancels and drains a connection being opened. Reconnection is recorded as
+`recovery_decision=reopen_on_read`, independently of the task's outcome.
+
 The same pending model tool call spans these attempts, so recoverable startup failures do not
 become failed chat steps, final responses or recovery prompts. Success after a retry records
 `recovered`; intermediate attempts record content-free `skipped` capture evidence with
@@ -171,8 +177,8 @@ asks the agent to wait and re-read visible splash/loading screens before escalat
 `ComputerUseStream` only records activity and formats progress. It never interprets a native
 tool error as a reason to terminate the agent. The native server no longer stores a sticky failure
 that blocks all subsequent calls. After a failed read, permission denial or stale-target error,
-the next explicit model request can inspect state again. A broken transport can still refuse a
-request, but the model remains available to use other tools or explain the result itself.
+the next explicit model request can inspect state again. A dead transport is replaced on a new
+read; a failed replacement remains a tool error for the agent to assess.
 
 The `structuredContent.sentient_native_failure` contract carries diagnostic evidence, not a
 termination decision. Failed operations invalidate verified app state, and another mutation needs
@@ -192,6 +198,11 @@ Duplicate or ambiguous RPC requests remain rejected without executing their acti
 receives that error too. Explicit Stop, actual process failures and execution/history integrity
 failures retain their cancellation/error paths.
 
+Consumed RPC IDs are retained as compact hashes for the task's lifetime, with only eight response
+bodies cached. There is no fixed request-count ceiling: long tasks must not become permanently
+blocked after 1,024 calls. An evicted request ID is rejected rather than executing its action twice.
+Successful JSON-RPC replies may include `error: null`; only a non-null error is a failure.
+
 Stage Manager's unreadable thumbnail is a blocker only when the next necessary step needs visual
 information and the accessibility tree cannot supply it. Runtime state reads accept usable text
 without requiring a screenshot. Invalid image blocks are removed when useful text remains, with
@@ -208,3 +219,79 @@ attempt with its actual error; an offline hint never overwrites a successful res
 inert peers, checking recovery and exhaustion, real delays, deadline accounting, cached request
 IDs, action exclusions and cancellation. `test_native_capture.py` also checks the real session’s
 per-request timeout/cleanup contract. These fixtures never operate real apps or call a model.
+`test_native_session_recovery.py` exercises real local RPC subprocess exits, fresh-read recovery,
+uncertain actions, long tasks, nullable errors and Stop during reconnection. Capture diagnostics
+also record a best-effort cached Stage Manager flag; that flag never gates or terminates a task.
+
+## Explicit check and repair
+
+`ComputerUseDoctor` owns the small **Test & repair computer use** window in Permissions & Health.
+It verifies the installed signed runtime, observes Automation and TCC state, and tests an app-owned
+window with a per-check marker. The real native tools must read that marker, return a decodable
+screenshot, click a uniquely identified test button, and set/read back the test field. The controls'
+actual AppKit state verifies the actions. Missing/ambiguous controls, lost focus or a Space change
+interrupt the check without guessing coordinates or labelling the computer broken. Text entry uses
+`set_value`; this is not a claim that every app's keyboard input or every window will work.
+
+Standalone checks reserve the idle runtime; ordinary task startup waits cancellably for that
+reservation, and a separate repair cannot reserve an active agent. The probe holds the runtime's
+shared file lease. Restart/reinstall first require its exclusive lease, respecting tasks in other
+Sentient processes too; a busy lease is reported without interrupting them. An incomplete/invalid
+helper can use the existing pinned installer after stopping only the private helper. The install
+wait is cancellable, and reset/uninstall drain an active diagnostic before deleting its state.
+A confirmed connection/capture startup problem can restart the idle helper once and rerun all
+checks. No TCC edits or automatic grants. An explicit
+ScreenCaptureKit user-denied error is permission evidence; an unreadable TCC database is unknown.
+`repairVerified` becomes true only after the complete real probe passes.
+
+The native broker additionally advertises `diagnose_computer_use` for every provider. This is a
+last-resort model-requested tool, never automatically triggered by errors. The broker requires
+three qualifying failed UI reads across at least two actual apps (including a non-browser), or
+three failed global app-discovery reads. Any usable app read or action clears the evidence. Browser-only,
+single-app, stale-state, focus, typing and Space problems do not qualify. Known missing or unverified
+permissions direct the model to focused recovery or Health; a diagnostic offer requires confirmed grants.
+This gate only controls diagnostic offers, never the original task or ordinary recovery tools.
+
+An eligible first call returns a task-scoped request ID without opening a window or changing the
+connection. The agent passes `computer_use_check_id` to the existing `sentient_recovery.ask_user`.
+Sentient supplies a fixed consent question explaining the test window and brief focus change, with
+**Run check** and **Not now**. Only the actual UI answer can approve the request; a model-supplied ID
+alone cannot. A second diagnostic call consumes the single-use approval. Decline, dismissal, Stop
+or silence never authorize a check, and an answered request cannot be offered again in that task.
+The two-phase flow preserves the normal question-wait lifetime without holding a native tool open.
+Manual **Test & repair** in Health remains an explicit user action and does not need this evidence gate.
+
+Only after approval, the tool replaces its own model-free
+connection and uses the current broker, serialized with actions; it never force-restarts the
+active helper or restarts the agent. Normal client teardown can close an idle helper, which the
+diagnostic starts again through the same private runtime. A dead transport can also reopen on a
+fresh read using the usual recovery path. The result returns to the same model/task;
+closing the check window cancels that check, not the parent task. Ordinary focus changes, partial
+typing, stale targets and Space switches are handled with fresh state and informed retries first.
+Each potentially applied action is verified before a retry, including partial text and uncertain
+sends. The agent may use available accessibility state. No new agent-termination policy exists.
+
+`ComputerUseCheckReport` is separate from the full diagnostic export. It has fixed, content-free
+fields only: versions, binary UUID, permission observations, test outcomes and native error codes,
+plus up to 16 recent computer-use technical events filtered through a second closed allowlist.
+No model error excerpts, prompts, screenshots, account identifiers or paths enter its schema.
+Health displays the timestamp of a previous successful check only for the same binary UUID.
+The report can be previewed and saved locally. **Send report** explicitly uploads that exact
+snapshot through `ComputerUseReportUpload`, using an independent anonymous support identity and
+no background queue. Its Supabase migration is `20261019010000_computer_use_support_reports.sql`;
+it was deployed to the app-data project on 18 October 2026 after explicit user authorization.
+Live authenticated submission, duplicate receipts, private-field rejection and denied reads were
+verified; the synthetic report and anonymous test identity were removed. Authenticated
+clients cannot read/update/delete the report table. The RPC validates the schema, limits size and
+daily writes, and deduplicates immutable report IDs. An unavailable upload leaves local save usable.
+
+Validation: `test_computer_use_diagnostics.py` covers the real probe, interruption and ambiguity
+handling, underlying error evidence, report privacy and HTTP receipts/reauthorization with inert
+controls and HTTP. `test_computer_use_report_database.py` exercises the real SQL in a disposable,
+rolled-back schema, never applies a production migration. `test_native_helper_startup.py` covers
+diagnostic/task ownership and cancellation. `test_computer_use_consent.py` exercises the production
+broker's evidence gate, permission checks, no-side-effect refusal and single-use consent with inert
+transport. `test_sidekick_tools.py` checks real question routing, fixed wording, actual answers and
+cancellation. Signed lab mode `doctor` exercises the real window and native helper; `doctor-chatgpt`
+and `doctor-claude` now verify that a healthy run's diagnostic request is suppressed without opening
+a window. No user-app actions or report uploads. The optional voice first-use offer is separate.

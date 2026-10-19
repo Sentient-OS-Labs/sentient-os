@@ -91,17 +91,24 @@ enum OvernightScheduler {
     // SCHEDULER_MEMBERS
 }
 struct RunProgress { var done = 0 }
+typealias ProcessingRequest = String
 final class ProcessingCoordinator {
     enum Timing { case now, overnight }
     enum State: Equatable { case idle, scheduled }
     let defaults: UserDefaults
     var isBusy = false
+    var isSuspended = false
+    var monitoringRequests = 0
+    var admissionChecks = 0
+    func startMonitoring() { monitoringRequests += 1 }
+    func checkPendingWork() { admissionChecks += 1 }
     var state = State.idle
     var requestOverride: String? = "fixture"
     var carried = RunProgress(done: 7)
     // PROCESSING_RECORD
     init(defaults: UserDefaults) { self.defaults = defaults; self.record = ProcessingPlan.read(defaults) }
     // PROCESSING_CHOOSE
+    // PROCESSING_REQUEST_NOW
 }
 
 @main enum Tests {
@@ -246,6 +253,24 @@ final class ProcessingCoordinator {
         check(ProcessingPlan.initialCompletedAt(defaults) == nil, "scheduling first night does not unlock Double Tap")
         let reloaded = UserDefaults(suiteName: name)!
         check(ProcessingPlan.read(reloaded) == scheduled, "chosen timing survives a new defaults handle")
+
+        let wakeTime = OvernightScheduler.configuredMinutes
+        owner.isBusy = true
+        check(!owner.requestNow(), "Start now cannot replace an active analysis")
+        owner.isBusy = false; owner.isSuspended = true
+        check(!owner.requestNow(), "Start now cannot bypass suspended analysis ownership")
+        check(ProcessingPlan.read(reloaded) == scheduled && owner.monitoringRequests == 0 && owner.admissionChecks == 0,
+              "rejected Start now preserves scheduled work without triggering execution")
+        owner.isSuspended = false
+        check(owner.requestNow(), "Start now accepts an analysis scheduled for overnight")
+        let startedEarly = ProcessingPlan.read(reloaded)
+        check(startedEarly.status == .requested && startedEarly.trigger == .manual && startedEarly.due == nil,
+              "Start now durably replaces the pending overnight request with an immediate manual request")
+        check(owner.monitoringRequests == 1 && owner.admissionChecks == 1,
+              "Start now delegates execution to the existing analysis owner")
+        check(OvernightScheduler.configuredMinutes == wakeTime, "Start now preserves the user's recurring overnight wake time")
+        check(ProcessingPlan.initialCompletedAt(defaults) == nil, "Start now does not prematurely unlock Double Tap")
+
         owner.choose(.now)
         let requested = ProcessingPlan.read(defaults)
         check(requested.status == .requested && requested.trigger == .onboarding && requested.due == nil && owner.state == .idle,
@@ -306,7 +331,8 @@ def main() -> None:
             .replace("// COORDINATOR_METHODS", methods)
             .replace("// SCHEDULER_MEMBERS", dates)
             .replace("// PROCESSING_RECORD", member(processing, "    private(set) var record: ProcessingPlan.Record"))
-            .replace("// PROCESSING_CHOOSE", member(processing, "    func choose(")))
+            .replace("// PROCESSING_CHOOSE", member(processing, "    func choose("))
+            .replace("// PROCESSING_REQUEST_NOW", member(processing, "    func requestNow(")))
     with tempfile.TemporaryDirectory(prefix="sentient-analysis-availability-") as temporary:
         root = Path(temporary)
         fixture = root / "Availability.swift"

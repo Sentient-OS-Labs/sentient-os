@@ -32,6 +32,7 @@ analytics = (DIAGNOSTICS / "Analytics.swift").read_text()
 SUPPORT = r'''
 import Foundation
 import Synchronization
+nonisolated enum BuildIdentity { static let identifier = "00000000-0000-4000-8000-000000000001" }
 
 nonisolated enum Fixture {
     struct Event: Sendable {

@@ -94,6 +94,7 @@ enum Uninstall {
             return false
         }
         await conversation.drainBackgroundWork()
+        await ComputerUseDoctor.shared.clear()
 
         // Quiet the scheduler FIRST so nothing re-arms a wake while the daemon comes down. The
         // flags are snapshotted so a cancellation restores them untouched.

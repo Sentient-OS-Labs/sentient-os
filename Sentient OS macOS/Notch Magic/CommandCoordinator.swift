@@ -191,6 +191,7 @@ final class CommandCoordinator {
         Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label], tier: .core)
         run.start(trimmed, mode: mode, source: source.rawValue, reply: reply)
         guard run.isRunning else { setPhase(.running); runFinished(.failed); return false }
+        if source != .promptBar { SidekickDiscovery.recordNotchUse() }
         run.conversation.replyReference = nil
         InviteProgram.shared.record(.sidekick)
         // Every command is computer use, which raises the notch.
@@ -639,12 +640,22 @@ final class CommandCoordinator {
     /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
         guard NotchPreferences.clickEnabled() else { return }
+        openNotchInput(anchor: .builtInNotch, door: "notch click")
+    }
+
+    /// An explicit Home action is available even when idle notch clicks pass to other apps.
+    /// It opens the same field as the shortcut without changing that preference.
+    func openNotchFromHome() {
+        openNotchInput(anchor: .mainDisplay, door: "Home hint")
+    }
+
+    private func openNotchInput(anchor: NotchAnchor, door: String) {
         guard !run.isClearingChat else { return }
         guard doubleTapDemoKeyChanged == nil else { return }
         if run.recovery.isPending { run.recovery.reopen(); return }
         guard phase == .hidden, !run.isRunning else { return }
-        notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
-        if onboardingDemoArmed { beginNotchDemo(door: "notch click"); return }
+        notchAnchor = anchor
+        if onboardingDemoArmed { beginNotchDemo(door: door); return }
         // Before home: silence pre-beat (the swell is off then anyway), the aside after.
         if interceptForOnboarding() { return }
         if CodexAuth.knowledgeBaseOnly {
@@ -653,8 +664,12 @@ final class CommandCoordinator {
             return
         }
         setPhase(.typing)
+        Log("\(door) → typing")
+        #if DEBUG
+        // Native UI fixtures may open the real field without starting helper health probes.
+        guard !run.preventsTaskExecutionForUIFixture else { return }
+        #endif
         ComputerUseGate.shared.refresh()   // background preparation never holds the input field
-        Log("notch clicked → typing")
     }
 
     // MARK: The native Double Tap lesson

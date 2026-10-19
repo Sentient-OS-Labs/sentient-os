@@ -280,7 +280,7 @@ private struct SidekickActivityRow: View {
                     }
                 }
                 if step.record.event.activity?.status == .failed {
-                    Text("Failed").font(.system(size: 10)).foregroundStyle(.orange.opacity(0.8))
+                    Text("Step incomplete").font(.system(size: 10)).foregroundStyle(SidekickStyle.secondary)
                 } else if step.record.event.activity?.status == .interrupted {
                     Text("Not confirmed").font(.system(size: 10)).foregroundStyle(SidekickStyle.secondary)
                 } else if step.record.event.activity?.status == .started {

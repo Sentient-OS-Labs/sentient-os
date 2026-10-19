@@ -66,7 +66,9 @@ struct AnalysisPopover: View {
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
             || !appleMailAccounts.isEmpty || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
     }
-    private var armed: Bool { anyArmed || processing.isBusy }
+    private var armed: Bool {
+        anyArmed || processing.isBusy || processing.record.status == .scheduled || processing.record.status == .requested
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -196,7 +198,7 @@ struct AnalysisPopover: View {
 
     private var analyzeButton: some View {
         Button(action: onAnalyze) {
-            Text(processing.isBusy || processing.record.status == .requested ? "View progress" : (processing.paused ? "Resume Analysis" : "Analyze Now"))
+            Text(analyzeButtonTitle)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(armed ? .black : .white.opacity(0.35))
                 .frame(maxWidth: .infinity)
@@ -210,6 +212,12 @@ struct AnalysisPopover: View {
         .buttonStyle(PressScaleStyle())
         .background(GlowHalo(active: armed, intensity: 0.28))
         .disabled(!armed)
+    }
+
+    private var analyzeButtonTitle: String {
+        if processing.isBusy || processing.record.status == .requested { return "View progress" }
+        if processing.paused { return "Resume Analysis" }
+        return processing.record.status == .scheduled ? "Start now" : "Analyze Now"
     }
 }
 

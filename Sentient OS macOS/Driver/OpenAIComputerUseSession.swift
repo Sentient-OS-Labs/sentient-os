@@ -43,6 +43,12 @@ nonisolated final class OpenAIComputerUseSession: @unchecked Sendable {
     func catalog() async throws -> Data {
         try await request("mcpServerStatus/list", params: ["threadId": threadID, "serverName": "sentient_native", "limit": 1], stage: .catalog, timeout: 20)
     }
+    /// Only transport liveness, not an interpretation of a tool's success or permissions.
+    func isUsable() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: !self.closed && self.terminalError == nil) }
+        }
+    }
     func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         let args = try JSONSerialization.jsonObject(with: arguments)
         return try await request("mcpServer/tool/call", params: ["threadId": threadID, "server": "sentient_native", "tool": tool, "arguments": args],
@@ -150,7 +156,7 @@ nonisolated final class OpenAIComputerUseSession: @unchecked Sendable {
             }
             guard let id = object["id"] as? Int, let request = pending, id == request.id else { continue }
             pending = nil
-            if let error = object["error"] {
+            if let error = object["error"], !(error is NSNull) {
                 request.continuation.resume(throwing: withStderr(NativeComputerUseFailure.classify(error, stage: request.stage)))
             } else if let result = object["result"], let encoded = try? JSONSerialization.data(withJSONObject: result) {
                 request.continuation.resume(returning: encoded)

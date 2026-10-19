@@ -178,6 +178,7 @@ nonisolated enum SidekickActivityPresentation {
         if tool.native {
             switch tool.leaf {
             case "get_app_state": return (app.map { "Looking at " + $0 } ?? "Looking at an app", "macwindow")
+            case "diagnose_computer_use": return ("Checking computer use", "stethoscope")
             case "get_desktop_state", "list_apps": return ("Looking at your Mac", "desktopcomputer")
             case "click", "double_click", "right_click", "perform_secondary_action": return (inApp("Clicking"), "cursorarrow")
             case "type_text", "set_value": return (inApp("Entering text"), "keyboard")

@@ -16,6 +16,7 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case unexpectedEOF, processExited, requestTimedOut, unexpectedRequest, launchFailed, writeFailed
         case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall
         case imageEncodingFailed, displayUnavailable, invalidArguments, testWindowNotObserved
+        case focusChanged, inputInterrupted, elementUnavailable
         // Legacy diagnostic values only; no Chromium-specific runtime policy.
         case chromiumAppChanged, chromiumRecoveryExhausted
     }
@@ -38,8 +39,9 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
     var effectsMayBeUnknown: Bool { actionEffectsUnconfirmed ?? (stage == .action) }
 
     var modelGuidance: String {
-        "This tool call failed. Use the error to decide the next step. Re-query the app with get_app_state and inspect the fresh state before sending more actions. "
+        "This step did not complete as expected; it does not end the task. User clicks, typing or Space changes can interrupt computer use. Pause briefly, re-query the app with get_app_state and retry using fresh controls when appropriate. "
             + (effectsMayBeUnknown ? "The previous action's effects may be unknown; verify whether it already succeeded before deciding whether to retry, to avoid duplicate changes." : "No action was automatically retried.")
+            + " If typing was interrupted, inspect and correct the existing field contents before sending. An interrupted interaction alone does not establish a missing macOS grant."
     }
 
     var fields: [String: String] {
@@ -148,11 +150,18 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
             return Detail(rawValue: String(line[range]))
         }.first : nil
         var detail = boundaryDetail ?? Detail.allCases.first { $0 != .unspecified && lower.contains($0.rawValue.lowercased()) } ?? .unspecified
-        if lower.contains("sender process is not authenticated") { detail = .senderNotAuthenticated }
-        else if lower.contains("approval denied") || lower.contains("elicitation") { detail = .approvalDenied }
-        else if lower.contains("could not create image from display") { detail = .displayUnavailable }
-        else if lower.contains("invalid argument") || lower.contains("invalid parameter") { detail = .invalidArguments }
-        else if lower.contains("screen capture failed") || lower.contains("screenshot capture failed") { detail = .screenshotCaptureFailed }
+        if boundaryDetail == nil {
+            if lower.contains("sender process is not authenticated") { detail = .senderNotAuthenticated }
+            else if lower.contains("approval denied") || lower.contains("elicitation") { detail = .approvalDenied }
+            else if lower.contains("could not create image from display") { detail = .displayUnavailable }
+            else if lower.contains("invalid argument") || lower.contains("invalid parameter") { detail = .invalidArguments }
+            else if lower.contains("screen capture failed") || lower.contains("screenshot capture failed") { detail = .screenshotCaptureFailed }
+            else if lower.contains("user changed the app") || lower.contains("user has changed the app")
+                || lower.contains("focus changed") || lower.contains("lost focus") { detail = .focusChanged }
+            else if lower.contains("typing interrupted") || lower.contains("typing was interrupted")
+                || lower.contains("input interrupted") { detail = .inputInterrupted }
+            else if lower.contains("element not found") || lower.contains("stale element") { detail = .elementUnavailable }
+        }
         if detail == .unspecified {
             if codes.contains(where: { [-32700, -32600, -32601].contains($0) }) { detail = .malformedResponse }
             else if codes.contains(-32602) { detail = .invalidArguments }
@@ -164,6 +173,7 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case .senderNotAuthenticated, .approvalDenied, .permissionDenied, .blockedByPolicy: kind = .permission
         case .timeoutReached, .requestTimedOut: kind = .timeout
         case .disconnected, .unexpectedEOF, .processExited, .writeFailed, .malformedResponse: kind = .connection
+        case .focusChanged, .inputInterrupted, .elementUnavailable, .staleState: kind = .unknown
         default:
             if lower.contains("permission") || lower.contains("not authorized") { kind = .permission; detail = .permissionDenied }
             else if lower.contains("connection") || lower.contains("disconnected") { kind = .connection; detail = .disconnected }
@@ -182,6 +192,12 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
             failure.systemDomain = domain
             failure.systemCode = number(NSRegularExpression.escapedPattern(for: domain) + #"[^\n]{0,40}?Code[= :](-?[0-9]{1,9})"#)
             break
+        }
+        // SCError.h defines -3801 as the user declining screen capture. Unlike a text hint,
+        // the exact OS domain/code is evidence for a permission fix, not a transient retry.
+        if ["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(failure.systemDomain ?? ""),
+           failure.systemCode == -3801 {
+            failure.kind = .permission; failure.detail = .permissionDenied
         }
         return failure
     }

@@ -26,11 +26,22 @@ struct OnboardingFilmView: View {
     #if DEBUG
     /// Publishes the active web intro to the shared dev footer; nil during native screens.
     var onWebIntroChange: (FilmDriver?) -> Void = { _ in }
+
+    /// Preview the real recipe film at its invitation park using isolated test preferences.
+    static func invitationForTesting() -> Self {
+        precondition(ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-invitation")
+        var view = Self(onContinue: {})
+        view._phase = State(initialValue: .ridingToInvitation)
+        return view
+    }
     #endif
 
     /// For the notch demo: the film step arms the coordinator's one-shot scripted Sidekick
     /// performance while the film is parked on the invitation (click the notch / press right ⌘).
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var inviting: Bool { phase == .awaitingNotch && appState.commandCoordinator.phase == .hidden }
 
     /// The step's phases, two film legs in one webview: black until the film is really
     /// rendering → leg 1 (night → the morning park; Continue up) → on Continue, leg 2
@@ -112,8 +123,10 @@ struct OnboardingFilmView: View {
         var items = comps.queryItems ?? []
         if !items.contains(where: { $0.name == "notch" }) {
             items.append(URLQueryItem(name: "notch", value: notchBeat))
-            comps.queryItems = items
         }
+        items.removeAll { $0.name == "invitation" }
+        items.append(URLQueryItem(name: "invitation", value: "native"))
+        comps.queryItems = items
         return comps.url ?? base
     }
 
@@ -174,12 +187,20 @@ struct OnboardingFilmView: View {
                     }
                     .transition(.opacity)
                 }
+
+                // Keep the recipe visible. One native CTA sits above the film while a
+                // separate, click-through arrow points outside the window at the real notch.
+                if inviting {
+                    OnboardingSidekickInvitation(onOpen: { appState.commandCoordinator.openNotchFromHome() })
+                        .transition(.opacity)
+                }
             }
         }
     }
 
     var body: some View {
         stage
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: inviting)
         // The film step leaving (Continue, back) must never strand an armed demo — the
         // notch goes back to its real behavior the moment onboarding moves on.
         .onDisappear { appState.commandCoordinator.disarmOnboardingNotchDemo() }

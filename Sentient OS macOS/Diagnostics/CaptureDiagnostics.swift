@@ -33,12 +33,13 @@ nonisolated struct CaptureDiagnostics: Sendable {
             // Keep capture evidence locally, even when Sentry is disabled.
             DiagnosticHistory.recordCapture(evidence)
             if outcome == .failed {
-                CrashReporting.captureEvent("computer_use.capture_failed", level: .warning,
+                CrashReporting.captureEvent("computer_use.capture_failed", level: source == .native ? .info : .warning,
                     tags: ["capture_source": source.rawValue, "failure_stage": failure?.stage.rawValue ?? "unknown",
                            "native_detail": failure?.detail.rawValue ?? "unspecified", "diagnostic_schema": "3"],
                     extra: evidence,
                     fingerprint: ["computer_use.capture_failed", source.rawValue, failure?.stage.rawValue ?? "unknown",
-                                  failure?.detail.rawValue ?? "unspecified"], cooldown: 0, affectsOperation: false)
+                                  failure?.detail.rawValue ?? "unspecified"], cooldown: 0,
+                    includeInformational: source == .native, affectsOperation: false)
             }
         }
     }
@@ -52,6 +53,10 @@ nonisolated struct CaptureDiagnostics: Sendable {
             "helper_accessibility_granted_cached": String(ComputerUseGate.shared.helperAccessibility),
             "sentient_screen_preflight": String(CGPreflightScreenCaptureAccess()),
             "display_count": String(NSScreen.screens.count)]
+        // Best-effort context only, never a gate or a reason to stop an agent.
+        if let enabled = UserDefaults(suiteName: "com.apple.WindowManager")?.object(forKey: "GloballyEnabled") as? Bool {
+            fields["stage_manager_enabled_cached"] = String(enabled)
+        }
         if let target {
             fields["target_running"] = String(!target.isTerminated)
             fields["target_hidden"] = String(target.isHidden)

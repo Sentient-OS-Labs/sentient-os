@@ -122,19 +122,45 @@ actor SidekickToolServer {
                         return try SidekickConversationTools.invoke(name, arguments: values, run: run)
                     }
                 } else if name == "ask_user" {
-                    guard let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
-                          Set(arguments.keys) == ["error", "question", "answers"],
-                          arguments["error"] is NSNull || arguments["error"] is String,
-                          let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
-                        return try reply(Self.invalidArguments)
-                    }
-                    action = { [interaction] in
-                        let answer = try await interaction.ask(value)
-                        var payload: [String: Any] = ["text": answer.text, "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull()]
-                        if interaction.personalization != nil {
-                            payload["personalization_evidence_id"] = SidekickPersonalization.answerSource(value.id)
+                    let consentArgument = ComputerUseDiagnosticConsent.argument
+                    if let raw = arguments[consentArgument] {
+                        guard Set(arguments.keys) == ["error", "question", "answers", consentArgument],
+                              let raw = raw as? String, let id = UUID(uuidString: raw),
+                              let pending = interaction.computerUseCheckConsent.pending(id: id) else {
+                            return try reply(Self.invalidArguments)
                         }
-                        return try Self.json(payload)
+                        // Model prose is intentionally ignored for this permission question.
+                        // The app explains the window/focus change and supplies both choices.
+                        let question = try SidekickQuestion(id: pending.id, error: nil,
+                            question: ComputerUseDiagnosticConsent.question, answers: ComputerUseDiagnosticConsent.answers)
+                        action = { [interaction] in
+                            do {
+                                let answer = try await interaction.ask(question)
+                                interaction.computerUseCheckConsent.recordAnswer(id: id,
+                                    selectedAnswer: answer.selectedAnswer, text: answer.text)
+                                return try Self.json(["text": answer.text,
+                                    "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull(),
+                                    "computer_use_check_id": id.uuidString])
+                            } catch {
+                                interaction.computerUseCheckConsent.decline(id: id)
+                                throw error
+                            }
+                        }
+                    } else {
+                        guard let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
+                              Set(arguments.keys) == ["error", "question", "answers"],
+                              arguments["error"] is NSNull || arguments["error"] is String,
+                              let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
+                            return try reply(Self.invalidArguments)
+                        }
+                        action = { [interaction] in
+                            let answer = try await interaction.ask(value)
+                            var payload: [String: Any] = ["text": answer.text, "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull()]
+                            if interaction.personalization != nil {
+                                payload["personalization_evidence_id"] = SidekickPersonalization.answerSource(value.id)
+                            }
+                            return try Self.json(payload)
+                        }
                     }
                 } else if name == SidekickPersonalization.toolName, interaction.personalization != nil {
                     let review: SidekickPersonalization.Review
@@ -203,6 +229,7 @@ actor SidekickToolServer {
          "inputSchema": ["type": "object", "properties": [
             "error": ["type": ["string", "null"], "description": "The complete error to display, or null for a clarification."],
             "question": ["type": "string", "minLength": 1, "maxLength": 500],
+            ComputerUseDiagnosticConsent.argument: ["type": "string", "description": "Only the approval ID returned by diagnose_computer_use when a diagnostic is eligible. The app supplies the actual consent question; only the user's Run check choice authorizes it."],
             "answers": ["type": "array", "minItems": 2, "maxItems": 2, "items": ["type": "string", "minLength": 1, "maxLength": 160]]],
             "required": ["error", "question", "answers"], "additionalProperties": false]]
     }

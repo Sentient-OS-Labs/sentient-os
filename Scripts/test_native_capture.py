@@ -96,6 +96,13 @@ import UniformTypeIdentifiers
         check(unknown.detail == .unspecified, "opaque errors stay opaque")
         check(unknown.fields["underlying_error_available"] == "false", "missing cause is explicit")
         check(!unknown.fields.values.joined().contains("PRIVATE"), "no private error text")
+        let captureSuite = "sentient.capture-context." + UUID().uuidString
+        let captureDefaults = UserDefaults(suiteName: captureSuite)!
+        defer { captureDefaults.removePersistentDomain(forName: captureSuite) }
+        DiagnosticHistory.recordCapture(["capture_outcome": "failed", "capture_source": "native",
+            "stage_manager_enabled_cached": "true"], defaults: captureDefaults)
+        let captureHistory = try DiagnosticHistory.snapshot(defaults: captureDefaults)
+        check(captureHistory.errors.last?.fields["stage_manager_enabled_cached"] == "true", "Stage Manager diagnostic context survives export")
         check(NativeComputerUseFailure.from(item:["type":"mcp_tool_call","server":"sentient_native","status":"completed",
               "result":["content":[["type":"text","text":"screenshotCaptureFailed"]]]]) == nil, "successful app text is not an error")
         let context = CGContext(data:nil,width:4,height:4,bitsPerComponent:8,bytesPerRow:16,

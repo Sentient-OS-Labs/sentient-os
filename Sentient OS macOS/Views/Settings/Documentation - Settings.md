@@ -119,8 +119,9 @@ panels, questions and messages keep their normal behavior; no restart is needed.
 daemon answers over XPC; `notSetUp` fixes with the password installer, `disabled` gets a Turn On… into
 Login Items), Launch at login (needs-approval gets the guide's instruction panel). SIDEKICK &
 PROACTIVE: Microphone & Speech, Sentient Screen Recording, and Notifications. A shared Computer Use
-group shows the native helper's Accessibility and Screen Recording grants for every model backend;
-visible setup handles Automation consent through the macOS prompt.
+group shows the native helper's Accessibility, Screen Recording, and Automation grants for every
+model backend. Automation denial links directly to its System Settings pane; first-time consent
+uses the macOS prompt.
 
 The engine group follows the frontier choice. ChatGPT shows Codex CLI, ChatGPT account and plan.
 Claude shows Claude Code CLI, the Claude account, and Codex CLI for computer use, with no ChatGPT
@@ -156,4 +157,14 @@ stays on the Mac), and a tip that appears on several surfaces carries the same c
 
 `Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - MCP Mirror.md`, `System/Documentation - System (Permissions, Health, Uninstall).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md`.
 
-All engines show the native helper's Accessibility and Screen Recording grants, with Automation consent handled by the macOS prompt. Changing engines prepares the selected dependency without rewriting Codex configuration or login.
+All engines show the native helper's Accessibility, Screen Recording, and Automation status.
+Automation consent uses the macOS prompt; an explicit denial has an Open Settings action and
+directions to Privacy & Security → Automation → Sentient OS → ChatGPT/Codex Computer Use.
+
+Permissions & Health also offers **Test & repair computer use**. The shared checkup window uses
+actual native tools on its own marked controls and reports observed results, separately from
+permission/account checks. Only a completed successful check from this exact binary gets a dated
+success note. Interrupted focus/Space checks remain retryable. Report review, local save, and an
+explicit Supabase send are available afterward; no upload occurs just by running the check.
+Permission checks never reset TCC or automatically regrant access. Changing engines prepares
+the selected dependency without rewriting Codex configuration or login.

@@ -99,7 +99,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     /// Only fixed native tool names are emitted. Connector-defined names may contain account labels.
     static func toolIdentity(server: String, tool: String) -> (family: String, tool: String) {
         if server == "sentient_native" {
-            let known: Set<String> = ["get_app_state", "list_apps", "list_windows", "get_desktop_state", "click", "double_click", "right_click", "drag", "scroll", "type_text", "set_value", "press_key", "key_press", "launch_app", "open_app", "get_screenshot", "screenshot", "get_app_info", "get_window_state", "select_menu_item", "invoke_menu", "select_text", "perform_secondary_action"]
+            let known: Set<String> = ["get_app_state", "list_apps", "list_windows", "get_desktop_state", "click", "double_click", "right_click", "drag", "scroll", "type_text", "set_value", "press_key", "key_press", "launch_app", "open_app", "get_screenshot", "screenshot", "get_app_info", "get_window_state", "select_menu_item", "invoke_menu", "select_text", "perform_secondary_action", "diagnose_computer_use"]
             return ("native", known.contains(tool) ? tool : "other")
         }
         if server == "sentient_recovery" { return ("recovery", ["ask_user", "update_instructions"].contains(tool) ? tool : "other") }
@@ -149,7 +149,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
                     case .permission: return .permission
                     case .connection: return .connection
                     case .timeout: return .timeout
-                    case .unknown: return .unknown
+                    case .unknown: return [.focusChanged, .inputInterrupted, .elementUnavailable, .staleState].contains(failure.detail) ? .staleTarget : .unknown
                     }
                 } ?? Self.errorReason(error ?? result ?? item)
                 end(id, failed: failed, known: known, reason: failed ? failureReason : .unknown,
@@ -241,7 +241,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         breadcrumb("agent.tool_finished", details)
         // Preserve a failure even if the user stops later or no unrelated error follows it.
         if failed {
-            emit("agent.tool_failed", tags: ["tool": call.tool, "tool_family": call.family, "reason": reason.rawValue, "evidence": "tool_result"], extra: details, affectsOperation: false)
+            emit("agent.tool_failed", tags: ["tool": call.tool, "tool_family": call.family, "reason": reason.rawValue, "evidence": "tool_result"], extra: details, informational: true, affectsOperation: false)
         }
     }
 
@@ -285,11 +285,19 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         if let error { details.merge(Diagnostics.errorFields(error)) { _, new in new } }
         breadcrumb("agent.run_finished", details.merging(["outcome": outcome]) { _, new in new })
         let toolFailure = details["tool_failed"] != "0"
+        let recovery: String = !toolFailure ? "not_needed" : (cancelled ? "stopped" :
+            (error != nil ? "runtime_failed" : (modelStatus == "done_claimed" ? "recovered" : "unconfirmed")))
+        details["tool_recovery"] = recovery
+        if feature == "computer" {
+            let measurements = ["outcome": outcome, "tool_recovery": recovery, "backend": backend,
+                "tool_errors": details["tool_failed"] ?? "0", "tool_omitted": details["tool_omitted"] ?? "0"]
+            Task { @MainActor in Analytics.signal("ComputerUse.recovery", parameters: measurements) }
+        }
         guard (!cancelled && (error != nil || modelStatus == "could_not" || modelStatus == "unconfirmed")) || toolFailure else { return }
         let recovered = error == nil && modelStatus != "could_not" && modelStatus != "unconfirmed"
         emit("agent.run_diagnostic", tags: ["outcome": outcome, "reason": error.map { CodexFailureReason.classify($0).rawValue } ?? (recovered ? details["last_tool_reason"] ?? reason : reason),
              "evidence": error != nil ? "runtime_error" : (recovered ? "tool_result" : "model_status")], extra: details,
-             informational: expected && !toolFailure,
+             informational: recovered || cancelled || (expected && !toolFailure),
              affectsOperation: !cancelled && !expected && (error != nil || modelStatus == "could_not" || modelStatus == "unconfirmed"))
     }
 

@@ -22,6 +22,7 @@ serif italic display, no borrowed brand hues.
 | `Briefing.swift` | The card model (`Briefing`, `BriefingDeck`), built from a `PreparedAction`, from the gift markdown, or from the two hard-coded demo decks. |
 | `BriefingCard.swift` | One card through its four lives (sealed envelope → offer → working → done), `OfferButton`, the envelope. |
 | `HomePopovers.swift` | Home's Analysis popover (things understood, vault counts, Analyze Now, the run footer, overnight-on-battery switch, source chips) and Knowledge's optional Use with your AIs popover. `SourceChip`, `HomeStats`. |
+| `HomeShortcuts.swift` | Double Tap's persistent toolbar lesson and deferred ready hint, plus the proactive screen's temporary notch cue. Uses the configured shortcut and local discovery acknowledgements. |
 | `Sidekick/` | Shared conversation presentation/composer, selectable Markdown, atmosphere/glass, measured overview layout and scoped scroll-to-dock gesture. Storage and runtime contracts are in the Sidekick Conversation Backend documentation. |
 | `PromptBar.swift` | Legacy command bar retained for remaining callers; Home uses `SidekickComposer`. |
 | `ProcessingView.swift` | The one analysis takeover, shared by the home, onboarding, and the dev buttons; `RunSource` and `RunSource.connectors(from:)`. |
@@ -90,6 +91,23 @@ cancellable entrance gate before the constellation begins. Direct secondary-page
 Missing anchors fall back to a fade. Geometry follows resizing rather than keeping stale coordinates.
 Analysis and Knowledge have navigation icons; Settings uses a 22pt gear in a 44×40pt target. Search is
 only shown while in conversation.
+
+Double Tap stays immediately left of Analysis in both Home modes. Its popover explains the actual
+configured key, the unsent draft, and the initial-analysis requirement; opening it never captures
+the screen or starts drafting. In chat below 980pt, Analysis and Knowledge use their labeled accessibility
+icons so the Double Tap label and chat controls remain visible without overlapping.
+
+When the persisted initial-analysis milestone becomes available, a short “Double Tap is ready”
+hint and finite gold highlight wait for visible, focused Home, including when analysis finishes
+behind its separate progress window. The hint never takes focus.
+Its completion timestamp is acknowledged only after a full viewing or an explicit ready-button
+click; hiding Home early leaves it pending. The small two-press key demonstration runs only while
+its popover is active, and becomes static with Reduce Motion or Low Power Mode.
+
+On the proactive screen, the otherwise-empty Proactive dock slot carries a quiet “Try the notch”
+cue. It becomes the configured shortcut hint when idle notch clicks are disabled. The explicit
+Home action opens the ordinary notch field without changing click-through preferences. After three
+accepted notch/voice submissions, the cue retires. It is never shown alongside the chat dock.
 
 The current task’s work details open automatically once, including when the task starts from the
 notch. Manually collapsing them is respected; starting another task folds only the previous automatic
@@ -191,13 +209,16 @@ name; the flap swings open in 3D) → `offer` (the whole face tap-expands the le
 
 ## The popovers (`HomePopovers`)
 
-**Analysis:** things understood, the real on-disk vault counts, the Analyze Now button (armed only when
-sources are selected and the model is present), Last run / Next run (the Next run line states the real
+**Analysis:** things understood, the real on-disk vault counts, the Analyze Now button (enabled when
+sources are selected or analysis is scheduled, requested, or running), Last run / Next run (the Next run line states the real
 conditions and rewords itself live when the battery opt-in is on), the quiet "Run on battery too" switch
 (writes `scheduler.allowBattery`, the same key the 3 AM gate reads; shown only when sources are armed and
 the Mac has a battery, so desktops never see it), and the source chips on the same `dbg.*` keys as
 Settings (folder chips toggle; WhatsApp/iMessage open the `ChatPicker`; Gmail/Calendar open the connect
-sheet or render locked).
+sheet or render locked). When analysis is scheduled for overnight, the action reads **Start now** here
+and in the processing window. Both use the existing coordinator's manual request path, replacing the
+pending overnight request while preserving the recurring wake time. Requested or running analysis
+shows **View progress** instead of starting another run.
 
 **Use with your AIs:** now lives in Knowledge's header in both Constellation and Reader, not Home.
 The quiet labeled button opens a short explanation and a Connect an AI / Manage connections CTA.

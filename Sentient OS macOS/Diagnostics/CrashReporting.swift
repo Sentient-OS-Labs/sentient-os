@@ -171,6 +171,7 @@ nonisolated enum CrashReporting {
             scope.setTag(value: role.rawValue, key: "process")
             scope.setTag(value: osVersion, key: "os_version")
             scope.setTag(value: appVersion, key: "app_version")
+            scope.setTag(value: BuildIdentity.identifier, key: "app_binary_id")
             scope.setUser(User(userId: installID))   // the anonymous per-install id
         }
 
@@ -219,6 +220,7 @@ nonisolated enum CrashReporting {
             scope.setLevel(sentryLevel(level))
             scope.setTag(value: osVersion, key: "os_version")
             scope.setTag(value: appVersion, key: "app_version")
+            scope.setTag(value: BuildIdentity.identifier, key: "app_binary_id")
             for (k, v) in tags { scope.setTag(value: v, key: k) }
             if !details.isEmpty { scope.setExtras(details) }
             if let fingerprint { scope.setFingerprint(fingerprint) }

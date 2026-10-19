@@ -98,7 +98,7 @@ enum Analytics {
         }
         let config = TelemetryDeck.Config(appID: appID)
         config.defaultUser = CrashReporting.installID          // the anonymous per-install id (re-hashed by TD)
-        config.defaultParameters = { ["model": ModelLocator.fileName] }  // stamps every signal
+        config.defaultParameters = { ["model": ModelLocator.fileName, "app_binary_id": BuildIdentity.identifier] }
         TelemetryDeck.initialize(config: config)
         started = true
         Log("Analytics: TelemetryDeck started (extended signals \(analyticsEnabled ? "on" : "off"))")

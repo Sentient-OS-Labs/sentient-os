@@ -19,7 +19,8 @@ FILES = [
         "SidekickInstructionStore.swift", "SidekickPersonalization.swift",
         "SidekickTaskSummary.swift",
     )
-] + [ROOT / "Sentient OS macOS/Cloud/AgentStatus.swift",
+] + [ROOT / "Sentient OS macOS/Diagnostics/ComputerUseDiagnosticConsent.swift",
+     ROOT / "Sentient OS macOS/Cloud/AgentStatus.swift",
      ROOT / "Sentient OS macOS/System/CustomInstructions.swift",
      ROOT / "Sentient OS macOS/Diagnostics/SidekickDiagnostics.swift"]
 
@@ -418,6 +419,48 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         await cancelled.clean()
     }
 
+    static func diagnosticQuestions(_ root: URL) async throws {
+        for choice in [0, 1] {
+            let h = try Harness(root.appendingPathComponent("diagnostic-\(choice)"))
+            let owner = UUID()
+            let requested = h.interaction.computerUseCheckConsent.request(owner: owner)!
+            let args: [String: Any] = ["error": "Model-supplied error", "question": "A misleading question?",
+                "answers": ["Misleading yes", "Misleading no"], "computer_use_check_id": requested.id.uuidString]
+            let pending = Task { try await call(h, "ask_user", args) }
+            try await waitFor { h.recovery.content?.question != nil }
+            let actual = h.recovery.content!.question!
+            try check(actual.question == ComputerUseDiagnosticConsent.question && actual.answers == ComputerUseDiagnosticConsent.answers,
+                      "Diagnostic consent wording and choices are controlled by the app")
+            try check(actual.error == nil, "Raw model errors do not pollute the consent question")
+            try check(h.interaction.computerUseCheckConsent.consume(id: requested.id, owner: owner) == nil,
+                      "Showing the question is not approval")
+            h.recovery.answer(id: actual.id, choice: choice)
+            _ = try await pending.value
+            let approval = h.interaction.computerUseCheckConsent.consume(id: requested.id, owner: owner)
+            try check((approval != nil) == (choice == 0), "Only the actual Run check choice grants consent")
+            try check(h.interaction.computerUseCheckConsent.consume(id: requested.id, owner: owner) == nil,
+                      "Consent cannot be reused")
+            let repeated = try await call(h, "ask_user", args)
+            try check(try isError(repeated) && h.recovery.content == nil, "Answered diagnostic questions cannot nag again")
+            await h.clean()
+        }
+        let h = try Harness(root.appendingPathComponent("diagnostic-cancel"))
+        let owner = UUID()
+        let requested = h.interaction.computerUseCheckConsent.request(owner: owner)!
+        let args: [String:Any] = ["error": NSNull(), "question": "ignored", "answers": ["ignored", "ignored"],
+                                 "computer_use_check_id": requested.id.uuidString]
+        let pending = Task { try await call(h, "ask_user", args) }
+        try await waitFor { h.recovery.content?.question != nil }
+        await h.server.stop()
+        do { _ = try await pending.value; try check(false, "Cancelled consent should not return") }
+        catch is CancellationError { try check(true, "Consent wait cancels cleanly") }
+        try check(h.interaction.computerUseCheckConsent.pending(id: requested.id) == nil,
+                  "Stop invalidates the pending diagnostic question")
+        try check(h.interaction.computerUseCheckConsent.consume(id: requested.id, owner: owner) == nil,
+                  "Cancellation cannot manufacture consent")
+        await h.clean()
+    }
+
     static func streams(_ root: URL) async throws {
         let h = try Harness(root.appendingPathComponent("streams"))
         let one = UUID(), two = UUID()
@@ -528,6 +571,7 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         try await completion(root)
         try await history(root)
         try await questions(root)
+        try await diagnosticQuestions(root)
         try await streams(root)
         try await failureAndFinish(root)
         try await memory(root)

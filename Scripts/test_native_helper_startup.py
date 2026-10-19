@@ -26,11 +26,17 @@ enum Permissions {
     static func nativeAutomationState() async -> State { .granted }
 }
 enum CodexRuntime {
+    enum Failure: Error { case busy }
+    static let executable = URL(fileURLWithPath: "/private-codex")
+    static var exclusiveBusy = false
     struct Lease { func unlock() {} }
     struct Helper { let version = "fixture" }
     struct Release { let helper = Helper(); let helperBuild = 1 }
     static let release = Release()
     static func sharedRuntimeLease() async throws -> Lease { Lease() }
+    static func executionLease(for binary: String, exclusive: Bool) throws -> Lease? {
+        if exclusiveBusy { throw Failure.busy }; return Lease()
+    }
 }
 final class NSRunningApplication {
     static var apps: [NSRunningApplication] = []
@@ -41,6 +47,7 @@ final class NSRunningApplication {
     init(_ url: URL?) { bundleURL = url; processIdentifier = Self.nextPID; Self.nextPID += 1 }
     static func runningApplications(withBundleIdentifier: String) -> [NSRunningApplication] { apps.filter { !$0.isTerminated } }
     func terminate() -> Bool { isTerminated = true; return true }
+    func forceTerminate() -> Bool { isTerminated = true; return true }
 }
 final class NSWorkspace {
     final class OpenConfiguration {
@@ -110,6 +117,7 @@ extension OpenAIComputerUseRuntime {
         OpenAIComputerUse.validations = 0; OpenAIComputerUse.takeovers = 0
         OpenAIComputerUse.validationHeld = false
         OpenAIComputerUse.exitDuringReuse = false
+        CodexRuntime.exclusiveBusy = false
         return .fixture()
     }
     static func waitForValidation() async throws {
@@ -159,11 +167,39 @@ extension OpenAIComputerUseRuntime {
         do { try await leased.restart(configuration: configuration); fatalError("Active task was restarted") }
         catch OpenAIComputerUse.RuntimeError.helperRunning {}
         check(!NSRunningApplication.apps[0].isTerminated, "repair preserves active Sentient task")
+        check(leased.reserveDiagnostic() == nil, "a separate diagnostic cannot take over an active agent")
         leased.endTask(lease)
         let other = NSRunningApplication(URL(fileURLWithPath: "/other-helper.app"))
         NSRunningApplication.apps.append(other)
         try await leased.restart(configuration: configuration)
         check(other.isTerminated && NSRunningApplication.apps.allSatisfy(\.isTerminated), "explicit idle repair handles competing helper too")
+        let diagnosing = fresh()
+        let reservation = diagnosing.reserveDiagnostic()!
+        check(diagnosing.reserveDiagnostic() == nil, "only one idle diagnostic owns the runtime")
+        var taskBegan = false
+        let pending = Task { let id = try await diagnosing.beginTask(configuration: configuration); taskBegan = true; return id }
+        try await Task.sleep(for: .milliseconds(150))
+        check(!taskBegan && NSWorkspace.shared.launches == 0, "new work waits for the check instead of competing for controls")
+        pending.cancel()
+        do { _ = try await pending.value; fatalError("Cancelled waiter started") } catch is CancellationError { checks += 1 }
+        diagnosing.endDiagnostic(reservation)
+        let next = try await diagnosing.beginTask(configuration: configuration)
+        check(diagnosing.reserveDiagnostic() == nil, "normal task owns runtime after the check")
+        diagnosing.endTask(next)
+        let repair = fresh()
+        let repairOwn = NSRunningApplication(configuration.appURL)
+        let repairForeign = NSRunningApplication(URL(fileURLWithPath: "/another-app.app"))
+        NSRunningApplication.apps = [repairOwn, repairForeign]
+        CodexRuntime.exclusiveBusy = true
+        do { try await repair.restart(configuration: configuration); fatalError("Cross-process task was restarted") }
+        catch CodexRuntime.Failure.busy {}
+        check(!repairOwn.isTerminated && !repairForeign.isTerminated, "restart also respects another process's runtime lease")
+        do { try await repair.prepareForReinstall(configuration: configuration); fatalError("Another process's lease was ignored") }
+        catch CodexRuntime.Failure.busy {}
+        check(!repairOwn.isTerminated && !repairForeign.isTerminated, "a busy runtime prevents reinstall teardown")
+        CodexRuntime.exclusiveBusy = false
+        try await repair.prepareForReinstall(configuration: configuration)
+        check(repairOwn.isTerminated && !repairForeign.isTerminated, "reinstall teardown stops only the private helper")
         print("PASS: \(checks) native startup race, retry and ownership checks")
     }
 }

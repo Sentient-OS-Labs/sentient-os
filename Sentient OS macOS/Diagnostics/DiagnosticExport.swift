@@ -14,7 +14,7 @@ enum DiagnosticExport {
     static let sharingNote = "Saved prompts and responses may contain personal information. Review the file before sharing. Nothing is sent automatically."
 
     struct Snapshot: Encodable, Sendable {
-        let schemaVersion = 3
+        let schemaVersion = 4
         let exportedAt: Date
         let disclosure = DiagnosticExport.disclosure
         let notes = [
@@ -38,6 +38,7 @@ enum DiagnosticExport {
         let doubleTap: DoubleTapInfo
         let overnight: OvernightInfo
         let technicalHistory: DiagnosticHistory.State?
+        let computerUseCheck: ComputerUseCheckReport?
         let unavailableSections: [String]
     }
 
@@ -62,6 +63,7 @@ enum DiagnosticExport {
     struct AppInfo: Encodable, Sendable {
         let version: String
         let build: String
+        let binaryID: String
         let buildConfiguration: String
         let lastExplicitResetAt: Date?
         let launchAtLogin: Bool
@@ -167,6 +169,7 @@ enum DiagnosticExport {
             thermalState: PowerState.thermalLabel),
             app: AppInfo(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
                 build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+                binaryID: BuildIdentity.identifier,
                 buildConfiguration: configuration, lastExplicitResetAt: defaults.object(forKey: "diagnostics.lastExplicitResetAt") as? Date,
                 launchAtLogin: LoginItem.isEnabled,
                 onboardingComplete: defaults.bool(forKey: AppState.onboardingKey),
@@ -206,7 +209,7 @@ enum DiagnosticExport {
                 needsSetup: scheduler.needsSchedulerSetup, allowBattery: allowBattery,
                 currentPowerBlockReason: PowerState.overnightBlockReason(allowBattery: allowBattery),
                 latestCaution: caution?.kind.rawValue, latestCautionAt: caution?.date),
-            technicalHistory: history, unavailableSections: unavailable)
+            technicalHistory: history, computerUseCheck: ComputerUseDoctor.shared.report, unavailableSections: unavailable)
     }
 
     static func encoded(_ snapshot: Snapshot) throws -> Data {

@@ -223,14 +223,20 @@ struct SidekickAtmosphere: View {
 
 /// Tracks the real native window, so hidden/occluded Home never consumes unread messages.
 struct SidekickWindowPresence: NSViewRepresentable {
+    var requiresKeyWindow = false
     var changed: (Bool) -> Void
-    func makeNSView(context: Context) -> Probe { Probe(changed: changed) }
-    func updateNSView(_ view: Probe, context: Context) { view.changed = changed; view.publish() }
+    func makeNSView(context: Context) -> Probe { Probe(requiresKeyWindow: requiresKeyWindow, changed: changed) }
+    func updateNSView(_ view: Probe, context: Context) {
+        view.requiresKeyWindow = requiresKeyWindow; view.changed = changed; view.publish()
+    }
     final class Probe: NSView {
+        var requiresKeyWindow: Bool
         var changed: (Bool) -> Void
         private var tokens: [NSObjectProtocol] = []
         private var last: Bool?
-        init(changed: @escaping (Bool) -> Void) { self.changed = changed; super.init(frame: .zero) }
+        init(requiresKeyWindow: Bool, changed: @escaping (Bool) -> Void) {
+            self.requiresKeyWindow = requiresKeyWindow; self.changed = changed; super.init(frame: .zero)
+        }
         required init?(coder: NSCoder) { fatalError() }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -247,7 +253,8 @@ struct SidekickWindowPresence: NSViewRepresentable {
             publish()
         }
         func publish() {
-            let value = window.map { NSApp.isActive && $0.isVisible && !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false
+            let value = window.map { NSApp.isActive && $0.isVisible && !$0.isMiniaturized
+                && $0.occlusionState.contains(.visible) && (!requiresKeyWindow || $0.isKeyWindow) } ?? false
             guard value != last else { return }; last = value
             DispatchQueue.main.async { [weak self] in self?.changed(value) }
         }

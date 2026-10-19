@@ -44,6 +44,7 @@ enum FactoryReset {
             return false
         }
         await conversation.drainBackgroundWork()
+        await ComputerUseDoctor.shared.clear(defaults: defaults)
         // Invalidate in-flight learning before any suspension; explicit settings survive.
         SidekickInstructionStore.resetLearning()
         await HostedConnectorSetup.beginTeardown()

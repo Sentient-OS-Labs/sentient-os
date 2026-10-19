@@ -24,6 +24,7 @@ UI work; these backend seams already survive provider-process and Home-view life
 | File | Job |
 |---|---|
 | `CommandCoordinator.swift` | The app-lifetime brain: owns the one shared run, the hotkey, and voice; drives `phase` (`NotchPhase`), the press → voice or type flow, `submit()`, STOP and cancel, adopted card runs, the notch-as-a-button seams, the onboarding notch demo, and the display anchor. |
+| `SidekickDiscovery.swift` | Local ready-hint acknowledgement keys and a bounded count of accepted notch/voice submissions, used to retire Home's learning cue. No task content or telemetry. |
 | `CommandRunModel.swift` | Routes ONE task through the connector leg or `FrontierRun.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
 | `SidekickHotkeyMonitor.swift` | The zero-permission global hotkey: NSEvent `flagsChanged` monitors (global + local) reading the right-key device bit. Press / hold-confirmed / release. |
 | `VoiceCapture.swift` · `QuickTranscriptionEngine.swift` · `SpeechAnalyzerEngine.swift` · `SFSpeechRecognizerEngine.swift` | Voice: permissions, engine selection (SpeechAnalyzer on macOS 26+, SFSpeechRecognizer on 15), start / stop-and-transcribe / cancel. |
@@ -97,6 +98,13 @@ remain intact, and this display cleanup does not create or alter a completion cl
 
 `setPhase` bumps a token that every delayed transition checks, so a stale timer can never clobber a
 newer phase.
+
+**Diagnostic consent.** An eligible last-resort computer-use check uses the ordinary inline/notch
+question UI. `ask_user` accepts the optional `computer_use_check_id` returned by the native broker;
+the app substitutes its own fixed explanation and **Run check / Not now** choices. Only a real
+affirmative answer produces a task-scoped, single-use authorization. The question does not open the
+test window or reset the connection. Declining/cancelling prevents another offer during that task.
+Browser-specific problems and routine interrupted actions keep using normal recovery, not diagnostics.
 
 ## The run model (`CommandRunModel`)
 

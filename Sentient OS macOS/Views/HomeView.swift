@@ -73,6 +73,7 @@ struct HomeView: View {
     @State private var letter: Briefing?
     @State private var letterShown = false
     @State private var showAnalysis = false
+    @State private var showDoubleTap = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
@@ -164,7 +165,7 @@ struct HomeView: View {
             .background {
                 SidekickOverviewScroll(
                     enabled: isPresented && !kbOnly && !inConversation
-                        && !letterShown && !showAnalysis,
+                        && !letterShown && !showAnalysis && !showDoubleTap,
                     activeRect: layout.region, onProgress: followOverviewScroll,
                     onSettle: settleOverviewScroll, onCollapse: dockOverviewFromScroll)
             }
@@ -229,6 +230,7 @@ struct HomeView: View {
                 probeHealth()
             } else {
                 showAnalysis = false
+                showDoubleTap = false
                 showCodexSignIn = false
             }
         }
@@ -313,7 +315,7 @@ struct HomeView: View {
 
     private func chrome(in size: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            topBar
+            topBar(compact: inConversation && size.width < 980).zIndex(1)
             HStack(alignment: .top, spacing: 24) {
                 header
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -334,7 +336,14 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var topBar: some View {
+    private var discoveryActive: Bool {
+        isPresented && presentation.windowActive && !letterShown && !showAnalysis
+            && !showCodexSignIn && !showWhatsAppPicker && !showIMessagePicker
+            && !showGmailConnect && !showCalendarConnect && !showAppleMailPicker
+            && !presentation.clearChatConfirmationShown && !appState.commandCoordinator.run.recovery.isPending
+    }
+
+    private func topBar(compact: Bool) -> some View {
         HStack(spacing: 10) {
             SidekickMark(size: 18, illuminated: true)
             Text("Sentient OS")
@@ -352,16 +361,23 @@ struct HomeView: View {
                     .keyboardShortcut("f", modifiers: .command)
                 SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
             }
-            NavItem(title: appState.processing.isBusy ? "Analyzing" : "Analysis", icon: "waveform.path",
+            if !kbOnly {
+                HomeDoubleTapButton(active: discoveryActive, presented: $showDoubleTap) {
+                    openWindow(id: ProcessingWindowView.windowID)
+                }.zIndex(1)
+            }
+            NavItem(title: compact ? nil : (appState.processing.isBusy ? "Analyzing" : "Analysis"), icon: "waveform.path",
                     dot: appState.processing.needsAttention ? Theme.Ink.amber
                         : (appState.processing.initialComplete ? Theme.Ink.green : GlowHalo.stops[4]),
                     emphasized: !appState.processing.initialComplete,
                     animateEmphasis: isPresented && presentation.windowActive && !inConversation
-                        && !showAnalysis && !letterShown && !reducedMotion) { showAnalysis = true }
+                        && !showAnalysis && !showDoubleTap && !letterShown && !reducedMotion) { showAnalysis = true }
                 .accessibilityIdentifier("navigation.analysis")
+                .accessibilityLabel(appState.processing.isBusy ? "Analyzing" : "Analysis")
                 .help("Check analysis status")
                 .popover(isPresented: $showAnalysis) { analysisPopover }
-            NavItem(title: "Knowledge", icon: "books.vertical") { HomeWindowOpening.open(.knowledge) }
+            NavItem(title: compact ? nil : "Knowledge", icon: "books.vertical") { HomeWindowOpening.open(.knowledge) }
+                .accessibilityLabel("Knowledge").help("Knowledge")
                 .anchorPreference(key: KnowledgeButtonBoundsKey.self, value: .bounds) { $0 }
             NavItem(icon: "gearshape") { HomeWindowOpening.open(.settings) }
                 .accessibilityLabel("Settings")
@@ -399,6 +415,9 @@ struct HomeView: View {
                     insertion: .scale(scale: 0.85).combined(with: .opacity)
                         .animation(.smooth(duration: 0.22).delay(0.28)),
                     removal: .opacity.animation(.easeOut(duration: 0.12))))
+            } else {
+                HomeNotchHint(coordinator: appState.commandCoordinator)
+                    .transition(.opacity)
             }
         }
         .frame(width: 126, height: 34)
@@ -1041,6 +1060,8 @@ private struct NavItem: View {
                          intensity: 0.28, period: 12, animating: animateEmphasis)
             }
         }
+        // The decorative halo extends beyond the pill; assistive hit bounds must not.
+        .contentShape(.accessibility, Capsule())
         .onHover { hover = $0 }
     }
 }

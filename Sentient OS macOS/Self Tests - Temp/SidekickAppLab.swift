@@ -50,7 +50,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
         let env = ProcessInfo.processInfo.environment
         guard env["SENTIENT_SELFTEST"] == "sidekickapp", CommandLine.arguments.count == 1,
               let path = env["LAB_SIDEKICK_ROOT"], path.hasPrefix("/"),
-              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-stress", "live-workflows"].contains(stage),
+              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-discovery", "ui-invitation", "ui-small-onboarding", "ui-stress", "live-workflows"].contains(stage),
               let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = ModelBackend(rawValue: selected), provider != .custom else { throw Failure.configuration }
         let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
@@ -115,6 +115,15 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "ui-stress":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickTranscriptStressLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-discovery":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickPolishLab.runDiscovery(app: state, root: c.root)) { _, new in new }
+            case "ui-invitation":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickPolishLab.runInvitation(app: state, root: c.root)) { _, new in new }
+            case "ui-small-onboarding":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickPolishLab.runSmallOnboarding(app: state, root: c.root)) { _, new in new }
             case "ui-polish":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickPolishLab.run(app: state, root: c.root)) { _, new in new }

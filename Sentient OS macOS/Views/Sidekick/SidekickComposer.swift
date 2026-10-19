@@ -14,6 +14,9 @@ struct SidekickComposer: View {
 
     private var conversation: SidekickConversation { coordinator.run.conversation }
     private var recovery: SidekickRecovery { coordinator.run.recovery }
+    private var notchHasKeyboard: Bool {
+        coordinator.phase == .typing || coordinator.phase == .listening || coordinator.messageReplyFocused
+    }
     private var answering: Bool { recovery.isPending }
     private var text: Binding<String> {
         Binding(get: { answering ? recovery.draft : conversation.draft },
@@ -134,7 +137,10 @@ struct SidekickComposer: View {
         }
         .animation(SidekickStyle.motion(reduced), value: recovery.content?.id)
         .animation(.easeInOut(duration: 0.35), value: focused)
-        .defaultFocus($focused, isPresented && !answering)
+        .defaultFocus($focused, isPresented && !answering && !notchHasKeyboard)
+        .onChange(of: notchHasKeyboard) { _, ownsKeyboard in
+            if ownsKeyboard { focused = false; presentation.composerFocused = false }
+        }
         .onChange(of: focused) { _, value in presentation.composerFocused = value }
         .onChange(of: isPresented) { _, visible in
             if !visible { focused = false; presentation.composerFocused = false }

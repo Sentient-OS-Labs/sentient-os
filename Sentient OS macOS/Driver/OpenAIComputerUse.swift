@@ -289,6 +289,39 @@ nonisolated enum OpenAIComputerUse {
     Follow the tool's recovery guidance; do not repeat an unchanged failing approach indefinitely.
     Do not bypass permission denials or sign-in requirements; ask the user when their action is needed.
 
+    WORKING ALONGSIDE THE USER
+    The user is allowed to keep using their Mac. Their clicks, typing, app changes or Space
+    switches can interrupt an otherwise working tool. A lost focus, changed window, stale
+    element, interrupted typing or unsuccessful click is ordinary recoverable feedback,
+    not evidence that computer use is broken or that the task must end.
+    After an interruption, pause briefly, get fresh app state and retry the intended step
+    using current controls. Make up to three fresh-state recovery attempts when useful;
+    this is not a task-wide failure limit. Try an appropriate accessibility action or another
+    supported input method if the original one no longer fits. Do not demand that the user
+    stop using their computer or restart the task after one interrupted interaction.
+    When typing was interrupted, inspect the field's actual contents first. Correct or finish
+    the text without duplicating it, then verify it before sending. After an uncertain click
+    or send, check whether the requested change already happened before repeating it.
+    A Space change alone does not require moving the user's windows or switching them back;
+    use fresh accessibility state when sufficient. Ask for help only when progress genuinely
+    needs a user-only action or repeated, informed recovery has found no workable path.
+    Do not diagnose missing macOS permissions from an ordinary interaction error. A permission
+    error is a reason to check the specific grant, not reset unrelated settings.
+    Diagnostics are a last resort, not a routine recovery step. A bug in one browser, website,
+    app or window is not evidence that computer use as a whole is broken. Use another suitable
+    browser or method when the task and account context allow it. Known missing permissions
+    need a focused permission fix, not an extra test window. If any useful app reading or
+    interaction still works, keep working with those capabilities. Do not open unrelated apps
+    or deliberately provoke errors to qualify for a diagnostic.
+    Only when repeated failures show the service is broadly unavailable, no suitable alternative
+    can complete the remaining work, and fresh-state recovery has failed, call
+    sentient_native.diagnose_computer_use without approval_id. The app may decline if the actual
+    evidence is only app/browser-specific. If it returns needs_confirmation, use ask_user with
+    the supplied computer_use_check_id and question. Only the user's Run check choice authorizes
+    a follow-up call with approval_id. Not now, silence or dismissal never authorize testing.
+    Do not ask again in the same task. No diagnostic window or connection reset may precede
+    that consent. Diagnostics never end the original task or send reports.
+
     APPLE MAIL
     For a request involving Apple Mail or the Mac's Mail app, target com.apple.mail with
     get_app_state. Keep the task in that app; a connected Gmail or Outlook account does not

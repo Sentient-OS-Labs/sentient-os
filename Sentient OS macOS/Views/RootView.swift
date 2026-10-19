@@ -10,6 +10,8 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var showDevTools = false
     @State private var startedWritingStyleSetup = false
+    @State private var onboardingScale = OnboardingWindowLayout.scale(
+        visibleSize: NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
     // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
     // watched here so Analyze Now and the Analysis popover react to edits from any window.
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
@@ -37,11 +39,13 @@ struct RootView: View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             if !appState.hasCompletedOnboarding {
-                OnboardingView { timing in
-                    appState.processing.choose(timing)
-                    withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
-                    if timing == .now {
-                        openWindow(id: ProcessingWindowView.windowID)
+                OnboardingCanvas(scale: onboardingScale) {
+                    OnboardingView { timing in
+                        appState.processing.choose(timing)
+                        withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                        if timing == .now {
+                            openWindow(id: ProcessingWindowView.windowID)
+                        }
                     }
                 }
                 .transition(.opacity)
@@ -79,8 +83,11 @@ struct RootView: View {
                 }
             }
         }
-        .frame(minWidth: navigation.page == .home ? 840 : 1040,
-               minHeight: navigation.page == .home ? 680 : 800)
+        .frame(minWidth: appState.hasCompletedOnboarding ? (navigation.page == .home ? 840 : 1040)
+                   : OnboardingWindowLayout.minimum.width * onboardingScale,
+               minHeight: appState.hasCompletedOnboarding ? (navigation.page == .home ? 680 : 800)
+                   : OnboardingWindowLayout.minimum.height * onboardingScale)
+        .background(OnboardingWindowFit(active: !appState.hasCompletedOnboarding) { onboardingScale = $0 })
         // Core tier: the home window came up (fires once per window instantiation — launch opens it
         // automatically; anything later is a deliberate menu-bar/Dock reopen, hence the trigger
         // param). Sidekick-only users who never look at home are exactly who this measures.

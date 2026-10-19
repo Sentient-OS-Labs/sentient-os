@@ -9,6 +9,15 @@ already discussed elsewhere. Double Tap is designed for these everyday replies: 
 supplies the immediate question, your knowledge supplies useful context, and your writing examples
 help the reply sound like you. It should use supported facts, not invent an answer to fill a gap.
 
+## Finding Double Tap
+
+Home keeps a **Double Tap** button beside Analysis. It opens a short lesson showing the currently
+configured key; it does not capture or draft anything. Before initial analysis completes, the lesson
+explains the requirement and links to analysis progress. Once that milestone is saved, a gentle ready
+hint waits for the next visible Home visit and is acknowledged once per initial-analysis completion.
+If the user leaves before seeing the full hint, it stays pending. The demonstration uses two small
+key presses, with a static equivalent for Reduce Motion and Low Power Mode.
+
 ## Your drafting provider
 
 Double Tap has its **own provider setting**, independent of Sidekick and proactive intelligence.
@@ -50,7 +59,8 @@ style; writing samples are examples of voice, not instructions or current facts.
 ## How a draft is made
 
 1. The hotkey monitor recognizes two presses of the selected Sidekick key within 0.35 seconds.
-   The first press waits for the double-tap window before opening Sidekick; the second starts drafting.
+   The first press waits for the double-tap window before opening Sidekick; the second starts drafting
+   only after initial analysis completes. Early double taps are consumed without starting a draft.
 2. The app checks setup, Accessibility for paste, Screen Recording, and provider configuration.
 3. `ScreenCapture.grabDisplayUnderCursor()` captures the display under the pointer as a temporary JPEG,
    bounded to a 2,000-pixel long edge. This is one display, not the all-display Sidekick capture.
@@ -80,6 +90,7 @@ The current interface uses feedback at the caret, not a separate notch task with
 | `../Vault/WritingStyle.swift` | One-time sample collection and snapshot preservation. |
 | `../Views/Settings/DoubleTapPane.swift` | Provider controls, reply instructions, privacy explanation and Finder access. |
 | `../Views/Onboarding/OnboardingDoubleTapView.swift` | The introductory Double Tap lesson. |
+| `../Views/HomeShortcuts.swift` | The ongoing Home affordance, current-key lesson, and one-shot ready hint. |
 
 Provider/model defaults and context limits belong in the source rather than a dated benchmark table.
 The relay owns the covered model choice. Text precedes the screenshot in requests; supported OpenAI

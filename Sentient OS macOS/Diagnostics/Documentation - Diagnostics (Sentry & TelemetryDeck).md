@@ -177,3 +177,25 @@ through the same consent-controlled breadcrumbs and extended analytics. A route 
 a failure or cancel the task. Native tool failures retain categorical evidence independently of
 the eventual task outcome; classification no longer decides whether the agent continues.
 Raw native error excerpts are reserved for the model's local tool response and never enter these sinks.
+# Computer-use recovery and explicit support reports (October 2026)
+
+Native tool errors are observations, not task endings. Individual `agent.tool_failed` and native
+capture failures are informational and do not mark their operation failed. Recovered runs are
+informational too; unresolved task outcomes retain their own severity. Extended analytics
+`ComputerUse.recovery` records task outcome, tool recovery category, error count and omitted-event
+count. `ComputerUse.checkFinished` records only the explicit check's source, backend, outcome and
+repair verification. Neither event contains tool arguments, raw errors or app/window content.
+
+`BuildIdentity.identifier` is the loaded Mach-O binary UUID (the app's debug dylib in Xcode Debug
+builds). It is an artifact identifier, not an installation or device identifier. Sentry and
+TelemetryDeck include `app_binary_id`, and schema-4 diagnostic exports include it alongside the
+last content-free computer-use check. Version/build numbers alone can identify several distinct
+development binaries.
+
+The optional **Send report** flow is independent of automatic Sentry/analytics consent. It sends
+only the report the user just previewed, to Supabase, with a dedicated anonymous support identity.
+It never uploads the existing full export, which can contain prompts and an account email.
+`ComputerUseCheckReport` retains structured native/RPC/system codes but excludes `modelError`.
+The server accepts only this schema; clients cannot read other users' reports or overwrite a
+receipt. No credentials are persisted in the report, logged, or followed across HTTP redirects.
+The new backend migration must be applied by the release owner; it is not deployed by local tests.

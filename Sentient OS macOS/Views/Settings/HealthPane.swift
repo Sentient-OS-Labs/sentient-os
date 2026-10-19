@@ -73,7 +73,7 @@ struct HealthPane: View {
 
     var body: some View {
         SettingsPane(title: "Permissions & Health",
-                     whisper: allGreen ? "Your setup checks have passed."
+                     whisper: allGreen ? "Your permissions and account checks have passed."
                                        : "Manage access and check that everything is ready.") {
             if !checked {
                 checkingLine
@@ -82,6 +82,7 @@ struct HealthPane: View {
                     onDeviceGroup
                     sidekickGroup
                     NativeComputerUsePermissionRows(gate: computerGate)
+                    ComputerUseCheckRow()
                     if !sourceIssues.isEmpty {
                         SettingsGroup(label: "Sources to retry") {
                             VStack(alignment: .leading, spacing: 8) {
