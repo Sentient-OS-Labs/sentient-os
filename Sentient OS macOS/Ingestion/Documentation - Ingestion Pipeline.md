@@ -83,10 +83,25 @@ All run modes reread that entire window. Event start times and modification date
 high-water marks: a reschedule can move backward, recurring instances share an item, and deletions
 have no later item to advance through. The normal timeline floor/descent logic does not apply.
 
-The run invalidates earlier calendar readiness before loading the model, accumulates survivor drafts
-only in memory, and validates the fixed window against a fresh EventKit read. Every item must finish
-successfully. Cancellation, extraction or model failure, malformed output, time cap, permission loss,
-and changed selection/content prevent publication. A later run starts a fresh snapshot.
+The run invalidates earlier calendar readiness before loading the model, accumulates the final schedule
+in memory, and validates the fixed window against a fresh EventKit read. The retry cache retains vetted
+survivor summaries between incomplete runs; revision, coverage and input-privacy checks prune stale or
+newly excluded entries before reuse. Pruning must save successfully before model work. Every item must finish
+successfully. Invalid replies get one immediate retry with failure-specific structural feedback and
+a distinct sampling seed. Events still unresolved enter one recovery pass after an engine rebuild;
+already completed events are not regenerated. There are at most three generations per event.
+Cancellation, extraction or model failure, malformed output remaining after recovery, time cap,
+permission loss, and changed selection/content prevent publication. A later run starts a fresh snapshot.
+Source health retains only aggregate attempted/unresolved counts, cleared with the issue on a successful
+commit or selection change. No event text, identifiers or rejected replies enter that health state.
+
+`python3 Scripts/test_apple_calendar.py` checks the production run and parser with controlled
+model/native/storage failures, plus native projection and source-health behavior with memory-only
+preferences. The optional Debug `SENTIENT_SELFTEST=applecalendar` mode requires an isolated app with
+bundle ID `ai.sentientos.calendar-verification`; it reads the shipping app's selected calendar IDs,
+uses native EventKit and the real local model, and commits only into an in-memory CycleStore. It never
+generates a vault or calls a frontier provider. `CALENDAR_ACCEPTANCE_REQUEST_ACCESS=1` allows its
+explicit Calendar permission request; without it, missing access exits with code 77.
 
 `CycleStore.commitCalendarSnapshot` atomically replaces the bucket's pending notes, adds an
 app-authored coverage note, and updates its pointer through the existing rollback/retry helper.
