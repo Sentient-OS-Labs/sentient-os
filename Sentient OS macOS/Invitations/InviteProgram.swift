@@ -15,6 +15,7 @@ final class InviteProgram {
     private(set) var snapshot: InviteSnapshot?
     private(set) var isBusy = false
     private(set) var isRedeeming = false
+    private(set) var lastGiftWasLate = false
     private(set) var errorMessage: String?
     private(set) var eligible: Bool
     private(set) var bannerShown: Bool
@@ -56,28 +57,33 @@ final class InviteProgram {
     }
 
     @discardableResult
-    func redeem(_ code: String) async -> Bool {
+    func redeem(_ code: String, email: String? = nil) async -> Bool {
         guard !isBusy else { return false }
         guard InviteSnapshot.isValidCode(code) else {
             errorMessage = "Enter the invite code you received."
             return false
         }
-        return await perform(code: code)
+        if InviteLateUse.matches(code), email.flatMap(MailAccount.normalizedEmail) == nil {
+            errorMessage = "Enter a valid email so we can save your gift."
+            return false
+        }
+        return await perform(code: code, email: email)
     }
 
     func clearError() { errorMessage = nil }
 
-    private func perform(code: String? = nil, reportErrors: Bool = true) async -> Bool {
+    private func perform(code: String? = nil, email: String? = nil, reportErrors: Bool = true) async -> Bool {
         isBusy = true
         isRedeeming = code != nil
         if reportErrors { errorMessage = nil }
         defer { isBusy = false; isRedeeming = false }
         do {
-            let result = try await InviteCloud.shared.fetch(redeeming: code)
+            let result = try await InviteCloud.shared.fetch(redeeming: code, email: email)
             // Publish only after the receipt is safely cached. A lost response or failed save
             // can be retried; the server returns the same permanent grant.
             try InviteCredential.write("snapshot", data: JSONEncoder().encode(result))
             snapshot = result
+            if let code { lastGiftWasLate = InviteLateUse.matches(code) }
             Diagnostics.backgroundRecovered(.invite)
             return true
         } catch is CancellationError { return false }

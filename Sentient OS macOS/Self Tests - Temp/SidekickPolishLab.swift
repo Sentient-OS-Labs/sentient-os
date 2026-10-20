@@ -776,6 +776,49 @@ import WebKit
         return ["name": name, "file": "polish-snapshots/" + name + ".png", "bytes": png.count, "owning_process_id": getpid()]
     }
 
+    private struct LateGiftFixture: View {
+        @Namespace private var ticket
+        let onClose: () -> Void
+        var body: some View {
+            InviteCelebration(ticketNamespace: ticket, lateGift: true, continueTitle: "Continue", onClose: onClose)
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    static func runLateGift(root: URL) async throws -> [String: Bool] {
+        guard ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-late-gift" else { throw Failure.isolation }
+        let directory = root.appendingPathComponent("polish-snapshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var closed = false
+        let host = NSHostingView(rootView: LateGiftFixture(onClose: { closed = true }))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 820, height: 680),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Late gift · synthetic preview"
+        window.appearance = NSAppearance(named: .darkAqua); window.isReleasedWhenClosed = false
+        window.contentView = host; window.center(); window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        defer { window.close() }
+        try await settle(3000)
+        let before = elements(host)
+        var checks = ["late_letter_copy_visible": before.contains { $0.label.contains(InviteLateUse.message) },
+                      "late_gift_does_not_offer_lifetime": !before.contains { $0.label.localizedCaseInsensitiveContains("lifetime") || $0.label.localizedCaseInsensitiveContains("forever") }]
+        var captures = [try await capture(host, name: "late-gift-01-letter", directory: directory)]
+        guard let button = before.first(where: { $0.label == "Enjoy Sentient!" && $0.role == NSAccessibility.Role.button.rawValue }) else { throw Failure.accessibility }
+        try postClick(window: window, screenPoint: CGPoint(x: button.frame.midX, y: button.frame.midY))
+        try await settle(1000)
+        let after = elements(host)
+        checks["saved_gift_is_not_lifetime_pass"] = !after.contains { $0.label.localizedCaseInsensitiveContains("lifetime") }
+        captures.append(try await capture(host, name: "late-gift-02-saved", directory: directory))
+        guard let done = after.first(where: { $0.label == "Continue" && $0.role == NSAccessibility.Role.button.rawValue }) else { throw Failure.accessibility }
+        try postClick(window: window, screenPoint: CGPoint(x: done.frame.midX, y: done.frame.midY))
+        try await settle(100)
+        checks["gift_can_close"] = closed
+        let manifest: [String: Any] = ["checks": checks, "captures": captures, "provider_calls": 0, "completed": true]
+        try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
+            .write(to: root.appendingPathComponent("late-gift-manifest.json"))
+        return checks
+    }
+
     private static func postClick(window: NSWindow, screenPoint: CGPoint) throws {
         let point = window.convertPoint(fromScreen: screenPoint)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

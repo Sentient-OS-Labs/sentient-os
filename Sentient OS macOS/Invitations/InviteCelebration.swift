@@ -6,6 +6,8 @@ import SwiftUI
 
 struct InviteCelebration: View {
     let ticketNamespace: Namespace.ID
+    var lateGift = false
+    var continueTitle = "Continue setup"
     let onClose: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var arrived = false
@@ -33,13 +35,13 @@ struct InviteCelebration: View {
                     .allowsHitTesting(false)
 
                 if !claimed {
-                    Text(ready ? "SOME THINGS ARE YOURS FOREVER" : "A LITTLE SOMETHING, JUST FOR YOU")
+                    Text(ready && !lateGift ? "SOME THINGS ARE YOURS FOREVER" : "A LITTLE SOMETHING, JUST FOR YOU")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .tracking(2.5).foregroundStyle(.white.opacity(0.5))
-                        .position(x: center.x, y: center.y - 260)
+                        .position(x: center.x, y: center.y - (lateGift ? 285 : 260))
                         .opacity(arrived ? 1 : 0)
 
-                    InviteEnvelope(opened: opened, letterVisible: letterVisible)
+                    InviteEnvelope(opened: opened, letterVisible: letterVisible, lateGift: lateGift)
                         .frame(width: 430, height: 270)
                         .rotationEffect(.degrees(arrived ? 0 : -9))
                         .offset(y: reduceMotion || arrived ? 0 : 170)
@@ -61,16 +63,16 @@ struct InviteCelebration: View {
                     }
                 } else {
                     VStack(spacing: 14) {
-                        Text("All yours. For life.")
+                        Text(lateGift ? "Enjoy Sentient!" : "All yours. For life.")
                             .font(.system(size: 43, weight: .medium))
                             .foregroundStyle(InvitePaper.light)
-                        Text("Thanks for being here early.")
+                        Text(lateGift ? "A couple of weeks of unlimited Sidekick, on us." : "Thanks for being here early.")
                             .font(.system(size: 16)).foregroundStyle(.white.opacity(0.58))
                     }
                     .position(x: center.x, y: center.y - 155)
                     .transition(.opacity)
 
-                    InviteTicketFace(claimed: true)
+                    InviteTicketFace(claimed: true, lateGift: lateGift)
                         .frame(width: 372)
                         .rotationEffect(.degrees(-3))
                         .position(x: center.x, y: center.y + 10)
@@ -80,7 +82,7 @@ struct InviteCelebration: View {
                 VStack(spacing: 12) {
                     Button(action: claimed ? onClose : claim) {
                         HStack(spacing: 12) {
-                            Text(claimed ? "Continue setup" : "Claim lifetime access")
+                            Text(claimed ? continueTitle : lateGift ? "Enjoy Sentient!" : "Claim lifetime access")
                             Image(systemName: claimed ? "arrow.right" : "sparkle")
                         }
                         .font(.system(size: 14, weight: .semibold))
@@ -93,8 +95,9 @@ struct InviteCelebration: View {
                     .focused($claimFocused)
                     .disabled(!ready)
 
-                    Text(claimed ? "Your lifetime pass is saved. Make yourself at home."
-                                 : "Sentient OS, free for life. A gift from us to you.")
+                    Text(lateGift ? "Your Sidekick gift is saved. Make yourself at home."
+                         : claimed ? "Your lifetime pass is saved. Make yourself at home."
+                                   : "Sentient OS, free for life. A gift from us to you.")
                         .font(.system(size: 12)).foregroundStyle(.white.opacity(0.48))
                 }
                 .opacity(ready ? 1 : 0)
@@ -118,7 +121,7 @@ struct InviteCelebration: View {
                         }
                         .buttonStyle(.plain)
                         .keyboardShortcut(.cancelAction)
-                        .accessibilityLabel("Close invitation. Lifetime access is saved.")
+                        .accessibilityLabel(lateGift ? "Close invitation. Your Sidekick gift is saved." : "Close invitation. Lifetime access is saved.")
                     }
                     Spacer()
                 }
@@ -166,6 +169,7 @@ struct InviteCelebration: View {
 private struct InviteEnvelope: View {
     let opened: Bool
     let letterVisible: Bool
+    var lateGift = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -184,10 +188,10 @@ private struct InviteEnvelope: View {
                 .zIndex(opened ? 0 : 4)
 
             letter
-                .frame(width: 368, height: 300)
-                .offset(y: letterVisible ? -172 : 5)
+                .frame(width: 368, height: lateGift ? 340 : 300)
+                .offset(y: letterVisible ? (lateGift ? -196 : -172) : 5)
                 .opacity(opened ? 1 : 0)
-                .zIndex(1)
+                .zIndex(lateGift && letterVisible ? 4 : 1)
 
             InviteEnvelopePocket()
                 .fill(LinearGradient(colors: [Color(white: 0.24), Color(white: 0.105)],
@@ -216,23 +220,38 @@ private struct InviteEnvelope: View {
         }
         .shadow(color: .black.opacity(0.6), radius: 35, y: 22)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(letterVisible ? "Welcome. Sentient OS, yours for life. Lifetime access verified." : "Opening your invitation")
+        .accessibilityLabel(letterVisible
+            ? (lateGift ? InviteLateUse.message + " Enjoy Sentient! -- Jesai & Aditya"
+                        : "Welcome. Sentient OS, yours for life. Lifetime access verified.")
+            : "Opening your invitation")
     }
 
     private var letter: some View {
         VStack(spacing: 14) {
-            Text("WELCOME TO YOUR FOREVER PLAN")
-                .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.5)
-                .opacity(0.6).padding(.top, 27)
-            Text("Sentient OS.\nYours for life.")
-                .font(.system(size: 37, weight: .medium))
-                .multilineTextAlignment(.center).lineSpacing(0)
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.seal.fill")
-                Text("Lifetime access, reserved for you.")
+            if lateGift {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(InviteLateUse.message)
+                        .font(.system(size: 20, weight: .medium)).lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Enjoy Sentient!").font(.system(size: 18, weight: .medium))
+                    Text("-- Jesai & Aditya").font(.system(size: 14)).opacity(0.7)
+                    Spacer(minLength: 0)
+                }
+                .padding(26)
+            } else {
+                Text("WELCOME TO YOUR FOREVER PLAN")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.5)
+                    .opacity(0.6).padding(.top, 27)
+                Text("Sentient OS.\nYours for life.")
+                    .font(.system(size: 37, weight: .medium))
+                    .multilineTextAlignment(.center).lineSpacing(0)
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.seal.fill")
+                    Text("Lifetime access, reserved for you.")
+                }
+                .font(.system(size: 11)).opacity(0.65)
+                Spacer(minLength: 0)
             }
-            .font(.system(size: 11)).opacity(0.65)
-            Spacer(minLength: 0)
         }
         .foregroundStyle(InvitePaper.ink)
         .frame(maxWidth: .infinity)
