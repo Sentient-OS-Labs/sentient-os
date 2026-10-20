@@ -43,7 +43,7 @@ They are included in Double Tap requests and in the folder if optional MCP shari
 | File | Job |
 |---|---|
 | `KnowledgeView.swift` | The window: the mode switch, the split view, navigation and the back trail, the editor, create / delete, the unsaved-edits guard, the sidebar's sync status line. |
-| `VaultTree.swift` | Data: scans the folder into a `VaultNode` tree (folders including empty ones, `.md` notes, dotfiles skipped, README pinned out as "Overview"), builds the title index (lowercased filename stem → URL, the wikilink AND graph-edge resolver), and reads a note (strips YAML frontmatter, promotes the first `# H1` to the title). |
+| `VaultTree.swift` | Data: scans the folder into a `VaultNode` tree (folders including empty ones, `.md` notes, dotfiles skipped, README pinned out as "Overview"), builds the title index (lowercased filename stem → URL, the wikilink AND graph-edge resolver), caches searchable displayed titles and bodies, and reads a note (strips YAML frontmatter, promotes the first `# H1` to the title). |
 | `MarkdownView.swift` | A hand-rolled block renderer for the vault's small verified subset (`#`/`##`/`###`, paragraphs, `- ` bullets, `---`, fenced code and box-drawing trees, inline bold / italic / code / links); `[[wikilinks]]` render as sky-blue links over a custom `sentient-wiki:` URL scheme (unresolved ones dim and inert). |
 | `Graph/SkyGraph.swift` | Nodes and edges in one pass over the vault: body wikilinks resolved through the title index (`[[X|alias]]` and `[[X#heading]]` handled), domains = top-level folders biggest-first (stable palette), hover-preview lines, and "changed in the last 36 h" flags with a bulk-change guard (a full rebuild must not shimmer the whole sky). Plus a seeded mock graph for previews. |
 | `Graph/SkySimulation.swift` | The physics: spring threads, pairwise repulsion, per-constellation ring anchors, a pinned root, a cooling alpha (the entrance), heavy damping and a terminal-velocity cap (stars glide, never boing). Dragging a star reheats its neighborhood. |
@@ -59,6 +59,7 @@ for New note / New folder / Move to Trash. Reader: the rendered note with wikili
 toolbar of Edit, Move to Trash (hidden for the Overview), and an icon-only Reveal in Finder button
 with a tooltip and accessibility label, leaving room for the optional AI connections action.
 
+- **Search:** matches filenames, displayed titles and Markdown bodies case-insensitively, including nested notes and the Overview. Leading/trailing query whitespace is ignored; empty queries have no search results. The searchable text excludes YAML frontmatter and is cached when the vault loads, so typing never rereads note files. Saves, creates and deletes refresh that snapshot; reopening the page picks up external edits. Filename-based wikilink resolution is unchanged.
 - **Code and tree blocks:** fenced code and adjacent box-drawing tree rows render verbatim in monospace, preserving indentation. Fence delimiters are omitted; an unterminated fence still displays its body. Ordinary prose keeps the existing inline markdown and wikilink behavior.
 - **Editing:** Edit opens the RAW file (frontmatter included) in a `TextEditor`; Save writes atomically and re-renders. Navigating away with unsaved edits (a sidebar click, a wikilink, Back, or a mode switch) raises Save / Discard / Cancel; nothing is ever silently dropped. `VaultActivity.editorBusy` is set while editing, so the nightly updater skips a cycle rather than race the user.
 - **Create / delete:** new notes are seeded `# Title` and open straight into edit; names are sanitized and uniqued. Delete moves notes AND folders to the macOS Trash (recoverable, no confirm). The create prompt is a system alert whose initial key view lands on the button row on macOS 26, so the field's focus is claimed a beat after presentation.
@@ -90,6 +91,14 @@ voice. `WindowChrome` forces the transparent title bar at launch.
 - All navigation funnels through the unsaved-edits guard.
 - No per-frame `@Published` / `@State` writes in the sky; no per-frame blur.
 - Never resolve wikilinks or build edges from anything but `KnowledgeVault.titleIndex`.
+
+## Search regression checks
+
+Run `python Scripts/test_knowledge_search.py` with Swift 6.2+ on Windows or macOS. The harness compiles
+the production vault loader and the reader's search property against disposable Markdown fixtures;
+it checks content/title matches, exclusions, snapshot caching and reloads without accessing a user vault.
+The full app and its SwiftUI integration require an Xcode build on macOS. Interactive UI and
+system-permission acceptance still require a real app session.
 
 ## Related docs
 
