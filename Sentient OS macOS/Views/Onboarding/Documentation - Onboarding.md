@@ -21,6 +21,17 @@ Full Disk Access requires resumes exactly where the user left off.
 
 ## The steps
 
+`FINAL_1000` now opens the same gift animation with a courtesy note offering a couple of weeks
+of free unlimited Sidekick. This is **late code use, not a redemption or lifetime grant**.
+The entry asks for an email (reused in the later onboarding email prompt); `record_late_invite_use`
+saves its normalized address, code, and first-use date separately in `invite_code_late_uses`.
+The verified `lateUse` receipt is cached in the existing invitation Keychain snapshot and restored
+by `invite_status`. No expiry or billing gate is introduced. Existing lifetime receipts and
+redemption counts are preserved. Settings uses the same flow and gift animation. Older clients
+cannot keep redeeming the closed code for new lifetime grants; they receive the existing offer-ended
+message. This flow requires migration `20261019020000_late_final_invite_use.sql` and the
+updated app build; publishing the migration source does not deploy it.
+
 `OnboardingWindowLayout` fits the 1100 × 820 design canvas into the display's usable area,
 including the Dock and title-bar allowance. Smaller displays get roughly 80% scale, with a
 scaled minimum window size and a fully laid-out logical canvas so bottom actions stay visible.

@@ -86,6 +86,7 @@ enum PrivacyCopy {
             "For this feedback list, we collect your email address and nothing else, ever. The list is stored in Supabase.",
             "After you submit your onboarding email, Sentient may send just its domain to our company-welcome service. A recognized domain can show a company logo and a prepared welcome before source selection. Company and founder reference records are separate from submitted contacts; this does not verify your identity or connect your email to your knowledge. No verification email is sent.",
             "A random installation credential lets us provide covered inference and manage usage limits. Invitations and lifetime access are recorded separately in Supabase so you keep your access.",
+            "If you use a gift code after its lifetime offer closes, we can save the code, the date you used it, and the email you enter as a separate gift-use record. It is also saved in your Mac’s Keychain. This does not count as a lifetime redemption or link your email to your knowledge or diagnostic reports.",
         ]),
         Section(id: "diagnostics", title: "Useful diagnostics, focused on the app.", paragraphs: [
             "Crash reports and extended usage analytics have separate controls in Settings → System. Both are enabled by default in release builds. Basic usage counts, Sidekick task outcomes and general interruption reasons, and generalized task descriptions remain enabled independently of these switches.",
