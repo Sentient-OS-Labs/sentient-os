@@ -338,7 +338,8 @@ final class ProcessingCoordinator {
             record.notice = "Analysis needs attention. Your progress is saved."
         } else {
             state = .completed; record.status = .completed
-            if request.fullCycle && result.complete {
+            // Diagnostics are telemetry, not failures: they must not hold back first-run features.
+            if request.fullCycle && result.progress.sourceReadFailures.isEmpty {
                 ProcessingPlan.completeInitial(defaults)
                 initialComplete = true
             }
