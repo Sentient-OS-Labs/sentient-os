@@ -288,12 +288,17 @@ actor ClaudeCLI {
     /// Keychain — shared with their own Claude Code, by decision). Same contract as
     /// CodexCLI.startLogin: returns the running Process, never awaited to completion.
     static func startLogin(onURL: @escaping @Sendable (URL) -> Void,
-                           onExit: @escaping @Sendable () -> Void) throws -> Process {
+                           onExit: @escaping @Sendable (Int32) -> Void) throws -> Process {
         guard let bin = locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
         proc.arguments = ["auth", "login"]
         var env = CodexCLI.richEnvironment(binDir: (bin as NSString).deletingLastPathComponent)
+        // Use the same default Claude identity as headless requests. Inherited API keys,
+        // provider switches, or CLAUDE_CONFIG_DIR must not send OAuth to a different account.
+        let loginEnvironmentKeys: Set<String> = ["HOME", "USER", "LOGNAME", "PATH", "TMPDIR",
+                                                  "SHELL", "LANG", "LC_ALL", "LC_CTYPE"]
+        env = env.filter { loginEnvironmentKeys.contains($0.key) }
         env.merge(baseEnv) { _, new in new }
         // stdout contains Claude's manual-code URL, not the URL it opens automatically.
         // Override only this child's browser launcher; the user's settings stay untouched.
@@ -303,7 +308,7 @@ actor ClaudeCLI {
         proc.standardInput = FileHandle.nullDevice
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
-        proc.terminationHandler = { _ in browser?.stop(); onExit() }
+        proc.terminationHandler = { process in browser?.stop(); onExit(process.terminationStatus) }
         do { try proc.run() } catch {
             browser?.stop()
             throw CodexCLI.CLIError.launchFailed("\(error)")
@@ -311,8 +316,7 @@ actor ClaudeCLI {
         return proc
     }
 
-    /// The login ground truth (`claude auth status`, via ClaudeAuth so the plan cache refreshes
-    /// with every check).
+    /// Effective login state: local status, with runtime rejection taking precedence.
     static func loginStatus() async -> Bool {
         await ClaudeAuth.refresh().loggedIn
     }
@@ -320,15 +324,19 @@ actor ClaudeCLI {
     // MARK: Validation
 
     private var cachedAvailability: CodexCLI.Availability?
+    private var availabilityRevision: UUID?
     private var cachedVersion: String?
 
-    /// Is the Claude engine usable — binary on disk AND logged in? `claude auth status` answers
-    /// both without burning a model token (unlike the codex ping, which must round-trip a model:
-    /// codex's auth.json can exist while broken; Claude's status command IS the ground truth).
-    /// Only a GOOD verdict is cached — a failed probe re-checks on every call (the codex law:
-    /// a login fixed mid-session is seen by the very next retry).
+    /// A cached/local login is usable until the runtime rejects it. Once rejected, only the
+    /// explicit sign-in verification can restore availability; status polling cannot do so.
     func validate(force: Bool = false) async -> CodexCLI.Availability {
-        if !force, let cachedAvailability { return cachedAvailability }
+        let revision = ClaudeAuth.revision
+        if ClaudeAuth.requiresVerification {
+            cachedAvailability = nil
+            return .notWorking("Not logged in to Claude Code — sign in with your Claude account.")
+        }
+        if !force, ClaudeAuth.cachedLoggedIn, availabilityRevision == revision,
+           let cachedAvailability { return cachedAvailability }
         guard let bin = Self.locateBinary() else {
             cachedAvailability = nil
             Log("claude ping: notInstalled")
@@ -338,9 +346,10 @@ actor ClaudeCLI {
         let t0 = Date()
         let status = await ClaudeAuth.refresh()
         let ms = Int(Date().timeIntervalSince(t0) * 1000)
-        if status.loggedIn {
+        if status.loggedIn, !ClaudeAuth.requiresVerification, ClaudeAuth.revision == revision {
             let result = CodexCLI.Availability.available(path: bin)
             cachedAvailability = result
+            availabilityRevision = revision
             Log("claude ping: available plan=\(status.plan ?? "unknown") in \(ms)ms")
             return result
         }
@@ -391,6 +400,7 @@ actor ClaudeCLI {
         guard case .available(let bin) = availability else {
             throw CodexCLI.CLIError.notAvailable(availability)
         }
+        try Task.checkCancellation()
 
         let started = Date()
         Log("claude exec: start feature=\(invocation.feature) model=\(modelID) effort=\(effortArg) resume=\(invocation.resumeSessionID != nil) sandbox=\(invocation.sandbox.rawValue) prompt_kb=\(invocation.prompt.utf8.count / 1024) trigger=\(CodexTrigger.current.rawValue)")
@@ -410,20 +420,26 @@ actor ClaudeCLI {
         if SidekickToolServer.connection != nil {
             environment["MCP_TOOL_TIMEOUT"] = String(Int(SidekickToolServer.maximumWait * 1_000))
         }
-        let out = try await CodexCLI.executeAsync(binary: bin,
-                                                  args: args,
-                                                  stdinText: invocation.prompt,
-                                                  cwd: invocation.cwd,
-                                                  timeout: invocation.timeout,
-                                                  extraEnv: environment,
-                                                  observeAgentTools: true,
-                                                  onStdoutLine: stdoutLine)
-        AgentRunDiagnostics.current?.recordProcess(status: out.status)
-        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
-            completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
-                ? nil : SidekickInteraction.current?.conversationRun?.completionStatus)
-        Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
-        return env
+        let authRevision = try ClaudeAuth.usableRevision()
+        do {
+            let out = try await CodexCLI.executeAsync(binary: bin,
+                                                      args: args,
+                                                      stdinText: invocation.prompt,
+                                                      cwd: invocation.cwd,
+                                                      timeout: invocation.timeout,
+                                                      extraEnv: environment,
+                                                      observeAgentTools: true,
+                                                      onStdoutLine: stdoutLine)
+            AgentRunDiagnostics.current?.recordProcess(status: out.status)
+            let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
+                completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
+                    ? nil : SidekickInteraction.current?.conversationRun?.completionStatus)
+            Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
+            return env
+        } catch {
+            ClaudeAuth.rejected(error, after: authRevision)
+            throw error
+        }
     }
 
     /// The Invocation → argv translation — the `arguments(for:)` twin, speaking Claude Code's
@@ -769,6 +785,12 @@ actor ClaudeCLI {
                 throw CodexCLI.CLIError.usageLimit(message: String(detail.prefix(600)),
                                                    sessionID: sessionID)
             }
+            // Successful model/tool text can mention a 401. Only Claude's failed terminal
+            // diagnostic (or fatal stderr before a result exists) establishes login rejection.
+            if isError || terminalFailure {
+                let authDetail = resultObj == nil ? (out.stderr.isEmpty ? out.stdout : out.stderr) : resultDetail
+                if let failure = ClaudeAuth.authenticationFailure(authDetail) { throw failure }
+            }
             if out.status != 0 {
                 throw CodexCLI.CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
@@ -860,6 +882,7 @@ actor ClaudeCLI {
         var availability = "n/a"
         var phase = "exec"
         switch error {
+        case is ClaudeAuth.LoginRequired: (caseName, level) = ("loginRequired", .warning)
         case CodexCLI.CLIError.usageLimit: return   // expected, not a defect — the caution + resume own it
         case CodexCLI.CLIError.notAvailable(let a):
             (caseName, level) = ("notAvailable", .warning)

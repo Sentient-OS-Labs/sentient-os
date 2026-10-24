@@ -285,6 +285,14 @@ actor ClaudeSubscriptionBridge {
     }
 
     private func launch(_ payload: [String: Any]) throws {
+        let authRevision: UUID
+        do { authRevision = try ClaudeAuth.usableRevision() }
+        catch {
+            // Preserve the typed reason for the owner even when rejection was already known
+            // before the first inference process (the HTTP response itself is intentionally generic).
+            fail(error)
+            throw error
+        }
         let system = (payload["instructions"] as? String ?? Wire.instructions) + """
 
         The sentient_relay MCP tools correspond to this Codex client's tools. Codex executes
@@ -316,6 +324,8 @@ actor ClaudeSubscriptionBridge {
         claudeTask = Task {
             let began = Date()
             do {
+                try Task.checkCancellation()
+                guard ClaudeAuth.revision == authRevision else { throw CancellationError() }
                 let result = try await ChildProcessDiagnostics.$directory.withValue(diagnosticDirectory) {
                     try await ChildProcessDiagnostics.$intentionalStops.withValue(diagnosticStops) {
                         try await SidekickInteraction.$current.withValue(interaction) {
@@ -332,7 +342,10 @@ actor ClaudeSubscriptionBridge {
                 if result.status == 124 { throw CodexCLI.CLIError.timedOut(after: timeout) }
                 let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000))
                 complete(envelope)
-            } catch { fail(error) }
+            } catch {
+                ClaudeAuth.rejected(error, after: authRevision)
+                fail(error)
+            }
         }
     }
 

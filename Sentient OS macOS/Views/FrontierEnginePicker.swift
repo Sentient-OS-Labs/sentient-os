@@ -238,11 +238,11 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 .disabled(claude.preparing || claude.installing)
             }
         } else if claude.loggingIn {
-            LoginLinkButton(url: claude.loginURL)
-            Text("Finish signing in in your browser.")
+            if !claude.verifyingLogin { LoginLinkButton(url: claude.loginURL) }
+            Text(claude.verifyingLogin ? "Checking your Claude sign-in." : "Finish signing in in your browser.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Ink.body)
-            MonoWaitLine("waiting for the browser sign-in…")
+            MonoWaitLine(claude.verifyingLogin ? "waiting for Claude to confirm…" : "waiting for the browser sign-in…")
         } else if claude.installGaveUp && !claude.installed {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Sentient couldn't finish installing Claude Code automatically.")
@@ -258,7 +258,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsPillButton(title: claude.preparing || claude.installing ? "Setting up…" : "Sign in with Claude") {
+                SettingsPillButton(title: claude.preparing || claude.installing ? "Setting up…" : claude.loginActionTitle) {
                     prepareClaude(signIn: true)
                 }
                 .disabled(claude.preparing || claude.installing)
@@ -269,6 +269,10 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     private func prepareClaude(signIn: Bool) {
         claudePreparationTask = Task {
+            if signIn, claude.verificationPending {
+                claude.startLogin()
+                return
+            }
             guard await claude.ensureCurrent(), !Task.isCancelled else { return }
             await claude.refreshLoginStatus()
             guard !Task.isCancelled else { return }

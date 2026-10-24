@@ -10,7 +10,8 @@
 //  is tiny, so ClaudeCLI downshifts opus → sonnet when `isPro` (the terra-downshift twin).
 //
 //  Key methods:
-//   - refresh()      → run `claude auth status`, parse, cache → the fresh Status
+//   - refresh()      → read local status without overriding a runtime rejection
+//   - verifyLogin()  → confirm a repaired login with a tool-free request
 //   - cachedLoggedIn / cachedPlan / isPro → cheap synchronous reads for the model choke point
 //   - destroy()      → clear the cache (FactoryReset / Uninstall)
 //
@@ -19,6 +20,7 @@
 //
 
 import Foundation
+import os
 
 nonisolated enum ClaudeAuth {
 
@@ -36,8 +38,81 @@ nonisolated enum ClaudeAuth {
     // point (a subprocess per model pick would be absurd). Production keys (the dbg.* law).
     static let loggedInKey = "claude.loggedIn"
     static let planKey = "claude.plan"
+    private static let repairKey = "claude.loginNeedsVerification"
+    private static let state = OSAllocatedUnfairLock(initialState: UUID())
 
-    static var cachedLoggedIn: Bool { UserDefaults.standard.bool(forKey: loggedInKey) }
+    /// A locally present credential is not proof that Claude still accepts it. This latch
+    /// survives relaunch and only a successful, tool-free model request can clear it.
+    static var requiresVerification: Bool { state.withLock { _ in UserDefaults.standard.bool(forKey: repairKey) } }
+    static var revision: UUID { state.withLock { $0 } }
+
+    static func usableRevision() throws -> UUID {
+        try state.withLock { current in
+            guard !UserDefaults.standard.bool(forKey: repairKey) else { throw LoginRequired() }
+            return current
+        }
+    }
+
+    struct LoginRequired: LocalizedError, Sendable {
+        var reason: CodexFailureReason = .notLoggedIn
+        var errorDescription: String? {
+            "Your Claude Code sign-in needs to be renewed. Sign in to Claude again; your analysis progress is saved."
+        }
+    }
+
+    /// Match Claude CLI's fatal diagnostics, not a bare 401 or a tool's OAuth error.
+    /// The caller must additionally establish that this is an unsuccessful CLI result.
+    static func authenticationFailure(_ detail: String) -> LoginRequired? {
+        var text = detail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for prefix in ["failed to authenticate. ", "failed to authenticate: "] where text.hasPrefix(prefix) {
+            text.removeFirst(prefix.count)
+        }
+        if text == "not logged in" || (text.hasPrefix("not logged in") && text.contains("/login"))
+            || text.hasPrefix("please run /login") {
+            return LoginRequired()
+        }
+        let apiRejection = text.hasPrefix("api error: 401")
+        let refreshRejection = text.hasPrefix("oauth token refresh failed")
+            && (text.contains("invalid_grant") || text.contains("revoked") || text.contains("expired"))
+        guard (apiRejection && (text.contains("oauth") || text.contains("authentication_error")))
+                || refreshRejection else { return nil }
+        if refreshRejection { return LoginRequired(reason: .refreshFailed) }
+        return LoginRequired(reason: text.contains("expired") ? .tokenExpired : .notLoggedIn)
+    }
+
+    /// Called only for Claude's own terminal authentication error, never connector output.
+    /// An older request finishing after a repaired login cannot invalidate the new identity.
+    static func rejected(_ error: Error, after revision: UUID) {
+        guard error is LoginRequired, !Task.isCancelled else { return }
+        let changed = state.withLock { current in
+            guard current == revision else { return false }
+            current = UUID()
+            UserDefaults.standard.set(true, forKey: repairKey)
+            UserDefaults.standard.set(false, forKey: loggedInKey)
+            return true
+        }
+        if changed { Task { @MainActor in ClaudeSetup.shared.authenticationRejected() } }
+    }
+
+    @discardableResult
+    static func beginLogin() -> UUID {
+        state.withLock { current in
+            current = UUID()
+            UserDefaults.standard.set(true, forKey: repairKey)
+            UserDefaults.standard.set(false, forKey: loggedInKey)
+            return current
+        }
+    }
+
+    static func cancelLogin(revision: UUID) {
+        state.withLock { current in if current == revision { current = UUID() } }
+    }
+
+    static var cachedLoggedIn: Bool {
+        state.withLock { _ in
+            !UserDefaults.standard.bool(forKey: repairKey) && UserDefaults.standard.bool(forKey: loggedInKey)
+        }
+    }
     static var cachedPlan: String? {
         let v = UserDefaults.standard.string(forKey: planKey)
         return (v?.isEmpty == false) ? v : nil
@@ -54,24 +129,74 @@ nonisolated enum ClaudeAuth {
         cachedPlan.map { $0.prefix(1).uppercased() + $0.dropFirst() }
     }
 
-    /// Ground truth: run `claude auth status` (exit 0 = logged in, 1 = not; JSON on stdout
-    /// either way) and cache the verdict. Called from Settings/health refreshes and after a
-    /// login — never per run (validate() caches availability the same way codex does).
+    /// Read the local Claude Code login and plan. A runtime rejection remains authoritative
+    /// until verifyLogin succeeds, even if this command reports loggedIn: true.
     static func refresh() async -> Status {
+        let revision = revision
         guard let bin = ClaudeCLI.locateBinary() else {
-            cache(.loggedOut)
-            return .loggedOut
+            return acceptStatus(.loggedOut, after: revision)
         }
         guard let out = try? await CodexCLI.executeAsync(binary: bin, args: ["auth", "status"],
                                                          stdinText: nil, cwd: nil, timeout: 20,
-                                                         extraEnv: ClaudeCLI.baseEnv) else {
+                                                         extraEnv: ClaudeCLI.baseEnv,
+                                                         includeCustomProviderKey: false) else {
             // Couldn't even run the binary — keep the cache as-is (a transient spawn failure
             // must not flip a working setup to "logged out").
             return Status(loggedIn: cachedLoggedIn, plan: cachedPlan, email: nil)
         }
+        guard !Task.isCancelled else { return Status(loggedIn: cachedLoggedIn, plan: cachedPlan, email: nil) }
         let status = parse(out.stdout) ?? .loggedOut
-        cache(status)
-        return status
+        return acceptStatus(status, after: revision)
+    }
+
+    private static func acceptStatus(_ status: Status, after revision: UUID) -> Status {
+        state.withLock { current in
+            let d = UserDefaults.standard
+            guard current == revision else {
+                return Status(loggedIn: !d.bool(forKey: repairKey) && d.bool(forKey: loggedInKey),
+                              plan: d.string(forKey: planKey), email: nil)
+            }
+            let effective = Status(loggedIn: status.loggedIn && !d.bool(forKey: repairKey),
+                                   plan: status.plan, email: status.email)
+            cache(effective)
+            return effective
+        }
+    }
+
+    /// Verify the subscription with a bounded request containing no user data, tools,
+    /// connectors, hooks, or saved session. Status alone can still report a rejected token.
+    static func verifyLogin(revision: UUID) async throws {
+        guard self.revision == revision else { throw CancellationError() }
+        guard let bin = ClaudeCLI.locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
+        _ = await refresh() // refresh the plan; this cannot clear the verification latch
+        try Task.checkCancellation()
+        guard self.revision == revision else { throw CancellationError() }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("sentient-claude-login-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let out = try await CodexCLI.executeAsync(binary: bin,
+            args: ["-p", "--model", ClaudeCLI.Model.sonnet.rawValue, "--effort", "low",
+                   "--output-format", "stream-json", "--verbose",
+                   "--tools", "", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}",
+                   "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence",
+                   "--settings", "{\"disableAllHooks\":true,\"claudeMdExcludes\":[\"**\"]}",
+                   "--permission-mode", "dontAsk", "--max-turns", "1",
+                   "--system-prompt", "Reply with OK."],
+            stdinText: "Reply with OK.", cwd: directory.path, timeout: 45,
+            extraEnv: ClaudeCLI.baseEnv.merging(["CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+                                                "CLAUDE_CODE_SAFE_MODE": "1"]) { _, new in new },
+            includeCustomProviderKey: false)
+        _ = try ClaudeCLI.parseEnvelope(out, durationMS: 0)
+        try Task.checkCancellation()
+        let accepted = state.withLock { current in
+            guard current == revision else { return false }
+            UserDefaults.standard.set(false, forKey: repairKey)
+            UserDefaults.standard.set(true, forKey: loggedInKey)
+            current = UUID()
+            return true
+        }
+        guard accepted else { throw CancellationError() }
     }
 
     /// Parse the `auth status` JSON. Tolerant: only `loggedIn` is required.
@@ -95,8 +220,11 @@ nonisolated enum ClaudeAuth {
     /// Wipe the cached identity (FactoryReset / Uninstall). The login itself belongs to the
     /// user's Claude Code (shared ~/.claude + Keychain) — never touched from here.
     static func destroy() {
-        let d = UserDefaults.standard
-        [loggedInKey, planKey, ClaudeCLI.rateLimitResetsAtKey,
-         ClaudeCLI.rateLimitTypeKey].forEach { d.removeObject(forKey: $0) }
+        state.withLock { current in
+            current = UUID()
+            let d = UserDefaults.standard
+            [loggedInKey, planKey, repairKey, ClaudeCLI.rateLimitResetsAtKey,
+             ClaudeCLI.rateLimitTypeKey].forEach { d.removeObject(forKey: $0) }
+        }
     }
 }

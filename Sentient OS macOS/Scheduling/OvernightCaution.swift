@@ -124,6 +124,7 @@ enum OvernightCaution {
         // back in" would be wrong advice. (An endpoint-specific caution kind can come later;
         // unclassifiable stays honest silence.)
         if ModelBackend.current == .claude {
+            if error is ClaudeAuth.LoginRequired || ClaudeAuth.requiresVerification { return .loggedOut }
             if case CodexCLI.CLIError.notAvailable(.notWorking(let detail)) = error,
                detail.localizedCaseInsensitiveContains("not logged in") {
                 return .loggedOut

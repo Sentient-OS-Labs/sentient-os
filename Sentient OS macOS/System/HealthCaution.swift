@@ -198,14 +198,16 @@ enum HealthCaution {
 
     /// The Claude twin (`claude auth status` shells out too — same ~5 min cache, same bypass
     /// while an engine banner is showing).
-    private static var claudeLogin: (verdict: Bool, at: Date)?
+    private static var claudeLogin: (verdict: Bool, at: Date, revision: UUID)?
 
     private static func claudeLoggedIn(force: Bool) async -> Bool {
-        if !force, let cached = claudeLogin, Date().timeIntervalSince(cached.at) < 300 {
+        let revision = ClaudeAuth.revision
+        if ClaudeAuth.requiresVerification { return false }
+        if !force, let cached = claudeLogin, cached.revision == revision, Date().timeIntervalSince(cached.at) < 300 {
             return cached.verdict
         }
         let verdict = await ClaudeCLI.loginStatus()
-        claudeLogin = (verdict, Date())
-        return verdict
+        claudeLogin = (verdict, Date(), revision)
+        return verdict && !ClaudeAuth.requiresVerification
     }
 }
