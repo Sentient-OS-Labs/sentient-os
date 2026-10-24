@@ -266,15 +266,19 @@ actor ProactiveCycle {
     static func collectWritingStyle() async -> String? {
         let initial = await MainActor.run { ProcessingPlan.initialCompletedAt() == nil }
         guard initial, !WritingStyle.exists() else { return nil }
-        do { return try await WritingStyle.collect() }
-        catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
+        return await Diagnostics.withOperation("writing_style_setup", propagatesFailure: false) {
+            do { return try await WritingStyle.collect() }
+            catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
+        }
     }
 
     /// Land collected samples in the knowledge base, which exists by the time this is called.
-    @MainActor static func publishWritingStyle(_ content: String?) {
+    @MainActor static func publishWritingStyle(_ content: String?) async {
         guard !Task.isCancelled, let content else { return }
-        do { try WritingStyle.publishIfNeeded(content) }
-        catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
+        await Diagnostics.withOperation("writing_style_publish", propagatesFailure: false) {
+            do { try WritingStyle.publishIfNeeded(content) }
+            catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
+        }
     }
 
     /// The one shape every catch site shares: classify the failure, persist the caution on the

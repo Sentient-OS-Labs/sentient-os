@@ -430,5 +430,129 @@ enum FullAcceptanceTests {
             exit(1)
         }
     }
+
+    static func writingStyleAnalysisCompletion() async throws {
+        enum TestError: Error { case failed }
+        func check(_ value: Bool, _ label: String) throws { try require(value, label) }
+        let defaults = UserDefaults.standard
+        let original = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(original, forName: UserDefaults.argumentDomain) }
+        var overrides = original
+        overrides[ModelBackend.key] = "chatgpt"
+        overrides[ProcessingPlan.initialCompletedKey] = 0
+        overrides["gift.completed"] = true
+        overrides["plan.kbOnly"] = true
+        overrides["diagnosticsEnabled"] = false
+        defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
+        defaults.removeObject(forKey: DiagnosticHistory.key)
+        let root = VaultGenerator.vaultRoot
+        let file = root.appendingPathComponent(WritingStyle.fileName)
+        let fm = FileManager.default
+        let schema = Schema([BucketPointer.self, CycleNote.self, AppleMailReceipt.self])
+        let store = CycleStore(modelContainer: try ModelContainer(for: schema,
+            configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)))
+        try await CycleStore.$acceptanceStore.withValue(store) {
+            try await WritingStyle.$acceptanceSources.withValue(["outlook-mail"]) {
+                try await FrontierRun.$acceptanceRun.withValue({ invocation in
+                    if invocation.feature == "writingstyle" {
+                        return try await MainActor.run {
+                            try WritingStyleTests.outlookEnvelope([["id": "fixture-unread", "sentDateTime": "2026-09-01T12:00:00Z",
+                                                                  "isDraft": false, "bodyPreview": "Preview only"]])
+                        }
+                    }
+                    throw TestError.failed
+                }) {
+                    // Exercise the actual empty-summary cycle that previously stayed incomplete.
+                    let request = ProcessingRequest(connectors: [])
+                    let result = await ProcessingRun(request: request, scheduled: false)
+                        .execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+                    try check(result.complete && !result.hadDiagnostics, "optional sample failure permits full analysis completion")
+                    try check(!WritingStyle.exists(), "failed optional setup leaves the file absent for its independent retry")
+                    let history = try DiagnosticHistory.snapshot()
+                    try check(history.errors.contains { $0.fields["reason"] == "writing_samples" }, "optional failure remains in diagnostic history")
+                    try check(!history.errors.contains { $0.event == Diagnostics.Event.cycleIncomplete.rawValue }, "optional failure emits no false incomplete-cycle event")
+                    try await Diagnostics.withOperation("fixture_explicit_setup") {
+                        var failed = false
+                        do { _ = try await WritingStyle.collect() } catch { failed = true }
+                        try check(failed && Diagnostics.current?.hasFailure == true,
+                                  "explicit writing-style setup still reports its own failure")
+                    }
+
+                    // A failed required source must remain incomplete even beside the optional failure.
+                    var readRequest = request; readRequest.runGmail = true
+                    let sourceFailure = await ProcessingRun(request: readRequest, scheduled: false)
+                        .execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+                    try check(!sourceFailure.complete && !sourceFailure.progress.sourceReadFailures.isEmpty,
+                              "required source failure still blocks completion")
+
+                    await store.recordNote(bucketKey: "fixture", kind: .file, sourceID: "fixture-note", folder: "Fixture",
+                        itemDate: Date(), text: "Synthetic summary", title: "Fixture", reminderFlagged: false)
+                    let vaultFailure = await ProcessingRun(request: request, scheduled: false)
+                        .execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+                    try check(!vaultFailure.complete && vaultFailure.failure?.stage == .vault,
+                              "required vault failure still blocks completion")
+                    try check(await store.notes().count == 1, "failed vault publication preserves pending summaries")
+                    try await FrontierRun.$acceptanceRun.withValue({ invocation in
+                        try await MainActor.run {
+                            if invocation.feature == "vault", let cwd = invocation.cwd {
+                                let staging = URL(fileURLWithPath: cwd)
+                                guard staging.deletingLastPathComponent() == root.deletingLastPathComponent() else { throw TestError.failed }
+                                try "# Fixture\nSynthetic summary".write(to: staging.appendingPathComponent("fixture.md"), atomically: true, encoding: .utf8)
+                                return envelope()
+                            }
+                            guard invocation.feature == "writingstyle" else { throw TestError.failed }
+                            return try WritingStyleTests.outlookEnvelope([["id": "fixture-unread", "sentDateTime": "2026-09-01T12:00:00Z",
+                                                                          "isDraft": false, "bodyPreview": "Preview only"]])
+                        }
+                    }) {
+                        let saved = await ProcessingRun(request: request, scheduled: false)
+                            .execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+                        try check(saved.complete && !saved.hadDiagnostics, "successful vault update completes beside failed optional setup")
+                        try check(try String(contentsOf: root.appendingPathComponent("fixture.md"), encoding: .utf8).contains("Synthetic summary"),
+                                  "required summary is published through the actual vault swap")
+                        try check(await store.notes().isEmpty, "only successfully published summaries are consumed")
+                        try check(!WritingStyle.exists(), "optional setup remains independently retryable after vault success")
+                    }
+                    await store.wipeEverything()
+                }
+            }
+        }
+
+        try await Diagnostics.withOperation("fixture_analysis") {
+            let parent = Diagnostics.current!
+            try await Diagnostics.withOperation("fixture_optional", propagatesFailure: false) {
+                let optional = Diagnostics.current!
+                await Diagnostics.withOperation("fixture_child") {
+                    Diagnostics.report(.knowledgeFailed, phase: .read, reason: "fixture", error: TestError.failed, terminal: true)
+                }
+                try check(optional.hasFailure && !parent.hasFailure, "nested optional errors stop at their owning operation")
+                try check(optional.parentID == parent.id && optional.rootID == parent.rootID, "optional failures retain parent/root correlation")
+                try check(!parent.wasReported(TestError.failed), "optional error does not suppress the same error in required work")
+            }
+            async let optional = WritingStyle.$acceptanceSources.withValue([]) { await ProactiveCycle.collectWritingStyle() }
+            Diagnostics.report(.storeWriteFailed, phase: .commit, reason: "fixture", error: TestError.failed, terminal: true)
+            _ = await optional
+            try check(parent.hasFailure, "concurrent optional work cannot clear a required persistence failure")
+            try check(!ProcessingRun.Result(progress: RunProgress(), hadDiagnostics: parent.hasFailure).complete,
+                      "required diagnostic failure still blocks completion")
+        }
+
+        // A destination occupied by a directory forces publication to fail without changing the vault.
+        try fm.createDirectory(at: file, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: file) }
+        try await Diagnostics.withOperation("fixture_publish") {
+            await ProactiveCycle.publishWritingStyle("Synthetic sample")
+            try check(Diagnostics.current?.hasFailure == false, "optional publication failure cannot fail analysis")
+            try check(!WritingStyle.exists(), "failed sample publication creates no partial file")
+        }
+        let cases: [(String, (inout RunProgress) -> Void)] = [
+            ("model", { $0.failed = 1 }), ("extraction", { $0.extractionFailed = 1 }),
+            ("disk", { $0.diskFull = true }), ("mail incomplete", { $0.mailIncomplete = true }),
+            ("mail deferred", { $0.mailDeferred = 1 })]
+        for (name, change) in cases {
+            var progress = RunProgress(); change(&progress)
+            try check(!ProcessingRun.Result(progress: progress).complete, "\(name) failure still blocks completion")
+        }
+    }
 }
 #endif
