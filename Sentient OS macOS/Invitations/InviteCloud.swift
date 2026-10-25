@@ -96,14 +96,10 @@ actor InviteCloud {
     }()
 
     // Main-actor InviteProgram serializes operations, including token rotation.
-    func fetch(redeeming code: String? = nil, email: String? = nil) async throws -> InviteSnapshot {
-        let late = code.map(InviteLateUse.matches) == true
-        let address = email.flatMap(MailAccount.normalizedEmail)
-        if late && address == nil { throw Failure.rejected("email_required") }
+    func fetch(redeeming code: String? = nil) async throws -> InviteSnapshot {
         var session = try await authenticatedSession()
-        let path = late ? "rest/v1/rpc/record_late_invite_use"
-            : code == nil ? "rest/v1/rpc/invite_status" : "rest/v1/rpc/redeem_invite"
-        let body = late ? ["p_email": address!] : code.map { ["p_code": InviteSnapshot.normalize($0)] } ?? [:]
+        let path = code == nil ? "rest/v1/rpc/invite_status" : "rest/v1/rpc/redeem_invite"
+        let body = code.map { ["p_code": InviteSnapshot.normalize($0)] } ?? [:]
         var result = try await request(path, body: body, token: session.accessToken)
         if result.1 == 401 {
             session = try await authenticatedSession(forceRefresh: true)
@@ -114,7 +110,6 @@ actor InviteCloud {
             throw Failure.rejected(error.error)
         }
         let snapshot = try Self.verifiedSnapshot(from: result.0, redeeming: code)
-        if late && snapshot.lateUse?.email != address { throw Failure.response }
         return snapshot
     }
 
@@ -124,7 +119,7 @@ actor InviteCloud {
         if let code {
             // An existing grant alone does not validate the code just entered. The RPC
             // must confirm that exact code before onboarding can reveal its gift.
-            guard InviteLateUse.matches(code) ? snapshot.lateUse != nil : snapshot.hasLifetimeAccess,
+            guard snapshot.hasLifetimeAccess,
                   let confirmation = try? JSONDecoder().decode(RedemptionConfirmation.self, from: data),
                   confirmation.validatedCode == InviteSnapshot.normalize(code).uppercased()
             else { throw Failure.response }

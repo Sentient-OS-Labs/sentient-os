@@ -11,7 +11,6 @@ struct InviteRedemptionView: View {
     var startsCollapsed = false
     @State private var program = InviteProgram.shared
     @State private var code = ""
-    @State private var email = ""
     @State private var showingGift = false
     @Namespace private var giftTicket
     @State private var hasExpanded = false
@@ -32,11 +31,11 @@ struct InviteRedemptionView: View {
             } else if program.snapshot?.lateUse != nil && !hasExpanded {
                 Label("Your Sidekick gift is saved", systemImage: "gift")
                     .font(.system(size: formStyle ? 15 : 13, weight: .medium)).foregroundStyle(Theme.Ink.green)
-                Text(InviteLateUse.message + "\n\nEnjoy Sentient!\n-- Jesai & Aditya")
+                Text("Redeem FINAL_1000 to unlock lifetime access.")
                     .font(.system(size: formStyle ? 13 : 11)).foregroundStyle(Theme.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Have another code?") {
-                    email = program.snapshot?.lateUse?.email ?? ""
+                Button("Redeem lifetime access") {
+                    code = InviteLateUse.code
                     hasExpanded = true
                 }
                 .buttonStyle(.plain).foregroundStyle(Theme.Ink.body)
@@ -91,18 +90,6 @@ struct InviteRedemptionView: View {
                 .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15)))
                 .disabled(program.isRedeeming)
-                if InviteLateUse.matches(code) {
-                    TextField("Your email", text: $email)
-                        .textFieldStyle(.plain).textContentType(.emailAddress)
-                        .autocorrectionDisabled().privacySensitive()
-                        .font(.system(size: formStyle ? 14 : 12)).padding(12)
-                        .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 8))
-                        .accessibilityLabel("Email for your Sidekick gift")
-                        .onSubmit(redeem).onChange(of: email) { program.clearError() }
-                        .disabled(program.isRedeeming)
-                    Text("Saved with your gift code.")
-                        .font(.system(size: formStyle ? 12 : 10)).foregroundStyle(Theme.Ink.body)
-                }
                 if let error = program.errorMessage {
                     Text(error).font(.system(size: formStyle ? 13 : 11)).foregroundStyle(Theme.Ink.amber)
                         .fixedSize(horizontal: false, vertical: true)
@@ -112,7 +99,7 @@ struct InviteRedemptionView: View {
         .frame(maxWidth: .infinity, alignment: isCollapsed ? .trailing : .leading)
         .task { await program.refresh(createIfNeeded: false) }
         .sheet(isPresented: $showingGift) {
-            InviteCelebration(ticketNamespace: giftTicket, lateGift: true, continueTitle: "Continue") {
+            InviteCelebration(ticketNamespace: giftTicket, continueTitle: "Continue") {
                 showingGift = false
             }
             .frame(width: 820, height: 680)
@@ -123,9 +110,8 @@ struct InviteRedemptionView: View {
     private func redeem() {
         guard !program.isBusy, InviteSnapshot.isValidCode(code) else { return }
         let submittedCode = code
-        let submittedEmail = email
         Task {
-            if await program.redeem(submittedCode, email: submittedEmail) {
+            if await program.redeem(submittedCode) {
                 hasExpanded = false
                 if InviteLateUse.matches(submittedCode) { showingGift = true }
             }
