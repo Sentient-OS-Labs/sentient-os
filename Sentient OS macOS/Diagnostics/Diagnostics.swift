@@ -219,6 +219,7 @@ nonisolated enum Diagnostics {
         switch error {
         case CodexRuntime.Failure.busy, OpenAIComputerUse.RuntimeError.helperRunning,
              OpenAIComputerUse.RuntimeError.permissionRequired, OpenAIComputerUse.RuntimeError.restartRequired,
+             OpenAIComputerUse.RuntimeError.cliUnavailable,
              WritingStyle.Failure.noVault, WritingStyle.Failure.busy, WritingStyle.Failure.permissions, WritingStyle.Failure.changed,
              DirectMCPError.authorizationDenied, DirectMCPError.connectionChanged, DirectMCPError.reconnectRequired,
              DirectMCPError.accountSetupRequired, DirectMCPError.duplicateLabel, DirectMCPError.busy: return true
@@ -266,6 +267,11 @@ nonisolated enum Diagnostics {
                        counts: [Count: Int] = [:], flags: [Flag: Bool] = [:],
                        terminal: Bool = false, cooldown: TimeInterval = 900) {
         if let error, isCancellation(error) { return }
+        if let error, isExpected(error) {
+            CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(error).merging(
+                ["phase": phase.rawValue, "reason": reason.description]) { _, value in value })
+            return
+        }
         if terminal {
             if let error, current?.wasReported(error) == true { return }
             if error == nil, current?.hasFailure == true { return }

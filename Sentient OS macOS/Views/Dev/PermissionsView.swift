@@ -170,10 +170,12 @@ struct PermissionsView: View {
              description: "Sentient's 3am wake needs a tiny root helper to hold the Mac awake (lid shut) while it processes. Approve it under Login Items in System Settings. macOS may ask you to authenticate.",
              receipt: daemonStatus) {
             Button("Install / register daemon") {
-                let st = WakeHelperClient.shared.register()
-                daemonStatus = "status: \(st.rawValue) (\(daemonStatusName(st)))"
-                if st == .requiresApproval { WakeHelperClient.shared.openLoginItemsSettings() }
-                refreshAll()
+                Task {
+                    let st = await WakeHelperClient.shared.register()
+                    daemonStatus = "status: \(st.rawValue) (\(daemonStatusName(st)))"
+                    if st == .requiresApproval { WakeHelperClient.shared.openLoginItemsSettings() }
+                    refreshAll()
+                }
             }
             .buttonStyle(.bordered).tint(Theme.accent)
             Button("Open Login Items") { WakeHelperClient.shared.openLoginItemsSettings() }

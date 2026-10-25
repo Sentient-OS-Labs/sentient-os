@@ -171,7 +171,7 @@ enum DiagnosticExport {
                 build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
                 binaryID: BuildIdentity.identifier,
                 buildConfiguration: configuration, lastExplicitResetAt: defaults.object(forKey: "diagnostics.lastExplicitResetAt") as? Date,
-                launchAtLogin: LoginItem.isEnabled,
+                launchAtLogin: await LoginItem.refresh(),
                 onboardingComplete: defaults.bool(forKey: AppState.onboardingKey),
                 analysisRunning: PipelineActivity.shared.isRunning,
                 computerTaskRunning: appState.commandCoordinator.run.isRunning,

@@ -59,11 +59,12 @@ struct OnboardingPermissionsView: View {
                                          note: loginOn ? "on" : (loginNeedsApproval ? "approve in system settings" : "off"),
                                          tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
                                          fixTitle: loginNeedsApproval ? "Approve…" : "Turn On") {
-                            LoginItem.enableOrRequestApproval()
-                            refresh()
-                            // macOS wants the switch flipped by hand → escort the user to it.
-                            if LoginItem.needsApproval {
-                                PermissionGuide.shared.guide(.loginItems, dragging: nil)
+                            Task {
+                                await LoginItem.enableOrRequestApproval()
+                                refresh()
+                                if LoginItem.needsApproval {
+                                    PermissionGuide.shared.guide(.loginItems, dragging: nil)
+                                }
                             }
                         })
                         gated(fdaUnlocked,
@@ -115,9 +116,11 @@ struct OnboardingPermissionsView: View {
 
     private func refresh() {
         fdaGranted = Permissions.hasFullDiskAccess()
-        loginOn = LoginItem.isEnabled
-        loginNeedsApproval = LoginItem.needsApproval
-        Task { await wakeSetup.refresh() }
+        Task {
+            loginOn = await LoginItem.refresh()
+            loginNeedsApproval = LoginItem.needsApproval
+            await wakeSetup.refresh()
+        }
     }
 
 }

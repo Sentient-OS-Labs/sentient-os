@@ -120,7 +120,7 @@ enum HealthCaution {
         // so nothing this ladder checks is worth interrupting that home for.
         guard !CodexAuth.knowledgeBaseOnly else { return nil }
 
-        // ① Essential permissions (cheap sync probes: file reads + SMAppService status).
+        // ① Essential permissions (file probes plus bounded asynchronous service checks).
         let fda = Permissions.hasFullDiskAccess()
         var missing: [EssentialPermission] = []
         if !fda { missing.append(.fullDiskAccess) }
@@ -130,7 +130,7 @@ enum HealthCaution {
         if await !WakeHelperClient.shared.isReachable() {
             missing.append(.overnightWake)
         }
-        if !LoginItem.isEnabled { missing.append(.launchAtLogin) }
+        if await !LoginItem.refresh() { missing.append(.launchAtLogin) }
         if !missing.isEmpty, !dismissed.contains("permissions") { return .permissions(missing) }
 
         // ② The frontier engine — gone, signed out, or (codex) out of date. Engine-aware: the

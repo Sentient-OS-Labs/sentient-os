@@ -72,7 +72,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                 updater.checkForUpdatesInBackground()
             }
         } catch {
-            Diagnostics.report(.updateFailed, phase: .start, error: error)
+            if !Self.isExpectedUpdateOutcome(error) { Diagnostics.report(.updateFailed, phase: .start, error: error) }
             Log("Sparkle: updater failed to start — \(ErrorLabel(error))")
         }
     }
@@ -110,9 +110,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                  didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
                  error: Error?) {
         if let error {
-            let ns = error as NSError
-            // Sparkle documents these as ordinary cycle completion, not failed updates.
-            if ns.domain != SUSparkleErrorDomain || ![Int(SUError.noUpdateError.rawValue), Int(SUError.installationCanceledError.rawValue)].contains(ns.code) {
+            if !Self.isExpectedUpdateOutcome(error) {
                 Diagnostics.report(.updateFailed, phase: .complete, error: error)
             }
             Log("Sparkle: update cycle finished with error — \(ErrorLabel(error))")
@@ -131,6 +129,13 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
             networkRetries = 0
             retryTask?.cancel(); retryTask = nil
         }
+    }
+
+    /// Install-location guidance remains visible in Sparkle's UI; it is not an updater defect.
+    nonisolated static func isExpectedUpdateOutcome(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == SUSparkleErrorDomain && [SUError.noUpdateError, .installationCanceledError,
+            .runningFromDiskImageError, .runningTranslocated].contains { Int($0.rawValue) == ns.code }
     }
 
     /// Retry transport interruptions only. Signature, archive and installation failures

@@ -23,7 +23,10 @@ nonisolated enum Fixture {
 nonisolated func Log(_ text: String) {}
 enum Analytics { static func signal(_ text: String, parameters: [String: String] = [:]) {} }
 enum CodexAuth { static var knowledgeBaseOnly = false }
-enum LoginItem { static var isEnabled = true }
+enum LoginItem {
+    static var isEnabled = true
+    static func refresh() async -> Bool { isEnabled }
+}
 enum AppState { static let onboardingKey = "fixture.onboarded" }
 enum WakeHelperConfig { static let maxAwakeSeconds = 7200 }
 enum CodexTrigger { case onboarding, analyzeNow, overnight }

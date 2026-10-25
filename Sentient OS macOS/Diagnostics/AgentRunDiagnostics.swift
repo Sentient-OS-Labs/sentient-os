@@ -239,7 +239,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         if let code { details["error_code"] = String(code) }
         details["duration_ms"] = call.began.map { String(max(0, Int(Date().timeIntervalSince($0) * 1000))) } ?? "unknown"
         breadcrumb("agent.tool_finished", details)
-        // Preserve a failure even if the user stops later or no unrelated error follows it.
+        // Preserve local evidence even if the user stops later or the agent recovers.
         if failed {
             emit("agent.tool_failed", tags: ["tool": call.tool, "tool_family": call.family, "reason": reason.rawValue, "evidence": "tool_result"], extra: details, informational: true, affectsOperation: false)
         }
@@ -295,9 +295,15 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         }
         guard (!cancelled && (error != nil || modelStatus == "could_not" || modelStatus == "unconfirmed")) || toolFailure else { return }
         let recovered = error == nil && modelStatus != "could_not" && modelStatus != "unconfirmed"
+        let informational = recovered || cancelled || expected
+        if !informational, !ConnectorClassificationDiagnostics.ownsFailures, let error {
+            // This run owns the terminal report; outer boundaries must not report the same throw.
+            guard operation?.wasReported(error) != true else { return }
+            operation?.markReported(error)
+        }
         emit("agent.run_diagnostic", tags: ["outcome": outcome, "reason": error.map { CodexFailureReason.classify($0).rawValue } ?? (recovered ? details["last_tool_reason"] ?? reason : reason),
              "evidence": error != nil ? "runtime_error" : (recovered ? "tool_result" : "model_status")], extra: details,
-             informational: recovered || cancelled || (expected && !toolFailure),
+             informational: informational,
              affectsOperation: !cancelled && !expected && (error != nil || modelStatus == "could_not" || modelStatus == "unconfirmed"))
     }
 
@@ -311,12 +317,16 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         guard !ConnectorClassificationDiagnostics.ownsFailures else { return }
         DiagnosticHistory.recordAgentFailure(name, fields: correlation.merging(extra) { _, new in new }
             .merging(tags) { _, new in new }.merging(["backend": backend, "feature": feature]) { _, new in new })
+        // Recovered, stopped and intermediate tool outcomes already have local history and breadcrumbs.
+        guard !informational else { return }
         Diagnostics.$current.withValue(operation) {
-            CrashReporting.captureEvent(name, level: informational ? .info : .warning,
+            CrashReporting.captureEvent(name, level: .warning,
                 tags: tags.merging(["backend": backend, "trigger": trigger, "feature": feature, "diagnostic_schema": "2"]) { _, new in new },
                 extra: correlation.merging(extra) { _, new in new },
-                fingerprint: [name, tags["tool_family"] ?? "run", tags["tool"] ?? "none", tags["outcome"] ?? "failed", tags["reason"] ?? "unknown"],
-                cooldown: 0, includeInformational: informational, affectsOperation: affectsOperation)
+                fingerprint: [name, tags["tool_family"] ?? "run", tags["tool"] ?? "none", tags["outcome"] ?? "failed", tags["reason"] ?? "unknown",
+                              extra["error_type"] ?? "none", extra["error_domain"] ?? "none",
+                              extra["error_case"] ?? "none", extra["error_code"] ?? "none"],
+                affectsOperation: affectsOperation)
         }
     }
 }

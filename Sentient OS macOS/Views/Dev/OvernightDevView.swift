@@ -100,7 +100,11 @@ struct OvernightDevView: View {
             Toggle("Start Sentient OS at login", isOn: $loginOn)
                 .toggleStyle(.switch)
                 .onChange(of: loginOn) { _, on in
-                    if on { LoginItem.enable() } else { Task { await LoginItem.disable() } }
+                    guard on != LoginItem.isEnabled else { return }
+                    Task {
+                        if on { await LoginItem.enable() } else { await LoginItem.disable() }
+                        loginOn = LoginItem.isEnabled
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { refresh() }
                 }
         }
@@ -148,8 +152,11 @@ struct OvernightDevView: View {
     }
 
     private func refresh() {
-        helperStatus = WakeHelperClient.shared.status
-        loginOn = LoginItem.isEnabled
+        Task {
+            _ = await WakeHelperClient.shared.healthProbe()
+            helperStatus = WakeHelperClient.shared.status
+            loginOn = await LoginItem.refresh()
+        }
     }
 
     /// Bridges the stored minutes-since-midnight to/from the DatePicker's Date.

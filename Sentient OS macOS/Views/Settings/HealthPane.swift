@@ -221,10 +221,12 @@ struct HealthPane: View {
                            note: loginOn ? "on" : (LoginItem.needsApproval ? "approve in system settings" : "off"),
                            tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
                            fixTitle: LoginItem.needsApproval ? "Approve…" : "Turn On") {
-                    LoginItem.enableOrRequestApproval()
-                    loginOn = LoginItem.isEnabled
-                    if LoginItem.needsApproval {
-                        PermissionGuide.shared.guide(.loginItems, dragging: nil)
+                    Task {
+                        await LoginItem.enableOrRequestApproval()
+                        loginOn = LoginItem.isEnabled
+                        if LoginItem.needsApproval {
+                            PermissionGuide.shared.guide(.loginItems, dragging: nil)
+                        }
                     }
                 }
                 .rise(2, revealed: revealed)
@@ -514,7 +516,7 @@ struct HealthPane: View {
     private func refresh() async {
         computerGate.refresh()
         fdaGranted = Permissions.hasFullDiskAccess()
-        loginOn = LoginItem.isEnabled
+        loginOn = await LoginItem.refresh()
         await wakeSetup.refresh()
         refreshMicSpeech()
         // Match the effective permission used by capture and the setup gates.
