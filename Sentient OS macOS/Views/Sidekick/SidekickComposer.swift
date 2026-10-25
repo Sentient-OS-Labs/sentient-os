@@ -136,6 +136,7 @@ struct SidekickComposer: View {
         .onChange(of: coordinator.run.isClearingChat) { _, clearing in
             if clearing { focused = false; presentation.composerFocused = false; submissionError = nil }
         }
+        .onChange(of: conversation.generation) { _, _ in submissionError = nil }
         .animation(SidekickStyle.motion(reduced), value: recovery.content?.id)
         .animation(.easeInOut(duration: 0.35), value: focused)
         .defaultFocus($focused, isPresented && !answering && !notchHasKeyboard)

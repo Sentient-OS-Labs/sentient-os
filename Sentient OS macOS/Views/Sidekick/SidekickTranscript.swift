@@ -71,6 +71,9 @@ struct SidekickTranscript: View {
     }
 
     private var transcript: some View {
+        // Capture rows and their generation together. A retained old row must not borrow
+        // the conversation's newer identity while Clear chat is replacing the viewport.
+        let generation = presentation.generation
         let display = SidekickTranscriptLayout.rows(presentation.rows)
         return ScrollViewReader { proxy in
             ScrollView {
@@ -109,7 +112,8 @@ struct SidekickTranscript: View {
                                 }.frame(maxWidth: .infinity).padding(.vertical, 7)
                             }
                             SidekickMessageRow(record: row.record, showsWork: row.showsWork,
-                                conversation: conversation, coordinator: coordinator, presentation: presentation, active: active)
+                                generation: generation, conversation: conversation, coordinator: coordinator,
+                                presentation: presentation, active: active)
                         }
                         .id(row.id)
                         .transition(SidekickStyle.entrance(reduced))
@@ -249,6 +253,7 @@ struct SidekickTranscript: View {
 private struct SidekickMessageRow: View {
     let record: SidekickConversationStore.Record
     let showsWork: Bool
+    let generation: UUID?
     let conversation: SidekickConversation
     let coordinator: CommandCoordinator
     let presentation: SidekickPresentation
@@ -261,6 +266,11 @@ private struct SidekickMessageRow: View {
     private var user: Bool { event.kind == .userMessage || event.kind == .answer }
     private var incoming: Bool { event.kind == .assistantMessage || event.kind == .question }
     private var running: Bool { coordinator.run.isRunning && coordinator.run.runID == event.taskID }
+    private struct ReadReceiptKey: Equatable {
+        let generation: UUID?
+        let messageID: String
+        let visible: Bool
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -280,10 +290,10 @@ private struct SidekickMessageRow: View {
         }
         .foregroundStyle(SidekickStyle.ink)
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
-        .task(id: active && visible) {
-            guard incoming, active, visible, let generation = conversation.generation else { return }
+        .task(id: ReadReceiptKey(generation: generation, messageID: event.id, visible: active && visible)) {
+            guard incoming, active, visible, let generation, conversation.generation == generation else { return }
             do { try await Task.sleep(for: .milliseconds(650)) } catch { return }
-            guard active, visible else { return }
+            guard !Task.isCancelled, active, visible, conversation.generation == generation else { return }
             conversation.markRead(messageIDs: [event.id], generation: generation)
         }
         .task(id: copied) {

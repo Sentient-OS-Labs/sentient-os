@@ -329,6 +329,56 @@ import SQLite3
         #endif
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
+    static func stoppedRunReadReceipts(root: URL, defaults: UserDefaults) async throws {
+        for fullReset in [false, true] {
+            let conversation = SidekickConversation(url: root.appendingPathComponent("stopped-receipts-\(fullReset).sqlite"), defaults: defaults)
+            let model = CommandRunModel(conversation: conversation)
+            let store = conversation.store!
+            model.adoptExternal(caption: "A task stopped midway", onStopRequest: {
+                model.completeExternal(.stopped, line: "Stopped", runID: model.runID)
+            })
+            let oldGeneration = try store.generation
+            let visibleMessage = try model.interaction!.conversationRun!.message("Synthetic in-progress update", kind: .update, priority: .normal)
+            conversation.refresh()
+            try check(conversation.replyReference == nil, "stopped-receipt fixture never selects text or starts a reply")
+            model.stop()
+            let stopped = await model.stopAndDrain()
+            try check(stopped, "stopped-receipt task drains before reset")
+            if fullReset {
+                // FactoryReset uses this production history reset under maintenance. Its
+                // unrelated destructive services are covered by the reset orchestration suite.
+                try check(conversation.beginMaintenance(), "full-reset receipt fixture owns maintenance")
+                try conversation.reset(defaults: defaults)
+                await conversation.drainBackgroundWork()
+                conversation.endMaintenance()
+            } else { try await model.clearChat(defaults: defaults) }
+            let freshGeneration = try store.generation
+            try check(oldGeneration != freshGeneration && conversation.replyReference == nil,
+                      "reset replaces history without creating an explicit reply")
+            // Reproduce an old row's delayed visibility callback borrowing the refreshed
+            // conversation generation. This is read-receipt work, never a user submission.
+            conversation.markRead(messageIDs: [visibleMessage], generation: freshGeneration)
+            try check(conversation.storageError == nil,
+                      "stopped run then reset must not show a reply warning for a late read receipt")
+            conversation.markRead(messageIDs: [visibleMessage], generation: oldGeneration)
+            let freshMessage = try store.append(Event(taskID: UUID(), kind: .assistantMessage, text: "New conversation answer"))
+            conversation.refresh()
+            conversation.markRead(messageIDs: [freshMessage.event.id], generation: oldGeneration)
+            try check(try store.unreadCount == 1, "old-generation receipts cannot mark fresh messages read")
+            conversation.markRead(messageIDs: [freshMessage.event.id], generation: freshGeneration)
+            try check(try store.unreadCount == 0 && conversation.storageError == nil, "valid new-generation receipts still work")
+            do {
+                _ = try store.append(Event(taskID: UUID(), kind: .userMessage, text: "Explicit stale reply",
+                                           reply: .init(messageID: visibleMessage)))
+                fatalError("explicit stale reply was accepted")
+            } catch Store.Failure.invalidReply { checks += 1 }
+            store.close()
+            conversation.markRead(messageIDs: [freshMessage.event.id], generation: freshGeneration)
+            try check(conversation.storageError != nil, "actual storage failure is not swallowed as a stale receipt")
+            conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+        }
+    }
+
     static func recoveryPresentation(root: URL, defaults: UserDefaults) async throws {
         // Existing failure-notice timing keeps its original 8-second visible / 7-second
         // return window. Clarifications deliberately persist when their notch hides.
@@ -540,6 +590,7 @@ import SQLite3
         try await networkRecovery(root: root, defaults: defaults)
         try await recoveryPresentation(root: root, defaults: defaults)
         try await clearChat(root: root, defaults: defaults)
+        try await stoppedRunReadReceipts(root: root, defaults: defaults)
         defer { defaults.removePersistentDomain(forName: suite) }
         let conversation = SidekickConversation(url: root.appendingPathComponent("main.sqlite"), defaults: defaults)
         defer { conversation.beginMaintenance() }

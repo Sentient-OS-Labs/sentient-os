@@ -172,6 +172,11 @@ Sidekick instructions stay. A live task changes the confirmation action to **Sto
 Cancel preserves the chat and its draft. Success clears stored messages, activity and summaries,
 resets search/replies/reading state, and returns to proactive suggestions. The native transcript
 viewport takes the new conversation generation so an old scroll offset cannot obscure the empty state.
+Message rows capture the generation of their rendered transcript snapshot. Delayed visibility/read
+receipts cancel when that generation changes; missing receipt targets are skipped without showing a
+reply warning in the composer. Real storage failures and invalid explicit replies remain errors.
+The composer also clears submission errors on generation change, even if a fast Clear operation's
+busy-state transition was coalesced by SwiftUI.
 There is no separate Start fresh action or duplicate history-delete control in Settings.
 
 The retained transcript is explicitly disabled and accessibility-ignored under the overview.
