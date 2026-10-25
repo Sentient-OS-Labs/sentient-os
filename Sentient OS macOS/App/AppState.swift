@@ -200,6 +200,18 @@ final class AppState {
         }
     }
 
+    /// Complete the live UI handoff only after FactoryReset has successfully cleared data.
+    /// App-owned presentation outlives RootView, so replacing Home with onboarding alone
+    /// cannot discard an old conversation/search/card surface.
+    func didResetPersonalData() {
+        let conversation = commandCoordinator.run.conversation
+        conversation.consumeDestination()
+        sidekickPresentation.didResetApp(generation: conversation.generation)
+        hasCompletedPersonalSetup = false
+        hasCompletedFirstSidekickTask = false
+        hasCompletedOnboarding = false
+    }
+
     /// Save analysis intent before the milestone, so a crash between writes is recoverable.
     @discardableResult
     func finishPersonalSetup(_ timing: ProcessingCoordinator.Timing) -> Bool {

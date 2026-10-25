@@ -110,9 +110,7 @@ enum FactoryReset {
         }
         appState?.scheduler.needsSchedulerSetup = false
         appState?.scheduler.reevaluate()                // prod flag is gone → stops the loop + cancels the armed wake
-        appState?.hasCompletedPersonalSetup = false
-        appState?.hasCompletedFirstSidekickTask = false
-        appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
+        appState?.didResetPersonalData()               // rewind live milestones and retained Home presentation
         ComputerUseUpgrade.shared.reset()              // clear pending migration after the onboarding rewind
         Log("FactoryReset: cleanup attempts finished; individual failures are reported · rewound to onboarding")
         return true

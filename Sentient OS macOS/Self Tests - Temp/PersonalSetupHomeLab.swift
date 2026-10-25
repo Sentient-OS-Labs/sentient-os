@@ -53,12 +53,13 @@ import SwiftUI
         presentation.surface = .suggestions
         conversation.draft = ""
         MainNavigation.shared.reset()
-        let host = NSHostingView(rootView: AnyView(HomeView(deck: .real, onFinishSetup: { finishRequests += 1 })
+        func home() -> AnyView { AnyView(HomeView(deck: .real, onFinishSetup: { finishRequests += 1 })
             .environment(app)
             // Native fixture hosts have no SwiftUI App scene to activate this environment
             // when an assistive client attaches. Ask SwiftUI to expose its real semantics.
             .environment(\.accessibilityEnabled, true)
-            .preferredColorScheme(.dark)))
+            .preferredColorScheme(.dark)) }
+        let host = NSHostingView(rootView: home())
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1040, height: 800),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Personal setup Home · isolated fixture"
@@ -232,16 +233,30 @@ import SwiftUI
             && conversation.generation != nil
         try await capture("personal-setup-05-completed-cards")
 
-        // Only this isolated fixture's chat is cleared, after all preservation assertions.
-        // This gives the genuinely empty first-Home screenshot without changing production data.
+        // Reproduce Settings Reset from an already-used conversation in the same process.
+        // Only the fixture's chat is cleared. The production post-reset UI handoff is shared
+        // with FactoryReset; cloud deletion, Keychain cleanup and source grants are not invoked.
+        presentation.visit(conversation: conversation, running: false, pending: false)
+        presentation.surface = .conversation
+        presentation.searchShown = true
+        presentation.clearChatConfirmationShown = true
         conversation.endMaintenance()
         try await app.commandCoordinator.clearChat()
-        presentation.didClearChat(generation: conversation.generation)
-        app.hasCompletedPersonalSetup = false
-        app.hasCompletedFirstSidekickTask = false
-        presentation.cards.entries = []
-        presentation.surface = .suggestions
+        // The mounted transcript may already have observed the new store generation.
+        presentation.resetForGeneration(conversation.generation)
+        app.didResetPersonalData()
+        checks["reset_rewinds_retained_presentation"] = presentation.surface == .suggestions
+            && !presentation.searchShown && !presentation.clearChatConfirmationShown
+            && presentation.cards.entries.isEmpty && !app.hasCompletedPersonalSetup
+            && !app.hasCompletedFirstSidekickTask && !app.hasCompletedOnboarding
+        host.rootView = AnyView(Color.black)
+        try await settle(150)
+        app.hasCompletedOnboarding = true // the model step admits Home; normal startup stays off in this fixture
+        host.rootView = home()
         try await settle(450)
+        checks["reset_then_home_shows_all_suggestions"] = HomeSidekickSuggestions.suggestions.allSatisfy {
+            find("sidekick.suggestion." + $0.id) != nil
+        }
         checks["first_home_has_empty_history"] = conversation.messages.isEmpty && conversation.draft.isEmpty
             && find("sidekick.expandHistory") == nil && find("sidekick.readyInvitation") != nil
             && find("personalSetup.finish") != nil && find("sidekick.composer") != nil

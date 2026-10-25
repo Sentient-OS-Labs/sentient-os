@@ -309,14 +309,27 @@ final class SidekickPresentation {
     }
 
     func didClearChat(generation: UUID?) {
-        resetForGeneration(generation)
+        clearHistoryPresentation(generation: generation)
         searchShown = false; clearChatConfirmationShown = false
         atLatest = true; scrollIsAutomatic = false; composerFocused = false
         surface = .suggestions
     }
 
+    /// Full Reset starts a new Home visit in this same app process. Ordinary window reopen
+    /// still preserves the reader's surface; only the explicit reset discards that intent.
+    func didResetApp(generation: UUID?) {
+        didClearChat(generation: generation)
+        cards.clear()
+        visited = false; lastVisitedAttention = 0; lastBriefing = nil; lastVisitDay = nil
+        sendPulse = 0
+    }
+
     func resetForGeneration(_ next: UUID?) {
         guard generation != next else { return }
+        clearHistoryPresentation(generation: next)
+    }
+
+    private func clearHistoryPresentation(generation next: UUID?) {
         loadToken &+= 1; searchToken &+= 1; loading = false; isScrolling = false
         rows = []; taskStates = [:]; expandedWorkTasks.removeAll()
         activeWorkTaskID = nil; automaticallyExpandedWorkTaskID = nil

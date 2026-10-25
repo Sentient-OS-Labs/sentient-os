@@ -115,6 +115,7 @@ enum SourceSelection {
     let processing = ProcessingCoordinator.shared
     let scheduler = OvernightScheduler()
     let commandCoordinator = Coordinator()
+    let sidekickPresentation = SidekickPresentation()
     @MainActor final class Coordinator { let run = Run() }
     @MainActor final class Run {
         var isRunning = false
@@ -131,10 +132,17 @@ enum SourceSelection {
 @MainActor final class SidekickConversation {
     static let shared = SidekickConversation()
     var draft = "", replyReference: String? = nil, generation: UUID? = UUID()
+    var navigationRequest: UUID?
+    func consumeDestination() { navigationRequest = nil }
     func beginMaintenance() -> Bool { true }
     func endMaintenance() {}
     func reset(defaults: UserDefaults) throws {}
     func drainBackgroundWork() async {}
+}
+@MainActor final class SidekickPresentation {
+    var resets = 0
+    var generation: UUID?
+    func didResetApp(generation: UUID?) { resets += 1; self.generation = generation }
 }
 @MainActor final class CodexSetup {
     static let shared = CodexSetup()
@@ -216,7 +224,7 @@ fixture = fixture.replace('// FOLDER_MIGRATION', member(selection, 'static func 
 fixture = fixture.replace('// CHOOSE', member(processing, 'func choose('))
 fixture = fixture.replace('// SCHEDULER_POLICY', '\n'.join(member(scheduler, s) for s in ('var isEnabled:', 'func enableAfterSetup(')))
 fixture = fixture.replace('// APP_PROPERTIES', '\n'.join(member(app, s) for s in ('var hasCompletedPersonalSetup:', 'var hasCompletedOnboarding:')))
-fixture = fixture.replace('// APP_POLICY', '\n'.join(member(app, s) for s in ('private func startAfterHome(', 'func finishPersonalSetup(')))
+fixture = fixture.replace('// APP_POLICY', '\n'.join(member(app, s) for s in ('private func startAfterHome(', 'func finishPersonalSetup(', 'func didResetPersonalData(')))
 
 checks = r'''
 extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value } }
@@ -373,13 +381,19 @@ extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value 
         d.set(false, forKey: "dbg.run.desktop")
         d.set(true, forKey: "mcp.mirror.enabled")
         DirectMCPConnections.shared.fails = true
+        app.commandCoordinator.run.conversation.navigationRequest = UUID()
         check(!(await FactoryReset.run(appState: app, defaults: d)) && app.hasCompletedPersonalSetup,
               "failed destructive reset does not claim setup was cleared")
+        check(app.sidekickPresentation.resets == 0, "failed reset does not rewind live presentation")
         DirectMCPConnections.shared.fails = false
         check(await FactoryReset.run(appState: app, defaults: d), "actual reset orchestration succeeds with inert services")
         check(!PersonalSetupProgress.isComplete(defaults: d) && !app.hasCompletedPersonalSetup
             && !app.hasCompletedOnboarding && ProcessingPlan.read(d).status == .idle && !app.scheduler.isEnabled,
               "reset clears setup, Home, completion and scheduling intent")
+        check(app.sidekickPresentation.resets == 1
+            && app.sidekickPresentation.generation == app.commandCoordinator.run.conversation.generation
+            && app.commandCoordinator.run.conversation.navigationRequest == nil,
+              "successful reset retires retained Home presentation and obsolete navigation in the live app")
         check(d.bool(forKey: "dbg.run.downloads") && !d.bool(forKey: "dbg.run.desktop")
             && d.bool(forKey: "mcp.mirror.enabled"), "reset preserves explicit source and sharing choices")
         check(d.object(forKey: SourceSelection.pendingProtectedSourceKey) == nil,

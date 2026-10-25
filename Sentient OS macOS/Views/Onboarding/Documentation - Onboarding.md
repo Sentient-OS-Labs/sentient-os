@@ -148,6 +148,10 @@ Missing connections/addresses remain pending. There is no forced manual email fo
 Old completed users retain access, source choices, knowledge and schedule intent. Users already past
 the old model step enter Home with setup still optional. Interrupted analysis retains its persisted
 plan. Factory Reset clears the new milestones and restart intent while retaining explicit sources.
+After successful cleanup, `AppState.didResetPersonalData` also clears the app-owned Home presentation:
+conversation/search controls, old cards, and remembered visit state. Completing onboarding in that
+same process returns to the Sidekick invitation and four suggestions. Ordinary window reopen still
+preserves the user's chosen conversation view.
 
 ## Privacy explanations at setup
 
