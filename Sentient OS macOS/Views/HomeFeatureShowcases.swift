@@ -15,7 +15,7 @@ struct HomeProactiveShowcase: View {
             switch self {
             case .followup:
                 Briefing(id: "setup-example-followup", kind: .promise,
-                    kicker: "FOLLOW-UP · DRAFT READY", title: "You promised Alex a rollout plan.",
+                    kicker: "FOLLOW-UP · DRAFT READY", title: "You ghosted Alex.",
                     body: "Your pilot notes are now a concise follow-up, with the SSO question included.",
                     offer: "Read the draft")
             case .renewal:
