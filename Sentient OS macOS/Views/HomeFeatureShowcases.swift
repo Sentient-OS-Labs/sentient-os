@@ -207,93 +207,119 @@ struct HomeDoubleTapShowcase: View {
 struct HomeKnowledgeShowcase: View {
     let reducedMotion: Bool
     let compact: Bool
-    @State private var selected: Note = .project
+    let isActive: Bool
+    let availableHeight: CGFloat
+    let onNavigate: () -> Void
+    let onClose: () -> Void
+    @StateObject private var sky = HomeKnowledgeShowcase.exampleSky()
+    @State private var selectedURL: URL?
+    @State private var viewport: CGSize = .zero
 
     private enum Note: String, CaseIterable, Identifiable {
         case project, person, commitment
         var id: String { rawValue }
         var title: String {
-            switch self {
-            case .project: "Northstar pilot"
-            case .person: "Alex Chen"
-            case .commitment: "Friday rollout"
-            }
+            switch self { case .project: "Northstar pilot"; case .person: "Alex Chen"; case .commitment: "Friday rollout" }
         }
-        var kind: String {
-            switch self { case .project: "PROJECT"; case .person: "PERSON"; case .commitment: "COMMITMENT" }
-        }
-        var detail: String {
-            switch self {
-            case .project: "Northstar wants to expand from 20 to 80 seats. SSO is the last blocker before the wider rollout."
-            case .person: "Alex owns the pilot and coordinates Northstar’s security review. He wants a clear rollout plan for the wider team."
-            case .commitment: "Send Alex the SSO checklist before Thursday’s security review. The wider team is scheduled to start Friday."
-            }
-        }
-        var point: UnitPoint {
-            switch self {
-            case .project: UnitPoint(x: 0.24, y: 0.5)
-            case .person: UnitPoint(x: 0.74, y: 0.22)
-            case .commitment: UnitPoint(x: 0.74, y: 0.79)
-            }
+        var shortTitle: String {
+            switch self { case .project: "Northstar"; case .person: "Alex"; case .commitment: "Friday" }
         }
     }
+
+    private static func exampleSky() -> NightSkyModel {
+        let graph = SkyGraph.onboardingExample()
+        return .preview(graph: graph, hovering: graph.nodes.firstIndex { $0.title == Note.project.title }, minimumZoom: 0.1)
+    }
+    private var selected: SkyNode? { sky.graph?.nodes.first { $0.url == selectedURL } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            GeometryReader { geometry in
-                Canvas { context, size in
-                    for note in [Note.person, .commitment] {
-                        var path = Path()
-                        path.move(to: point(.project, in: size))
-                        path.addLine(to: point(note, in: size))
-                        context.stroke(path, with: .color(Theme.knowledgeAccent.opacity(selected == note || selected == .project ? 0.48 : 0.16)), lineWidth: 1)
-                    }
+        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+            if let selected, let graph = sky.graph {
+                ShowcaseBackButton(title: "Back to the constellation", identifier: "personalSetup.knowledge.back") {
+                    sky.highlight(selected.url)
+                    navigate(to: nil)
                 }
-                .accessibilityHidden(true)
-                ForEach(Note.allCases) { note in
-                    Button {
-                        withAnimation(reducedMotion ? nil : .easeInOut(duration: 0.22)) { selected = note }
-                    } label: {
-                        VStack(spacing: 8) {
-                            Circle().fill(selected == note ? .white : Theme.knowledgeAccent.opacity(0.8))
-                                .frame(width: 8, height: 8)
-                                .padding(7)
-                                .background(Circle().fill(Color(white: 0.045)))
-                                .overlay(Circle().strokeBorder(Theme.knowledgeAccent.opacity(selected == note ? 0.8 : 0.18)))
-                            Text(note.title).font(.system(size: 13, design: .serif))
-                                .foregroundStyle(selected == note ? SidekickStyle.ink : SidekickStyle.secondary)
+                VStack(alignment: .leading, spacing: compact ? 12 : 16) {
+                    MonoCaps(selected.domain >= 0 ? graph.domains[selected.domain].uppercased() : "OVERVIEW",
+                             size: 8.5, tracking: 1.8, color: SkyRenderer.domainColor(selected.domain))
+                    Text(selected.title).font(.system(size: compact ? 22 : 25, design: .serif))
+                        .foregroundStyle(SidekickStyle.ink)
+                    Text(selected.preview).font(.system(size: 13.5)).lineSpacing(5)
+                        .foregroundStyle(SidekickStyle.secondary).fixedSize(horizontal: false, vertical: true)
+                    if let index = graph.nodes.firstIndex(where: { $0.url == selected.url }) {
+                        let related = graph.adjacency[index].filter { !graph.nodes[$0].isRoot }.sorted {
+                            let leftCrosses = graph.nodes[$0].domain != selected.domain
+                            let rightCrosses = graph.nodes[$1].domain != selected.domain
+                            return leftCrosses != rightCrosses ? leftCrosses : $0 < $1
+                        }.prefix(3)
+                        if !related.isEmpty {
+                            Rectangle().fill(.white.opacity(0.07)).frame(height: 1)
+                            MonoCaps("CONNECTED NOTES", size: 8, tracking: 1.4, color: Theme.faint)
+                            ForEach(Array(related), id: \.self) { index in
+                                Button { navigate(to: graph.nodes[index].url) } label: {
+                                    Label(graph.nodes[index].title, systemImage: "link")
+                                        .font(.system(size: 12)).foregroundStyle(Theme.knowledgeLink)
+                                        .padding(.vertical, 3)
+                                }.buttonStyle(.plain)
+                            }
                         }
-                        .frame(width: min(142, geometry.size.width * 0.47), height: 49)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .position(x: note.point.x * geometry.size.width, y: note.point.y * geometry.size.height)
-                    .accessibilityIdentifier("personalSetup.knowledge." + note.rawValue)
-                    .accessibilityAddTraits(selected == note ? .isSelected : [])
                 }
-            }
-            .frame(height: compact ? 96 : 160)
-            VStack(alignment: .leading, spacing: compact ? 8 : 12) {
-                if !compact { MonoCaps(selected.kind, size: 8.5, tracking: 1.8, color: Theme.knowledgeAccent) }
-                Text(selected.title).font(.system(size: compact ? 20 : 24, design: .serif)).foregroundStyle(SidekickStyle.ink)
-                Text(selected.detail).font(.system(size: compact ? 13 : 13.5)).lineSpacing(compact ? 3 : 5)
-                    .foregroundStyle(SidekickStyle.secondary).fixedSize(horizontal: false, vertical: true)
-                if !compact {
-                    ShowcaseSources(first: "Alex’s email", firstSymbol: "envelope", second: "Pilot notes", secondSymbol: "doc.text")
+                .showcasePaper(accent: SkyRenderer.domainColor(selected.domain), padding: compact ? 14 : 18)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("personalSetup.knowledge.note." +
+                    (Note.allCases.first { $0.title == selected.title }?.rawValue ?? "selected"))
+            } else {
+                // Exactly the production constellation view, model, simulation, renderer and
+                // event catcher. No KnowledgeVault is loaded and every URL stays in this sample.
+                NightSkyView(vault: nil, model: sky,
+                             animationsEnabled: isActive && !reducedMotion, showsHUD: false,
+                             takesKeyboardFocus: false, onOpen: { navigate(to: $0) }, onExit: onClose)
+                    .frame(height: min(compact ? 188 : 320, max(96, availableHeight - (compact ? 38 : 66))))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.06)))
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                        guard size.width > 0, size.height > 0, viewport != size else { return }
+                        viewport = size
+                        sky.fitToContent(in: size)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Example knowledge constellation")
+                    .accessibilityIdentifier("personalSetup.knowledge.sky")
+                if !compact, let graph = sky.graph {
+                    HStack {
+                        MonoCaps("\(graph.nodes.count) NOTES · \(graph.domains.count) CONSTELLATIONS",
+                                 size: 8, tracking: 1.3, color: Theme.faint)
+                        Spacer()
+                        Text("Hover, drag, or zoom").font(.system(size: 10.5)).foregroundStyle(SidekickStyle.secondary)
+                    }
                 }
-            }
-            .showcasePaper(accent: Theme.knowledgeAccent, padding: compact ? 12 : 18)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("personalSetup.knowledge.note." + selected.rawValue)
-            if !compact {
-                Text("Connected notes you can explore, edit, and use with your AIs.")
-                    .font(.system(size: 11.5)).foregroundStyle(SidekickStyle.secondary)
+                // These are also a keyboard/VoiceOver route into the same sample notes.
+                HStack(spacing: 7) {
+                    Text("Explore").font(.system(size: 10.5)).foregroundStyle(SidekickStyle.secondary)
+                    ForEach(Note.allCases) { note in
+                        Button {
+                            if let node = sky.graph?.nodes.first(where: { $0.title == note.title }) { navigate(to: node.url) }
+                        } label: {
+                            Text(note.shortTitle).font(.system(size: 11)).foregroundStyle(SidekickStyle.ink)
+                                .padding(.horizontal, 10).padding(.vertical, 7)
+                                .background(.white.opacity(0.05), in: Capsule())
+                        }
+                        .buttonStyle(SidekickPressStyle())
+                        .accessibilityLabel("Explore " + note.title)
+                        .accessibilityIdentifier("personalSetup.knowledge." + note.rawValue)
+                    }
+                }
             }
         }
     }
 
-    private func point(_ note: Note, in size: CGSize) -> CGPoint {
-        CGPoint(x: note.point.x * size.width, y: note.point.y * size.height - 13.5)
+    private func navigate(to url: URL?) {
+        guard url == nil || sky.graph?.nodes.contains(where: { $0.url == url }) == true else { return }
+        withAnimation(reducedMotion ? nil : .easeInOut(duration: 0.2)) {
+            selectedURL = url
+            onNavigate()
+        }
     }
 }
 

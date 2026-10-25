@@ -162,6 +162,13 @@ import SwiftUI
         checks["pending_setup_has_four_rewards"] = HomePersonalFeature.allCases.allSatisfy { find("personalSetup.feature." + $0.rawValue) != nil }
         recordLayout("standard")
         try await capture("personal-setup-01-standard")
+        try await click("personalSetup.feature.knowledge")
+        if let preview = find("personalSetup.preview.knowledge") {
+            checks["knowledge_standard_controls_fit"] = ["project", "person", "commitment"].allSatisfy { key in
+                find("personalSetup.knowledge." + key).map { preview.frame.contains($0.frame) } == true
+            }
+        } else { checks["knowledge_standard_controls_fit"] = false }
+        try await click("personalSetup.preview.close")
         window.setContentSize(CGSize(width: 840, height: 680)); try await settle(450)
         recordLayout("minimum")
         try await capture("personal-setup-02-minimum")
@@ -172,6 +179,11 @@ import SwiftUI
                   let close = find("personalSetup.preview.close"), let composer = find("sidekick.composer") else { throw Failure.accessibility }
             checks[feature.rawValue + "_close_top_left"] = close.frame.midX < preview.frame.midX && close.frame.midY > preview.frame.midY
             checks[feature.rawValue + "_preview_above_composer"] = preview.frame.minY > composer.frame.maxY
+            if feature == .knowledge {
+                checks["knowledge_minimum_controls_fit"] = ["project", "person", "commitment"].allSatisfy { key in
+                    find("personalSetup.knowledge." + key).map { preview.frame.contains($0.frame) } == true
+                }
+            }
             try await capture("personal-setup-example-" + feature.rawValue)
             try await click("personalSetup.preview.close")
             checks[feature.rawValue + "_close_dismisses"] = find("personalSetup.preview." + feature.rawValue) == nil
@@ -202,11 +214,14 @@ import SwiftUI
         try await click("personalSetup.preview.close")
 
         try await click("personalSetup.feature.knowledge")
-        checks["knowledge_starts_with_project"] = find("personalSetup.knowledge.note.project") != nil
+        checks["knowledge_starts_with_constellation"] = find("personalSetup.knowledge.sky") != nil
+            && find("personalSetup.knowledge.note.project") == nil
         if presentationCapture { try await capture("showcase-knowledge-wide") }
         try await click("personalSetup.knowledge.person")
         checks["knowledge_person_node_opens_note"] = find("personalSetup.knowledge.note.person") != nil
         if presentationCapture { try await capture("showcase-knowledge-person") }
+        try await click("personalSetup.knowledge.back")
+        checks["knowledge_back_restores_constellation"] = find("personalSetup.knowledge.sky") != nil
         try await click("personalSetup.knowledge.commitment")
         checks["knowledge_commitment_node_opens_note"] = find("personalSetup.knowledge.note.commitment") != nil
         try await click("personalSetup.preview.close")

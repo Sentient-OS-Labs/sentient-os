@@ -46,6 +46,15 @@ final class NightSkyModel: ObservableObject {
 
     private(set) var sim: SkySimulation?
     var camera = SkyCamera()
+    var minimumZoom: CGFloat = 0.35
+    var animates = true {
+        didSet {
+            guard oldValue != animates else { return }
+            lastTick = nil
+            if !animates { pulses = [] }
+            objectWillChange.send()
+        }
+    }
 
     // Per-star ignite blend (0…1), eased every tick — hover, neighbors, and the highlight ride it.
     private(set) var glow: [Double] = []
@@ -121,8 +130,22 @@ final class NightSkyModel: ObservableObject {
     func tick(now: TimeInterval, size: CGSize) {
         guard let sim, let graph else { return }
         if !camera.initialized {
-            camera.zoom = min(max(min(size.width, size.height) / (SkyTuning.ringRadius * 2 * 1.55), 0.35), 1.1)
+            camera.zoom = min(max(min(size.width, size.height) / (SkyTuning.ringRadius * 2 * 1.55), minimumZoom), 1.1)
             camera.initialized = true
+        }
+        if !animates {
+            // Static presentation still responds to deliberate pan/zoom/drag and hover.
+            // It has no ambient motion, pulse scheduling or catch-up after hidden time.
+            if dragging { sim.step(elapsed: 1.0 / 60) }
+            else if sim.isAwake { sim.settle() }
+            for i in glow.indices {
+                let hover: Double = i == hoverIndex ? 1 : (hoverIndex != nil && focusNeighbors.contains(i) ? 0.75 : 0)
+                glow[i] = max(hover, i == highlightIndex ? highlightBlend : 0)
+            }
+            focusBlend = hoverIndex == nil ? 0 : 1
+            if hoverIndex == nil { focusIndex = nil; focusNeighbors = [] }
+            pulses = []; lastTick = nil
+            return
         }
         let dt = lastTick.map { min(max(now - $0, 0), 1.0 / 20) } ?? 1.0 / 60
         lastTick = now
@@ -161,6 +184,27 @@ final class NightSkyModel: ObservableObject {
 
     // MARK: Camera math
 
+    /// Fit an embedded example using the actual settled graph, without changing the normal
+    /// Knowledge page's camera. Call on viewport-size changes, not on every render or reopen.
+    func fitToContent(in size: CGSize, padding: CGFloat = 24) {
+        guard let positions = sim?.pos, let first = positions.first,
+              size.width > 2 * padding, size.height > 2 * padding else { return }
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+        for p in positions {
+            minX = min(minX, p.x); maxX = max(maxX, p.x)
+            minY = min(minY, p.y); maxY = max(maxY, p.y)
+        }
+        let scale = min((size.width - 2 * padding) / max(1, maxX - minX + 96),
+                        (size.height - 2 * padding) / max(1, maxY - minY + 96))
+        camera.zoom = min(1.1, max(minimumZoom, scale))
+        camera.pan = CGPoint(x: -(minX + maxX) / 2 * camera.zoom, y: -(minY + maxY) / 2 * camera.zoom)
+        camera.initialized = true
+        if hoverInfo != nil { clearHover() }
+        objectWillChange.send()
+    }
+
+    private func redrawIfStatic() { if !animates { objectWillChange.send() } }
+
     func toScreen(_ w: CGPoint, size: CGSize) -> CGPoint {
         CGPoint(x: size.width / 2 + camera.pan.x + w.x * camera.zoom,
                 y: size.height / 2 + camera.pan.y + w.y * camera.zoom)
@@ -176,17 +220,19 @@ final class NightSkyModel: ObservableObject {
         camera.pan.y += dy
         clampPan()
         dismissHover()
+        redrawIfStatic()
     }
 
     /// Zoom keeping the world point under the cursor fixed (Figma-style).
     func zoom(by factor: CGFloat, at s: CGPoint, size: CGSize) {
-        let newZoom = min(max(camera.zoom * factor, 0.35), 4.0)
+        let newZoom = min(max(camera.zoom * factor, minimumZoom), 4.0)
         let w = toWorld(s, size: size)
         camera.zoom = newZoom
         camera.pan = CGPoint(x: s.x - size.width / 2 - w.x * newZoom,
                              y: s.y - size.height / 2 - w.y * newZoom)
         clampPan()
         dismissHover()
+        redrawIfStatic()
     }
 
     private func clampPan() {
@@ -244,13 +290,19 @@ final class NightSkyModel: ObservableObject {
         dragging = true
         dismissHover()
         sim?.beginDrag(i)
+        redrawIfStatic()
     }
 
-    func dragStar(to s: CGPoint, size: CGSize) { sim?.drag(to: toWorld(s, size: size)) }
+    func dragStar(to s: CGPoint, size: CGSize) {
+        sim?.drag(to: toWorld(s, size: size))
+        redrawIfStatic()
+    }
 
     func endDrag() {
+        let wasDragging = dragging
         dragging = false
         sim?.endDrag()
+        if wasDragging { redrawIfStatic() }
     }
 
     func nodeURL(_ i: Int) -> URL? {
@@ -263,11 +315,13 @@ final class NightSkyModel: ObservableObject {
     /// star, flipping near the window's edges.
     func hoverCardRect(in size: CGSize) -> CGRect? {
         guard let info = hoverInfo else { return nil }
-        let w: CGFloat = 250, h: CGFloat = 96
+        let w = min(250, max(1, size.width - 32)), h: CGFloat = 112
         var x = info.anchor.x + 24
         if x + w > size.width - 16 { x = info.anchor.x - 24 - w }
         var y = info.anchor.y + 26
         if y + h > size.height - 16 { y = info.anchor.y - 26 - h }
+        x = min(max(16, x), max(16, size.width - w - 16))
+        y = min(max(16, y), max(16, size.height - h - 16))
         return CGRect(x: x, y: y, width: w, height: h)
     }
 
@@ -286,6 +340,7 @@ final class NightSkyModel: ObservableObject {
     func highlight(_ url: URL) {
         pendingHighlightURL = url
         resolvePendingHighlight()
+        redrawIfStatic()
     }
 
     private func resolvePendingHighlight() {
@@ -298,10 +353,11 @@ final class NightSkyModel: ObservableObject {
 
     // MARK: Preview factory (deterministic — renders the mock galaxy already settled)
 
-    static func preview(hovering: Int? = nil) -> NightSkyModel {
+    static func preview(graph: SkyGraph = .mock(), hovering: Int? = nil, minimumZoom: CGFloat = 0.35) -> NightSkyModel {
         let m = NightSkyModel()
         m.preservesPreviewGraph = true
-        let g = SkyGraph.mock()
+        m.minimumZoom = minimumZoom
+        let g = graph
         m.graph = g
         m.sim = SkySimulation(graph: g, entrance: false)
         m.glow = [Double](repeating: 0, count: g.nodes.count)

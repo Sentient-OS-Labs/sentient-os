@@ -70,7 +70,11 @@ composer. The history peek yields while it is open. Proactive Intelligence uses 
 `BriefingCard` renderer: two sample cards open a prepared follow-up or cancellation plan, with a
 Back action and source labels. Double Tap replays a local email draft with two keycap beats; its
 SwiftUI-owned task cancels on close. Reduce Motion uses immediate show/hide controls instead.
-Knowledge links a project, person and commitment to readable sample notes. Personal Sidekick opens
+Knowledge embeds the actual `NightSkyView`, `NightSkyModel`, `SkySimulation` and `SkyRenderer`, using
+an in-memory sample galaxy. Hover, pan, zoom and star dragging use the production event catcher;
+star clicks and accessible note shortcuts open sample notes with Back navigation. The model and
+camera survive a reader round trip, and the sky pauses ambient motion when inactive or under Reduce
+Motion. No real vault is loaded. Personal Sidekick opens
 a prepared call brief from a sample conversation. Every example shares the same fictional Northstar
 pilot, stays explicitly labeled Example, and never touches real conversations, sources or providers.
 Local detail navigation resets the preview's scroll position; compact layouts prioritize the artifact

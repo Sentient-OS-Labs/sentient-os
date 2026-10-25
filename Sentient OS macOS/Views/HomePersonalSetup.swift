@@ -182,6 +182,8 @@ struct HomeSidekickSuggestions: View {
 struct HomePersonalFeaturePreview: View {
     let feature: HomePersonalFeature
     let onClose: () -> Void
+    var isActive = true
+    var availableHeight: CGFloat = 520
     var onContentHeightChange: (CGFloat) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride
@@ -244,7 +246,9 @@ struct HomePersonalFeaturePreview: View {
         case .proactive:
             HomeProactiveShowcase(width: width, reducedMotion: reducedMotion, onNavigate: { pageRevision &+= 1 })
         case .knowledge:
-            HomeKnowledgeShowcase(reducedMotion: reducedMotion, compact: width < 430)
+            HomeKnowledgeShowcase(reducedMotion: reducedMotion, compact: width < 430, isActive: isActive,
+                                  availableHeight: max(0, availableHeight - 95),
+                                  onNavigate: { pageRevision &+= 1 }, onClose: onClose)
         case .sidekick:
             HomeSidekickShowcase(reducedMotion: reducedMotion, compact: width < 430, onNavigate: { pageRevision &+= 1 })
         }

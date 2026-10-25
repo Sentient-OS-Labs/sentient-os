@@ -793,7 +793,8 @@ struct HomeView: View {
         let bottom = overviewDockTop > top ? overviewDockTop - 24 : size.height - 224
         let height = max(180, bottom - top)
         if let selectedPersonalFeature {
-            HomePersonalFeaturePreview(feature: selectedPersonalFeature, onClose: closePersonalFeature) { naturalHeight in
+            HomePersonalFeaturePreview(feature: selectedPersonalFeature, onClose: closePersonalFeature,
+                                       isActive: isPresented && presentation.windowActive, availableHeight: height) { naturalHeight in
                 guard self.selectedPersonalFeature == selectedPersonalFeature else { return }
                 let fitted = min(520, max(180, naturalHeight))
                 guard abs(personalPreviewHeight - fitted) > 1 else { return }
