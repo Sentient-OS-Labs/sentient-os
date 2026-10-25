@@ -18,7 +18,8 @@ serif italic display, no borrowed brand hues.
 | File | Job |
 |---|---|
 | `RootView.swift` | The main window's switchboard: onboarding → the home ⟷ the processing takeover. Owns the analyze/source state, the bottom-left whispers, the update-gate overlay, the Dev Tools sheet, and the onboarding finale. |
-| `HomeView.swift` | THE home: chrome, measured caution placement, paged card spreads, chat, the empty state, the free-plan preview state, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
+| `HomeView.swift` | THE home: chrome, measured caution placement, paged card spreads, chat, the empty state, the retained legacy diagnostic preview, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
+| `HomePersonalSetup.swift` | Sidekick-first invitation, four draft-only suggestions, the optional personal-setup reward panel, and local feature examples. No source access or task execution. |
 | `Briefing.swift` | The card model (`Briefing`, `BriefingDeck`), built from a `PreparedAction`, from the gift markdown, or from the two hard-coded demo decks. |
 | `BriefingCard.swift` | One card through its four lives (sealed envelope → offer → working → done), `OfferButton`, the envelope. |
 | `HomePopovers.swift` | Home's Analysis popover (things understood, vault counts, Analyze Now, the run footer, overnight-on-battery switch, source chips) and Knowledge's optional Use with your AIs popover. `SourceChip`, `HomeStats`. |
@@ -48,10 +49,51 @@ drops the window's 1040×800 minimum during a takeover for screen recordings.
 
 ## The home (`HomeView`)
 
+Before personal setup, Home gives Sidekick the main workspace and keeps a compact setup invitation
+on the right. This is controlled by `AppState.hasCompletedPersonalSetup`, independently of the
+`ProcessingCoordinator.initialComplete` knowledge milestone. The setup panel appears only for the
+real deck and unfinished personal setup; completed users retain their real cards. A legacy completed
+initial analysis also suppresses the panel. Free and Go plans reach the same full Home and can use
+Sidekick as far as the actual provider permits. A plan label alone never hides the composer or redirects
+the user into a reduced onboarding mode. Upgrade or model-change help belongs to a real provider access
+or usage failure. The old knowledge-only layout remains available for explicit diagnostic previews;
+its setup link is retained for fixture compatibility, not as the Free/Go product flow.
+
+The four reward descriptions are followed by the orb and **Finish setup** at the bottom. The CTA
+calls Root's `onFinishSetup`; the sources flow remains optional and does not own the conversation.
+All examples start closed. Selecting a reward opens its clearly labeled synthetic example in the
+left workspace; its upper-left X and Escape both dismiss it. This never changes the active surface,
+clears a draft, or creates a task. Active work/recovery disables the examples, and a new task or explicit
+conversation navigation closes any existing example. The transcript is not marked visible while
+covered. The composer remains the same mounted instance throughout.
+
+Four suggestions above the composer fill its real draft and request keyboard focus; they do not
+submit. The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses soft pools from
+`GlowHalo.stops`, matching the Double Tap personal-context line. The durable successful-task milestone
+shifts emphasis to Finish setup without resetting chat or automatically opening setup. During pending
+setup, Analysis and the Double Tap lesson route to Finish setup; after setup they show the actual
+processing status. Paused and attention states explicitly say setup is saved, while Double Tap and
+personal context still wait for initial analysis.
+
+Focused `#Preview`s in `HomePersonalSetup.swift` render the reward panel and feature example with no
+AppState or external calls. Native integration checks should use isolated defaults and test the
+`personalSetup.*` and `sidekick.suggestion.*` accessibility identifiers at 1040×800 and 840×680.
+`Scripts/test_personal_setup_home.py --app <signed-debug-app>` runs the isolated `ui-personal-setup`
+lab: it checks both sizes, all four X/Escape dismissal paths, draft-only suggestions, continued work,
+the successful-task emphasis state, completed users' real-card path, and empty first Home. Its ten
+screenshots include only fixture-owned windows; the runner never starts a provider or analysis.
+`--manual-review` offers a bounded 90-second hold for a native accessibility inspection, followed by
+the same assertions. It does not bypass failures or authorize real work.
+`Scripts/test_personal_setup_sources.py --app <signed-debug-app>` runs the actual source picker and
+timing sheet against three empty directories inside its isolated fixture. It verifies the zero/two/three
+source threshold, Run now's callback after native sheet dismissal, and retained sources and Sidekick
+draft across reopening. Six screenshots cover standard 840×760 and minimum 700×560 setup windows.
+The callback is captured; no analysis, cloud connection, protected database read, or wake setup starts.
+
 Layers, bottom to top: one animated atmosphere, the suggestion spread or transcript, the shared
 composer and history peek, chrome, the DEBUG-only DEV TOOLS handle, and the always-mounted letter
 layer. Chrome contains the top navigation, hour-aware greeting and caution capsule; its measured
-height keeps multiline notices clear of cards and chat. The free-plan preview retains its own state.
+height keeps multiline notices clear of cards and chat. The diagnostic legacy preview retains its own state.
 
 `SidekickOverviewLayout` fits measured card heights between chrome and the composer. It uses up to
 two columns below 1180pt and three above, at most two rows, 24pt gaps and widths capped at 400pt.
@@ -179,10 +221,11 @@ Editable → Saving… → Saved. Research notes dress as letter paper (the dog-
 neutral; the gift keeps its accent dress and carries the **Save to Desktop** keepsake
 (`GiftShareImage.save`: a @2x PNG of the letter with a branding colophon, revealed in Finder).
 
-**Free-plan preview state:** the orb over "This is a preview of Sentient." with the three feature rows,
+**Legacy diagnostic preview (`previewKBOnly`):** the orb over "This is a preview of Sentient." with the three feature rows,
 a Get ChatGPT Plus glow, and a Reset Sentient… pill (deep-linking to Settings → System); the gift
 envelope perches top-center above a compact version; once the claim reads Plus it becomes "You're on
-Plus. Time to go live." with a Reset & Rebuild glow. The command bar is hidden.
+Plus. Time to go live." with a Reset & Rebuild glow. The command bar is hidden only in this retained
+diagnostic surface. New and migrated Free/Go users use the full Home; this is not an upgrade gate.
 
 The banner slot also carries updates for the selected computer-use runtime. Live health issues take precedence, followed by
 an active or failed driver update, morning/connector cautions, and completion notices. The driver

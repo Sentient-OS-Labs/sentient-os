@@ -44,6 +44,7 @@ enum FactoryReset {
             return false
         }
         await conversation.drainBackgroundWork()
+        await NativePermissionCheck.shared.close()
         await ComputerUseDoctor.shared.clear(defaults: defaults)
         // Invalidate in-flight learning before any suspension; explicit settings survive.
         SidekickInstructionStore.resetLearning()
@@ -68,6 +69,10 @@ enum FactoryReset {
             d.removeObject(forKey: key)
         }
         d.removeObject(forKey: "onboarding.step")
+        PersonalSetupProgress.reset(defaults: d)
+        d.removeObject(forKey: SourceSelection.pendingProtectedSourceKey)
+        PermissionRelaunchDraft.clear()
+        PermissionWaitDraft.clear()
         // Re-arm the email + company welcome flow while retaining the contact queue/identity.
         // Keeping this UI latch would silently skip the prompt on every subsequent setup.
         d.removeObject(forKey: "onboarding.emailSubmitted")
@@ -105,6 +110,8 @@ enum FactoryReset {
         }
         appState?.scheduler.needsSchedulerSetup = false
         appState?.scheduler.reevaluate()                // prod flag is gone → stops the loop + cancels the armed wake
+        appState?.hasCompletedPersonalSetup = false
+        appState?.hasCompletedFirstSidekickTask = false
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
         ComputerUseUpgrade.shared.reset()              // clear pending migration after the onboarding rewind
         Log("FactoryReset: cleanup attempts finished; individual failures are reported · rewound to onboarding")

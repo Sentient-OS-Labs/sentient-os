@@ -83,7 +83,12 @@ enum WritingStyleTests {
             try sql("INSERT INTO chat_message_join VALUES (\(id),\(id))")
         }
         let names = [AddressBookNames.key(for: "+1 (415) 555-0100"): "Jordan Lee"]
-        let messages = try LocalWritingSamples.iMessage(path: path, names: names)
+        try check(try LocalWritingSamples.iMessage(path: "/missing/never-opened", names: [:], chatGUIDs: []).isEmpty,
+                  "empty iMessage selection performs no database open")
+        let scoped = try LocalWritingSamples.iMessage(path: path, names: names, chatGUIDs: ["guid2"])
+        try check(scoped.count == 5 && scoped.allSatisfy { $0.text.hasPrefix("im-2-") },
+                  "iMessage writing samples are restricted to the selected chat")
+        let messages = try LocalWritingSamples.iMessage(path: path, names: names, chatGUIDs: Set((1...8).map { "guid\($0)" }).union(["sms-1"]))
         let texts = messages.map(\.text)
         try check(messages.count == 30, "iMessage: six people times five messages")
         try check(texts.first == long, "typedstream body and whitespace are unabridged")
@@ -95,7 +100,7 @@ enum WritingStyleTests {
         try sql("INSERT INTO chat_handle_join VALUES (100,1)")
         try sql("INSERT INTO message (ROWID,date,text,is_from_me) VALUES (10000,20000,'SAME PERSON SMS',1)")
         try sql("INSERT INTO chat_message_join VALUES (100,10000)")
-        let merged = try LocalWritingSamples.iMessage(path: path, names: names).map(\.text)
+        let merged = try LocalWritingSamples.iMessage(path: path, names: names, chatGUIDs: Set((1...8).map { "guid\($0)" }).union(["sms-1"])).map(\.text)
         try check(merged.count == 30 && merged.first == "SAME PERSON SMS" && merged.contains("im-6-7") && !merged.contains("im-1-3"), "SMS and iMessage handles share one person quota")
 
         var wa: OpaquePointer?
@@ -120,7 +125,12 @@ enum WritingStyleTests {
             try waSQL("INSERT INTO ZWACHATSESSION VALUES (\(id),'\(jid)',\(kind),NULL)")
             try waSQL("INSERT INTO ZWAMESSAGE VALUES (\(id),\(id),999999,1,0,'EXCLUDED')")
         }
-        let whatsapp = try LocalWritingSamples.whatsApp(path: waPath)
+        try check(try LocalWritingSamples.whatsApp(path: "/missing/never-opened", chatJIDs: []).isEmpty,
+                  "empty WhatsApp selection performs no database open")
+        let scopedWA = try LocalWritingSamples.whatsApp(path: waPath, chatJIDs: ["person2@s.whatsapp.net"])
+        try check(scopedWA.count == 5 && scopedWA.allSatisfy { $0.text.hasPrefix("wa-2-") },
+                  "WhatsApp writing samples are restricted to the selected chat")
+        let whatsapp = try LocalWritingSamples.whatsApp(path: waPath, chatJIDs: Set((1...8).map { "person\($0)@s.whatsapp.net" }))
         try check(whatsapp.count == 30 && whatsapp.first?.text == "wa-1-7" && whatsapp.last?.text == "wa-6-3", "WhatsApp: exact recency and outgoing quotas")
         try check(!whatsapp.contains(where: { ["INCOMING", "SYSTEM", "EXCLUDED"].contains($0.text) }), "WhatsApp: excludes groups, status, communities, received and system messages")
         try check(whatsapp.first?.recipient == "Jordan Lee" && whatsapp.last?.recipient == "person6", "WhatsApp: the stored contact name, else the phone handle")
@@ -357,7 +367,9 @@ enum WritingStyleTests {
         overrides["dbg.run.gmail"] = false
         defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
         try WritingStyle.$acceptanceSources.withValue(nil) {
-            try check(WritingStyle.Selection().mail.contains("gmail"), "connected Gmail participates when regular analysis is off")
+            try check(!WritingStyle.Selection().mail.contains("gmail"), "connected Gmail is excluded when regular analysis is off")
+            try check(!WritingStyle.Selection().imessage && !WritingStyle.Selection().whatsapp,
+                      "local databases are never discovered when their source is off")
         }
         let root = VaultGenerator.vaultRoot
         let fm = FileManager.default

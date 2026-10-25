@@ -20,6 +20,12 @@ nonisolated enum ModelBackend: String, Sendable {
     @TaskLocal static var runOverride: Self?
     static var current: Self { runOverride ?? .claude }
 }
+@MainActor enum PersonalSetupProgress { static func recordSuccessfulTask() {} }
+nonisolated enum CodexAuth {
+    struct Plan { let raw: String }
+    static func currentPlan() -> Plan? { nil }
+    static var assertedPlus: Bool { false }
+}
 nonisolated enum AgentMode: Sendable { case computer; var label: String { "computer" }; var promptPhrase: String { "computer tools" } }
 nonisolated struct PreparedAction: Sendable { }
 nonisolated enum SidekickCardContext { static func promptBlock(for cards: [PreparedAction]) -> String { "" } }
@@ -29,7 +35,8 @@ nonisolated enum SidekickCardContext { static func promptBlock(for cards: [Prepa
     static var response = "Fixture answer\nSTATUS: DONE — fixture complete"
     static var provider: (@MainActor (String) async throws -> String)?
 }
-extension URL { nonisolated static var sentientSupport: URL { fatalError("Production support directory must not be used") } }
+extension URL { nonisolated static var sentientSupport: URL { URL(fileURLWithPath: ProcessInfo.processInfo.environment["FIXTURE_PERMISSION_SUPPORT"]!) } }
+@MainActor final class SafeAppRelaunch { static let shared = SafeAppRelaunch(); var isApplicationTerminating = false }
 @MainActor final class ComputerUseGate {
     static let shared = ComputerUseGate()
     nonisolated struct SetupCancelled: Error { }
@@ -876,7 +883,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
     names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
-    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift"]
+    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)
-    subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault")})
+    subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault"), "FIXTURE_PERMISSION_SUPPORT": str(tmp / "permission-support")})

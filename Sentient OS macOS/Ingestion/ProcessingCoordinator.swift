@@ -88,7 +88,7 @@ final class ProcessingCoordinator {
             if let due = record.due { return "Scheduled for \(Self.scheduleLabel(due))" }
             return "Scheduled for the next 3 AM"
         case .waiting(.model): return "Waiting for the on-device model"
-        case .waiting(.sources): return "Choose sources to analyze"
+        case .waiting(.sources): return initialComplete ? "Review your knowledge sources" : "Choose three available sources"
         case .waiting(.power(.thermal)): return "Waiting for your Mac to cool down"
         case .waiting(.power): return "Waiting for power"
         case .loadingModel: return activeRequest?.connectors.isEmpty == true ? "Connecting to your sources" : "Loading the on-device model"
@@ -96,7 +96,7 @@ final class ProcessingCoordinator {
         case .preparing: return "Building your knowledge"
         case .stopping: return "Pausing analysis safely"
         case .paused: return "Analysis paused"
-        case .completed: return record.notice == nil ? "Analysis complete" : "Some sources need another try"
+        case .completed: return record.notice == nil ? "Analysis complete" : "Analysis needs attention"
         case .diskFull: return "Analysis needs disk space"
         case .failed: return "Analysis needs attention"
         }
@@ -107,7 +107,7 @@ final class ProcessingCoordinator {
         case .waiting(.power(.thermal)): return "Your progress is saved. Analysis will resume when your Mac cools down."
         case .waiting(.power(.unknown)): return "Connect your Mac to power. Its battery level could not be read."
         case .waiting(.power(.onBattery)): return "Connect your Mac to power, or allow battery processing in Analysis."
-        case .waiting(.sources): return "Select sources in Settings, then retry analysis."
+        case .waiting(.sources): return record.notice ?? "Choose available sources in Knowledge Sources, then retry analysis. Sidekick is ready to use."
         case .waiting(.model): return "The model is downloading in the background. Sidekick is ready to use."
         default: return "Plug in your Mac or make sure the battery is at least \(batteryFloor)%."
         }
@@ -184,7 +184,7 @@ final class ProcessingCoordinator {
             }
             DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: reason)
             Analytics.signal("Scheduler.gated", parameters: ["reason": reason])
-            deferNight(notice: detail(for: blocked))
+            deferNight(notice: blocked == .sources ? sourceAdmissionNotice(request) : detail(for: blocked))
             return
         }
         carried = RunProgress()
@@ -223,6 +223,7 @@ final class ProcessingCoordinator {
     func resumeMonitoring() {
         isSuspended = false
         startMonitoring()
+        checkPendingWork()
     }
 
     private var power: PowerState.Snapshot {
@@ -231,11 +232,24 @@ final class ProcessingCoordinator {
 
     private func admission(_ request: ProcessingRequest, scheduled: Bool) -> Wait? {
         guard request.hasSources else { return .sources }
+        if !initialComplete, let count = request.readySelectionCount, count < SourceSelection.minimumSelections {
+            return .sources
+        }
         let allowBattery = (defaults.object(forKey: OvernightScheduler.allowBatteryKey) as? Bool) ?? true
         if let block = PowerState.block(power, initial: !initialComplete, allowBattery: allowBattery,
                                         scheduled: scheduled) { return .power(block) }
         if !request.connectors.isEmpty && request.modelPath == nil { return .model }
         return nil
+    }
+
+    private func sourceAdmissionNotice(_ request: ProcessingRequest) -> String {
+        let unavailable = request.unavailableSources.keys.sorted().prefix(3).joined(separator: ", ")
+        let minimum = !initialComplete && request.readySelectionCount != nil
+            ? "Choose at least \(SourceSelection.minimumSelections) available sources for your first analysis. " : ""
+        if !unavailable.isEmpty {
+            return minimum + "Review \(unavailable) in Knowledge Sources. Restore access or remove unavailable sources; completed work is saved. Sidekick is ready to use."
+        }
+        return minimum + "Choose sources in Knowledge Sources, then retry. Sidekick is ready to use."
     }
 
     private func detail(for wait: Wait) -> String {
@@ -252,9 +266,11 @@ final class ProcessingCoordinator {
     private func checkPendingWork() {
         guard !isBusy, !isSuspended, record.status == .requested else { return }
         var request = requestOverride ?? .current()
-        if request.modelPath == nil { request.modelPath = ModelLocator.resolve() }
+        if !request.connectors.isEmpty && request.modelPath == nil { request.modelPath = ModelLocator.resolve() }
         if let blocked = admission(request, scheduled: false) {
             state = .waiting(blocked)
+            let notice = blocked == .sources ? sourceAdmissionNotice(request) : detail(for: blocked)
+            if record.notice != notice { record.notice = notice }
             if blocked == .model, ModelDownload.shared.phase == .idle { ModelDownload.shared.kickIfNeeded() }
             return
         }
@@ -329,6 +345,10 @@ final class ProcessingCoordinator {
             if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .stopped, reason: "paused") }
             return
         }
+        // A successful empty source read is valid, but it cannot unlock personal features
+        // before any knowledge exists. Existing completed users keep their milestone.
+        let knowledgeReady = Self.knowledgeExists(in: VaultGenerator.vaultRoot)
+        let complete = result.complete && (initialComplete || !request.fullCycle || knowledgeReady)
         if result.progress.diskFull {
             state = .diskFull; record.status = .failed
             record.notice = "Free up disk space, then retry analysis."
@@ -338,18 +358,26 @@ final class ProcessingCoordinator {
             record.notice = "Analysis needs attention. Your progress is saved."
         } else {
             state = .completed; record.status = .completed
-            if request.fullCycle && result.complete {
+            if request.fullCycle && complete {
                 ProcessingPlan.completeInitial(defaults)
                 initialComplete = true
             }
-            record.notice = result.complete ? nil : "Some sources need another try. Completed work is saved."
+            if complete { record.notice = nil }
+            else if !result.progress.sourceReadFailures.isEmpty {
+                let names = result.progress.sourceReadFailures.keys.sorted().prefix(3).joined(separator: ", ")
+                record.notice = "Review \(names) in Knowledge Sources, then retry or remove unavailable sources. Completed work is saved."
+            } else if result.complete && !knowledgeReady {
+                record.notice = "These sources did not provide enough context to build your knowledge yet. Choose sources with useful content, then retry. Sidekick is ready to use."
+            } else {
+                record.notice = "Some sources need another try. Completed work is saved; review the analysis details and retry."
+            }
         }
         if let diagnosticID {
             DiagnosticHistory.finish(.overnight, id: diagnosticID,
-                outcome: result.complete ? .completed : (result.failure == nil ? .partial : .failed),
+                outcome: complete ? .completed : (result.failure == nil ? .partial : .failed),
                 measurements: ["elapsed_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
                                "device_items": result.progress.total, "device_failed": result.progress.failed])
-            if result.complete { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
+            if complete { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
         }
         if scheduled && !initialComplete {
             // A partial first night remains pending even for knowledge-base-only users.
@@ -358,6 +386,12 @@ final class ProcessingCoordinator {
         }
         // Release stale preview payloads only when the next run begins; reopening progress shows
         // the actual result. Reading or hiding a window never changes task lifetime.
+    }
+
+    private static func knowledgeExists(in root: URL) -> Bool {
+        let readme = root.appendingPathComponent("README.md")
+        guard let values = try? readme.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) else { return false }
+        return values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? 0) > 0
     }
 
     private func execute(_ request: ProcessingRequest, scheduled: Bool, id: UUID,

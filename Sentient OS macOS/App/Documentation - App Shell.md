@@ -20,6 +20,7 @@ this is the wiring.
 - **Home** (`Window`, id `home`): `RootView`, dark only, hidden title bar, 1100×820 default. Guarded and hidden during pending computer-use setup. Otherwise presented at launch, with one exception: the relaunch right after a silent auto-update stays windowless (`UpdateNotice.suppressHomeThisLaunch`), so a menu-bar user is not interrupted.
 - **Knowledge** and **Settings** are pages in that same window, routed by `MainNavigation` and `HomeWindowOpening`. Home stays mounted behind secondary pages. Both expand from their corresponding Home navigation control and retract into it. Knowledge retains reader/sky state, starts its Constellation entrance after the page reveal, and preserves its unsaved-edit navigation guard. Direct secondary-page routes are immediate; hidden clocks and input pause.
 - **Connect your AIs** (id `connect-ais`) remains its own resizable window. Auxiliary windows carry `.restorationBehavior(.disabled)` so macOS state restoration never reopens them at launch; the home is the only launch surface.
+- **Personal setup** (id `personal-setup`) is an optional window opened from Home, Analysis or the menu bar. Connections and required source access are resumable while Sidekick and Home remain usable. Only a deliberate permission relaunch reopens it automatically.
 - **Proactive · Execute** and **Overnight Processing**: dev-only windows opened from Dev Tools.
 - **MenuBarExtra**: `MenuBarView` with the orb mark as a template icon.
 
@@ -27,12 +28,12 @@ this is the wiring.
 
 ## The launch sequence (`AppState.init`)
 
-1. Read `hasCompletedOnboarding` and construct the shared services.
+1. On a normal launch migrate legacy completion/source defaults, then read separate Home-admission, personal-setup, and first-success milestones. Headless fixtures skip migration unless they explicitly exercise it with isolated defaults.
 2. Return before launch side effects when `SENTIENT_SELFTEST` is set. The DEBUG initializer in the app declaration dispatches the existing connector lab.
 3. Prepare `ComputerUseUpgrade` before mounting regular scenes or starting Sidekick. A previously ready, onboarded Mac missing the pinned driver enters persistent setup; an existing pending upgrade resumes even after installation. Fresh onboarding and already-configured users retain their normal startup.
-4. Start the scheduler as before. `startInterfaceIfReady()` starts the Sidekick coordinator and notch once, immediately on a normal launch or after setup releases the interface. During setup there are no Sidekick hotkey monitors or notch startup.
+4. Reevaluate only existing explicit scheduling intent. Home admission starts analysis monitoring and CLI maintenance, with no new analysis plan, scheduler enablement or notification permission. For Claude, a model-free native login-status check establishes the current account before resuming persisted analysis. Foreground refresh observes external Claude Code account changes; reset cancels the startup owner. `startInterfaceIfReady()` starts the coordinator/notch once, subject to genuine legacy computer-use migration.
 5. Start Dock policy, Sparkle, update notices, diagnostics, notification checks, and managed CLI maintenance. The detached startup task also sweeps orphaned managed computer-use daemons, preserving daemons whose Sentient host is still alive. These services retain their own guards; the setup window does not pause background scheduling or connector classification maintenance.
-6. During onboarding, the existing FDA-dependent model download remains available. Shared Codex CLI and native computer-use preparation start at app launch for all backends. Claude Code preparation is tied to the Claude commitment/sign-in flow.
+6. Start the local model download during onboarding without FDA. It uses app-owned Application Support and resumes after relaunch. Shared Codex/native preparation also starts at launch; neither installation requires source access. Claude Code preparation remains tied to Claude selection.
 
 ## Exclusive computer-use setup
 

@@ -99,6 +99,8 @@ enum CodexAuth {
 @MainActor final class AppState {
     static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding = true
+    var hasCompletedPersonalSetup = true
+    var hasCompletedFirstSidekickTask = true
     let scheduler = Scheduler()
     let commandCoordinator = Coordinator()
     let processing = ProcessingCoordinator.shared
@@ -154,3 +156,16 @@ enum SourceHealth { static let readStatusKey = "test.sourceHealth" }
 enum AppleMailHealth { static let key = "test.mail"; static let needsRetryKey = "test.mailRetry" }
 enum AppleCalendarSource { static let issueKey = "test.calendar" }
 enum ProcessingPlan { static let key = "test.processing" }
+enum PersonalSetupProgress {
+    static func reset(defaults: UserDefaults) {
+        defaults.removeObject(forKey: "onboarding.personalSetupCompleted")
+        defaults.removeObject(forKey: "onboarding.firstSuccessfulSidekickTask")
+    }
+}
+enum PermissionRelaunchDraft { static func clear() {} }
+enum PermissionWaitDraft { static func clear() {} }
+@MainActor final class NativePermissionCheck {
+    static let shared = NativePermissionCheck()
+    func close() async {}
+}
+enum SourceSelection { static let pendingProtectedSourceKey = "test.pendingProtectedSource" }

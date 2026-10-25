@@ -17,9 +17,10 @@ Sentient account for the user.
 
 ## Collection and disclosure
 
-`MailAccountCollection.collect` runs after **Done** in the supported Gmail or Outlook Mail connection
-sheet, which displays the storage disclosure inline. Opening a picker does not collect an address.
-The normal flow does not ask the user to type one.
+Verified **Done** in a supported Gmail or Outlook Mail connection sheet records deferred collection
+consent. `MailAccountCollection.collect` runs when actual mailbox processing starts. Opening a picker
+or checking native connection readiness never collects an address. The normal flow does not ask the
+user to type one.
 
 `MailAccountProbe` uses native connector metadata rather than a model turn:
 

@@ -75,6 +75,17 @@ nonisolated struct CaptureDiagnostics: Sendable {
     }
 }
 '''
+SUPPORT += r'''
+@MainActor final class NativePermissionCheck {
+    static let shared = NativePermissionCheck()
+    var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
+    var invalidations = 0
+    func refresh() {}
+    func invalidate(failure: NativeComputerUseFailure? = nil) {
+        invalidations += 1; snapshot = NativePermissionReadiness.afterFailure(failure)
+    }
+}
+'''
 TESTS = r'''
 import Foundation
 @main struct Tests {
@@ -92,6 +103,7 @@ import Foundation
         return try JSONSerialization.jsonObject(with:Data((content[0]["text"] as! String).utf8)) as! [String:Any]
     }
     @MainActor static func server(_ interaction: SidekickInteraction? = .init()) async throws -> (NativeComputerUseServer, Script, SidekickInteraction?) {
+        NativePermissionCheck.shared.snapshot = .init(accessibility: .verified, screenRecording: .verified)
         let script = Script()
         let server = NativeComputerUseServer(configuration:.init(script:script), interaction:interaction, resolveTarget:{$0})
         _ = try await server.start()
@@ -118,11 +130,12 @@ import Foundation
             check(try status(await invoke(s,"diagnose_computer_use"))["status"] as? String == "not_needed","Ordinary interruptions and known permissions never qualify")
             await s.stop()
         }
-        for permission in ["screen", "accessibility", "automation", "unknown-tcc", "unknown-automation"] {
+        for permission in ["screen", "accessibility", "automation", "unknown-capability", "unknown-automation"] {
             let (s,script,_) = try await server()
             for _ in 0..<3 { _ = try await invoke(s,"list_apps") }
             Permissions.screen = permission != "screen"
-            Permissions.tcc = permission == "accessibility" ? .denied : permission == "unknown-tcc" ? .unavailable : .granted
+            Permissions.tcc = .unavailable // FDA is unavailable in every case.
+            NativePermissionCheck.shared.snapshot = .init(accessibility: permission == "accessibility" ? .denied : permission == "unknown-capability" ? .unknown : .verified, screenRecording: .verified)
             Permissions.automation = permission == "automation" ? .denied : permission == "unknown-automation" ? .unavailable : .granted
             let reply = try status(await invoke(s,"diagnose_computer_use"))
             check(reply["status"] as? String == (permission.hasPrefix("unknown") ? "permission_unverified" : "permission_needed"),
@@ -211,7 +224,7 @@ with tempfile.TemporaryDirectory(prefix='sentient-diagnostic-consent-') as direc
     (p/'Tests.swift').write_text(TESTS)
     files = ['Diagnostics/NativeComputerUseFailure.swift','Diagnostics/ComputerUseDiagnosticConsent.swift',
              'Diagnostics/ComputerUseDiagnosticPolicy.swift','Driver/NativeAppStateRetry.swift',
-             'Driver/OpenAIComputerUseProbe.swift','Driver/NativeComputerUseServer.swift']
+             'Driver/OpenAIComputerUseProbe.swift','Driver/NativePermissionReadiness.swift','Driver/NativeComputerUseServer.swift']
     binary = p/'tests'
     subprocess.run(['xcrun','swiftc','-swift-version','5','-parse-as-library','-target',f'{platform.machine()}-apple-macos15.0',
                     str(p/'Support.swift'),str(p/'Tests.swift'),*[str(APP/f) for f in files],'-o',str(binary)],check=True,timeout=60)

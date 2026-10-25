@@ -4,10 +4,9 @@
 //
 //  Downloads the on-device model (gemma-4-E4B-it.litertlm, 3.66 GB) from Hugging Face —
 //  anonymously, no token — into Application Support/SentientOS/Models/, the exact slot
-//  ModelLocator resolves. Strictly an onboarding affair: AppState kicks it 2 seconds after the
-//  launch that follows the Full Disk Access grant (the one onboarding step that forces a
-//  relaunch), so the model is usually most of the way down before the user reaches Start
-//  Analysis; OnboardingModelDownloadView covers the remainder.
+//  ModelLocator resolves. AppState starts the resumable transfer during the introduction;
+//  ordinary app-owned storage needs no Full Disk Access. Home and Sidekick never wait for it.
+//  Personal analysis waits only when selected local sources actually need this model.
 //
 //  The transfer: 8 parallel HTTP Range chunks (~85% of line speed vs ~50% single-stream,
 //  measured live — see Our_Stuff/Other Stuff/Tested - Best Model Download Arch.md), each chunk

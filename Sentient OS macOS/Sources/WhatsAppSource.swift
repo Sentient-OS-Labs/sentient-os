@@ -151,6 +151,7 @@ struct WhatsAppSource: Sendable {
                 tags: ["source": "whatsapp"], fingerprint: ["whatsapp", "zero_sessions"])
         }
 
+        try ChatSelectionReadError.validate(selected: chatJIDs, available: Set(chats.values.map(\.jid)))
         let analyzedPKs = chats.values.filter { chatJIDs == nil || chatJIDs!.contains($0.jid) }.map(\.pk)
         guard !analyzedPKs.isEmpty else {
             // Opted into specific chats but none matched a live session — filter/schema drift, not

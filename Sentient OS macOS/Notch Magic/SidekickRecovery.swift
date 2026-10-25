@@ -24,22 +24,39 @@ nonisolated struct SidekickQuestion: Sendable, Equatable {
     enum ValidationError: Error { case invalidQuestion }
 }
 
+/// A plan offer is derived only from a failed ChatGPT provider operation. Model-written
+/// explanations, unrelated connector quotas, and unknown account tiers cannot create it.
+nonisolated enum SidekickUpgradeOffer: String, Sendable, Equatable {
+    case usageLimit, planDenied
+
+    var explanation: String {
+        switch self {
+        case .usageLimit: "Your ChatGPT plan reached a usage limit. You can upgrade to Plus, try again later, or choose another AI."
+        case .planDenied: "ChatGPT declined this request because of your plan. You can upgrade to Plus or choose another AI."
+        }
+    }
+}
+
 /// Model questions always have two answers. A final error offers only editable retry guidance.
 nonisolated enum SidekickRecoveryContent: Sendable, Equatable {
     case clarification(SidekickQuestion)
-    case failure(id: UUID, error: String)
+    case failure(id: UUID, error: String, upgradeOffer: SidekickUpgradeOffer? = nil)
 
     var id: UUID {
         switch self {
         case .clarification(let question): question.id
-        case .failure(let id, _): id
+        case .failure(let id, _, _): id
         }
     }
     var error: String? {
         switch self {
         case .clarification(let question): question.error
-        case .failure(_, let error): error
+        case .failure(_, let error, _): error
         }
+    }
+    var upgradeOffer: SidekickUpgradeOffer? {
+        if case .failure(_, _, let offer) = self { return offer }
+        return nil
     }
     var question: SidekickQuestion? {
         if case .clarification(let question) = self { return question }
@@ -114,7 +131,7 @@ final class SidekickRecovery {
         self.content = content
         draft = content.question == nil ? (interruptedDraft ?? "") : ""
         interruptedDraft = nil; isVisible = true
-        hovering = false; focused = false; timing = .init(now: Self.now, expiresWhenHidden: content.question == nil)
+        hovering = false; focused = false; timing = .init(now: Self.now, expiresWhenHidden: content.question == nil && content.upgradeOffer == nil)
         self.resolve = resolve
         onChange?(); schedule()
     }

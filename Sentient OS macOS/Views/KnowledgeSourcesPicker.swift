@@ -2,7 +2,7 @@
 // KnowledgeSourcesPicker.swift
 // Shared source groups and connection flows for Settings and onboarding. Owns folder/chat
 // selection, saved connector choices, and sheets. Reports the live selection count to
-// onboarding; Settings also guards direct toggle-offs at the four-source minimum.
+// personal setup. Permission requests follow an explicit protected-source Connect action.
 // Doc: Settings/Documentation - Settings.md; Onboarding/Documentation - Onboarding.md
 //
 
@@ -18,9 +18,9 @@ struct KnowledgeSourcesPicker: View {
     var onSelectionCountChange: (Int) -> Void = { _ in }
 
     // The shared selection keys (defaults must match SourceSelection).
-    @AppStorage("dbg.run.downloads") private var runDownloads = true
-    @AppStorage("dbg.run.desktop")   private var runDesktop = true
-    @AppStorage("dbg.run.documents") private var runDocuments = true
+    @AppStorage("dbg.run.downloads") private var runDownloads = false
+    @AppStorage("dbg.run.desktop")   private var runDesktop = false
+    @AppStorage("dbg.run.documents") private var runDocuments = false
     @AppStorage("dbg.run.notes")     private var runNotes = false
     @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
@@ -34,7 +34,8 @@ struct KnowledgeSourcesPicker: View {
     // and keys the census reload below.
     @AppStorage(ModelBackend.key) private var backendRaw = ""
 
-    @State private var fdaGranted = Permissions.hasFullDiskAccess()
+    @State private var protectedSource: ProtectedLocalSource?
+    @AppStorage(SourceSelection.pendingProtectedSourceKey) private var pendingProtectedSource = ""
     @State private var connectors: [ConnectorCensus.DetectedConnector] = []
     @State private var selectedConnector: ConnectorSource?
     @State private var showWhatsAppPicker = false
@@ -44,7 +45,6 @@ struct KnowledgeSourcesPicker: View {
     @State private var showAppleMailPicker = false
     @AppStorage(AppleMailSelection.key) private var appleMailAccounts = ""
     @State private var showAppleCalendarConnect = false
-    @State private var flashMinimum = false
 
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
     private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
@@ -62,13 +62,11 @@ struct KnowledgeSourcesPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: context == .settings ? 30 : 20) {
             if context == .settings {
-                Text("Your Sentient needs at least four sources to truly know you.")
+                Text("Choose at least three sources to set up your personal context.")
                     .font(.system(size: 12.5))
-                    .foregroundStyle(flashMinimum ? Theme.Ink.amber : .white.opacity(0.72))
-                    .animation(.easeInOut(duration: 0.25), value: flashMinimum)
+                    .foregroundStyle(.white.opacity(0.72))
                     .padding(.top, -16)
             }
-            if !fdaGranted { fdaLine }
             emailAndCalendarGroup
                 .id(Section.connectors)
             chatsGroup
@@ -76,7 +74,6 @@ struct KnowledgeSourcesPicker: View {
             otherAppsGroup
             foldersGroup
         }
-        .task { fdaGranted = Permissions.hasFullDiskAccess() }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: RunLoop.main)) { _ in
                 selectionCount = SourceSelection.selectionCount
@@ -84,21 +81,28 @@ struct KnowledgeSourcesPicker: View {
         .onChange(of: selectionCount, initial: true) { _, count in
             onSelectionCountChange(count)
         }
-        .onChange(of: connectors) {
-            guard context == .onboarding else { return }
-            // Apply the onboarding default to saved user connections. A saved false is
-            // an explicit opt-out and must survive refreshes, reconnects, and reopening.
-            for connector in connectors where ConnectorRegistry.kbEligible(connector.slug) {
-                guard UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(connector.slug)) == nil else { continue }
-                ConnectorRegistry.setKBEnabled(connector.slug, true)
-            }
-            selectionCount = SourceSelection.selectionCount
-        }
         // Catalog and saved selections only. Opening this picker never verifies a connection.
         .task(id: backendRaw) { updateConnectors() }
+        .task {
+            if let source = ProtectedLocalSource(rawValue: pendingProtectedSource) { connectProtectedSource(source) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            fdaGranted = Permissions.hasFullDiskAccess()   // may have changed in System Settings
             updateConnectors()
+        }
+        .sheet(item: $protectedSource, onDismiss: { pendingProtectedSource = "" }) { source in
+            SourceAccessSheet(source: source, onStopReading: isProtectedSourceSelected(source) ? {
+                stopReading(source)
+                pendingProtectedSource = ""
+                protectedSource = nil
+            } : nil) {
+                pendingProtectedSource = ""
+                protectedSource = nil
+                // Present the source picker only after the permission sheet has dismissed.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(250))
+                    openProtectedSource(source)
+                }
+            }
         }
         .sheet(isPresented: $showWhatsAppPicker) {
             ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
@@ -127,16 +131,40 @@ struct KnowledgeSourcesPicker: View {
         .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
     }
 
-    // MARK: - Full Disk Access fix-it (only when missing)
+    /// Clicking a protected app is explicit intent. Merely showing its chip never opens a
+    /// database, asks for FDA, or enables a source. The final chat/account choice owns opt-in.
+    private func connectProtectedSource(_ source: ProtectedLocalSource) {
+        pendingProtectedSource = source.rawValue
+        if source.isReadable { pendingProtectedSource = ""; openProtectedSource(source) }
+        else { protectedSource = source }
+    }
 
-    private var fdaLine: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            StatusLine(title: "Full Disk Access is off, so Mail, WhatsApp, iMessage & Notes can't be read.",
-                       health: .warn, note: "not granted", fixTitle: "Grant…") {
-                Permissions.openFullDiskAccessSettings()
-            }
-            SettingsProse("Everything is still read locally; Full Disk Access is just how macOS lets Sentient open those databases. After granting, relaunch Sentient.")
+    private func isProtectedSourceSelected(_ source: ProtectedLocalSource) -> Bool {
+        switch source {
+        case .whatsapp: runWhatsApp
+        case .imessage: runIMessage
+        case .notes: runNotes
+        case .mail: !appleMailAccounts.isEmpty
         }
+    }
+
+    private func stopReading(_ source: ProtectedLocalSource) {
+        switch source {
+        case .whatsapp: runWhatsApp = false
+        case .imessage: runIMessage = false
+        case .notes: runNotes = false
+        case .mail: appleMailAccounts = ""; AppleMailResearchAccess.save(accounts: [])
+        }
+    }
+
+    private func openProtectedSource(_ source: ProtectedLocalSource) {
+        switch source {
+        case .whatsapp: showWhatsAppPicker = true
+        case .imessage: showIMessagePicker = true
+        case .mail: showAppleMailPicker = true
+        case .notes: runNotes = true
+        }
+        selectionCount = SourceSelection.selectionCount
     }
 
     // MARK: - Local sources
@@ -145,13 +173,13 @@ struct KnowledgeSourcesPicker: View {
         SettingsGroup(label: "Folders on this Mac") {
             ChipFlow {
                 KnowledgeSourcePill(label: "Desktop", systemImage: "desktopcomputer", selected: runDesktop) {
-                    toggleConnector($runDesktop)
+                    runDesktop.toggle()
                 }
                 KnowledgeSourcePill(label: "Downloads", systemImage: "arrow.down.to.line", selected: runDownloads) {
-                    toggleConnector($runDownloads)
+                    runDownloads.toggle()
                 }
                 KnowledgeSourcePill(label: "Documents", systemImage: "doc.text", selected: runDocuments) {
-                    toggleConnector($runDocuments)
+                    runDocuments.toggle()
                 }
                 ForEach(customRoots, id: \.self) { url in
                     KnowledgeSourcePill(label: url.lastPathComponent, systemImage: "folder",
@@ -180,19 +208,19 @@ struct KnowledgeSourcesPicker: View {
     }
 
     @ViewBuilder private var conversationPills: some View {
-        if WhatsAppSource.isInstalled {
+        if SourceSelection.shouldShowWhatsApp {
             KnowledgeSourcePill(label: "WhatsApp",
-                                detail: whatsappChats.isEmpty ? "Choose the chats that matter"
-                                    : "\(whatsappChats.count) chats selected · Manage",
+                                detail: protectedDetail(.whatsapp, selected: runWhatsApp && !whatsappChats.isEmpty,
+                                    ready: whatsappChats.isEmpty ? "Choose the chats that matter" : "\(whatsappChats.count) chats selected · Manage"),
                                 asset: "WhatsAppMark", selected: runWhatsApp && !whatsappChats.isEmpty,
-                                featured: true) { showWhatsAppPicker = true }
+                                featured: true) { connectProtectedSource(.whatsapp) }
                 .frame(minWidth: 235)
         }
         KnowledgeSourcePill(label: "iMessage",
-                            detail: imessageChats.isEmpty ? "Choose the chats that matter"
-                                : "\(imessageChats.count) chats selected · Manage",
+                            detail: protectedDetail(.imessage, selected: runIMessage && !imessageChats.isEmpty,
+                                ready: imessageChats.isEmpty ? "Choose the chats that matter" : "\(imessageChats.count) chats selected · Manage"),
                             asset: "IMessageMark", selected: runIMessage && !imessageChats.isEmpty,
-                            featured: true) { showIMessagePicker = true }
+                            featured: true) { connectProtectedSource(.imessage) }
             .frame(minWidth: 235)
     }
 
@@ -224,15 +252,18 @@ struct KnowledgeSourcesPicker: View {
     private var emailColumn: some View {
         let mailSupported = AppleMailSource.isSupported
         return VStack(alignment: .leading, spacing: 9) {
-            KnowledgeSourcePill(label: "Gmail", asset: "GmailMark", selected: runGmail,
-                                featured: true, locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
+            KnowledgeSourcePill(label: "Gmail", detail: runGmail && !SourceSelection.hostedSourceReady("gmail") ? "Connection needs attention · Manage" : nil,
+                                asset: "GmailMark", selected: runGmail,
+                                featured: true, locked: CodexAuth.connectorsLocked && !runGmail) { showGmailConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
-            KnowledgeSourcePill(label: "Apple Mail", detail: mailSupported ? nil : "Requires macOS 26",
+            KnowledgeSourcePill(label: "Apple Mail", detail: mailSupported
+                                ? protectedDetail(.mail, selected: !appleMailAccounts.isEmpty, ready: nil) : "Requires macOS 26",
                                 asset: "AppleMailMark", selected: !appleMailAccounts.isEmpty,
-                                featured: true, locked: !mailSupported) {
-                showAppleMailPicker = true
+                                featured: true, locked: !mailSupported && appleMailAccounts.isEmpty) {
+                if mailSupported { connectProtectedSource(.mail) }
+                else { appleMailAccounts = ""; AppleMailResearchAccess.save(accounts: []) }
             }
             .saturation(mailSupported ? 1 : 0)
             .accessibilityValue(!mailSupported ? "Requires macOS 26 or later"
@@ -246,8 +277,9 @@ struct KnowledgeSourcesPicker: View {
 
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
-            KnowledgeSourcePill(label: "Google Calendar", asset: "GoogleCalendarMark", selected: runCalendar,
-                                featured: true, locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
+            KnowledgeSourcePill(label: "Google Calendar", detail: runCalendar && !SourceSelection.hostedSourceReady("calendar") ? "Connection needs attention · Manage" : nil,
+                                asset: "GoogleCalendarMark", selected: runCalendar,
+                                featured: true, locked: CodexAuth.connectorsLocked && !runCalendar) { showCalendarConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
                 connectorPill(source, featured: true)
             }
@@ -274,8 +306,9 @@ struct KnowledgeSourcesPicker: View {
                     }) { source in
                         connectorPill(source)
                     }
-                    KnowledgeSourcePill(label: "Apple Notes", asset: "AppleNotesMark", selected: runNotes) {
-                        toggleConnector($runNotes)
+                    KnowledgeSourcePill(label: "Apple Notes", detail: protectedDetail(.notes, selected: runNotes, ready: nil),
+                                        asset: "AppleNotesMark", selected: runNotes) {
+                        if runNotes { runNotes = false } else { connectProtectedSource(.notes) }
                     }
                     // Connect More Apps is hidden for this release until discovery can
                     // reliably notice new hosted connections. Curated setup remains available.
@@ -286,8 +319,13 @@ struct KnowledgeSourcesPicker: View {
 
     private func connectorPill(_ source: ConnectorSource, featured: Bool = false) -> some View {
         ConnectorPill(source: source,
-                      locked: source.usesHostedConnection ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly,
+                      locked: !ConnectorRegistry.isKBEnabled(source.connector?.slug ?? source.serviceSlug)
+                        && (source.usesHostedConnection ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly),
                       featured: featured) { selectedConnector = source }
+    }
+
+    private func protectedDetail(_ source: ProtectedLocalSource, selected: Bool, ready: String?) -> String? {
+        selected && !source.isReadable ? "Access or synced data needed · Manage" : ready
     }
 
     private func sourceNote(_ text: String, symbol: String? = nil) -> some View {
@@ -304,23 +342,8 @@ struct KnowledgeSourcesPicker: View {
         selectionCount = SourceSelection.selectionCount
     }
 
-    // MARK: - Toggle guards (the four-selection minimum)
-
-    /// The guard fires only on the 4 → 3 drop: onboarding guarantees users start at four or
-    /// more, and a pre-onboarding dev state below four must never get trapped by the rule.
-    private var atMinimum: Bool { SourceSelection.selectionCount == SourceSelection.minimumSelections }
-
-    /// Every selection counts as one (folders included), so one guard covers every chip.
-    private func toggleConnector(_ flag: Binding<Bool>) {
-        // Onboarding can freely revise the selection; its Start Analysis button owns the gate.
-        if context == .settings && flag.wrappedValue && atMinimum { return flash() }
-        flag.wrappedValue.toggle()
-    }
-
-    private func flash() {
-        flashMinimum = true
-        Task { try? await Task.sleep(for: .seconds(1.6)); flashMinimum = false }
-    }
+    // Selections are always revocable. The three-source requirement gates starting personal
+    // setup, never a user's ability to stop reading a source in Settings.
 
     private func chooseFolder() {
         let panel = NSOpenPanel()
@@ -331,5 +354,49 @@ struct KnowledgeSourcesPicker: View {
         panel.message = "Add a folder for Sentient to read."
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { CustomRoots.add(url) }
+    }
+}
+
+/// Source-specific explanation, reached only by choosing a protected local source. No automatic
+/// relaunch: the user can leave this pending while a Sidekick task continues in another window.
+private struct SourceAccessSheet: View {
+    let source: ProtectedLocalSource
+    var onStopReading: (() -> Void)?
+    var onReady: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var checked = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Connect \(source.title)").display(22)
+            Text("macOS protects \(source.title)’s local data with Full Disk Access. Allow Sentient in System Settings to choose what it can read from this source.")
+                .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Your selection stays optional. Granting access does not select any other app or folder.")
+                .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+            if checked {
+                Text("Access is not ready yet. If you already allowed Sentient, finish any active tasks and relaunch the app. Also make sure \(source.title) has data synced to this Mac.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let onStopReading {
+                Button("Stop reading \(source.title)", action: onStopReading)
+            }
+            Button("Open Full Disk Access Settings") { Permissions.openFullDiskAccessSettings() }
+            Button("Relaunch Sentient") { _ = SafeAppRelaunch.shared.relaunchForPersonalSetup() }
+                .disabled(!SafeAppRelaunch.shared.canRelaunch)
+            if let reason = SafeAppRelaunch.shared.statusReason {
+                Text(reason).font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+            }
+            HStack {
+                Button("Later") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Check again") {
+                    if source.isReadable { onReady() }
+                    else { checked = true }
+                }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(30).frame(width: 440).background(Theme.bg)
     }
 }

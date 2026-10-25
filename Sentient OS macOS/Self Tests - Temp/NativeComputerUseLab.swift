@@ -4,6 +4,7 @@
 // Doc: Documentation - General - Self-Testing (Eval Harness).md
 import AppKit
 import Carbon
+import Darwin
 import Foundation
 
 nonisolated enum NativeComputerUseLab {
@@ -22,7 +23,7 @@ nonisolated enum NativeComputerUseLab {
             "bundlePath": Bundle.main.bundlePath, "pid": ProcessInfo.processInfo.processIdentifier,
             "started": Date().timeIntervalSince1970]
         persist(result)
-        if command == "helper-takeover" || command.hasPrefix("doctor") {
+        if command == "helper-takeover" || command == "permission-readiness" || command.hasPrefix("doctor") {
             // AEDeterminePermission can hang on a deliberately suspended foreign helper.
             // The production gate performs this check after replacing it; preserve that order.
             result["appleEventsBefore"] = "checked_by_production_gate_after_takeover"
@@ -36,12 +37,63 @@ nonisolated enum NativeComputerUseLab {
         result["accessibility"] = AXIsProcessTrusted()
         result["screenRecording"] = CGPreflightScreenCaptureAccess()
         result["nativeHelperPresent"] = FileManager.default.isExecutableFile(atPath: helper.path)
-        result["cuaInstalled"] = CuaDriver.isInstalled
+        if command != "permission-readiness" { result["cuaInstalled"] = CuaDriver.isInstalled }
         persist(result)
         Log("NATIVE LAB preflight: \(command), AE=\(result["appleEventsBefore"]!), AX=\(result["accessibility"]!), Screen=\(result["screenRecording"]!)")
         do {
             switch command {
             case "preflight": break
+            case "permission-readiness":
+                // Real app-owned AX/capture proof, with no model, actions or permission request.
+                // Optional TCC reads are evidence only; deny them in a fixture sandbox to prove
+                // readiness remains independent of FDA. Never reset the user's real grants.
+                let fixtureRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+                guard let runtimePath = env["SENTIENT_CODEX_RUNTIME_ROOT"],
+                      URL(fileURLWithPath: runtimePath).standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(fixtureRoot.path + "/"),
+                      (try? String(contentsOf: fixtureRoot.appendingPathComponent(".native-permission-fixture"), encoding: .utf8)) == "1\n" else {
+                    throw LabError.missingFixture
+                }
+                result["isolatedRuntimeVerified"] = true
+                func tccReadObservation(_ path: String) -> (readable: Bool, denied: Bool) {
+                    let descriptor = Darwin.open(path, O_RDONLY | O_CLOEXEC)
+                    if descriptor >= 0 { Darwin.close(descriptor); return (true, false) }
+                    return (false, errno == EPERM || errno == EACCES)
+                }
+                let systemTCC = tccReadObservation("/Library/Application Support/com.apple.TCC/TCC.db")
+                let userTCC = tccReadObservation(FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db").path)
+                result["systemTCCReadable"] = systemTCC.readable
+                result["userTCCReadable"] = userTCC.readable
+                result["systemTCCDenyConfirmed"] = systemTCC.denied
+                result["userTCCDenyConfirmed"] = userTCC.denied
+                if env["LAB_DENY_TCC_REQUIRED"] == "1" {
+                    guard systemTCC.denied, userTCC.denied else { throw LabError.permissionDatabaseReadable }
+                }
+                let axObservation = Permissions.tccState(service: "kTCCServiceAccessibility", clientBundleID: helperID)
+                let captureObservation = Permissions.tccState(service: "kTCCServiceScreenCapture", clientBundleID: helperID)
+                result["helperAccessibilityTCCReadable"] = axObservation != .unavailable
+                result["helperScreenRecordingTCCReadable"] = captureObservation != .unavailable
+                if env["LAB_DENY_TCC_REQUIRED"] == "1" {
+                    guard axObservation == .unavailable, captureObservation == .unavailable else { throw LabError.permissionDatabaseReadable }
+                }
+                let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+                let running = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration)
+                let automation = await Permissions.nativeAutomationState(ask: false)
+                result["automationGranted"] = automation == .granted
+                guard automation == .granted else { throw OpenAIComputerUse.RuntimeError.permissionRequired }
+                do {
+                    try await NativePermissionCheck.shared.check(configuration: configuration, helper: running)
+                    let proof = NativePermissionCheck.shared.snapshot
+                    result["helperAccessibilityVerified"] = proof.accessibility == .verified
+                    result["helperScreenRecordingVerified"] = proof.screenRecording == .verified
+                    result["permissionReadinessVerified"] = proof.isReady
+                    await NativePermissionCheck.shared.close()
+                    result["proofClearedAfterClose"] = !NativePermissionCheck.shared.snapshot.isReady
+                    guard proof.isReady else { throw LabError.invalidCapture }
+                } catch {
+                    await NativePermissionCheck.shared.close()
+                    throw error
+                }
             case "doctor-chatgpt", "doctor-claude":
                 let saved = UserDefaults.standard.object(forKey: ComputerUseDoctor.savedReportKey)
                 defer {
@@ -395,6 +447,6 @@ nonisolated enum NativeComputerUseLab {
     private static func status(_ value: AgentStatus) -> String {
         switch value { case .done: "done"; case .none: "none"; case .couldNot(let reason): "couldNot: " + reason }
     }
-    private enum LabError: Error { case missingPrompt, invalidCapture, missingConflict, takeoverFailed }
+    private enum LabError: Error { case missingPrompt, invalidCapture, missingConflict, takeoverFailed, missingFixture, permissionDatabaseReadable }
 }
 #endif

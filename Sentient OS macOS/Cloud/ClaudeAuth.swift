@@ -19,6 +19,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 nonisolated enum ClaudeAuth {
 
@@ -28,6 +29,17 @@ nonisolated enum ClaudeAuth {
         let loggedIn: Bool
         let plan: String?
         let email: String?
+        var organizationID: String? = nil
+
+        /// Local-only fingerprint. The email and organization returned by auth status are
+        /// never persisted in connector state or diagnostics.
+        var accountIdentity: String? {
+            guard loggedIn, let email = email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !email.isEmpty else { return nil }
+            let organization = organizationID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let identity = "v1:\(email.utf8.count):\(email):\(organization)"
+            return SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        }
 
         static let loggedOut = Status(loggedIn: false, plan: nil, email: nil)
     }
@@ -36,6 +48,48 @@ nonisolated enum ClaudeAuth {
     // point (a subprocess per model pick would be absurd). Production keys (the dbg.* law).
     static let loggedInKey = "claude.loggedIn"
     static let planKey = "claude.plan"
+    static let accountIdentityKey = "claude.accountIdentity.v1"
+    private static let legacyConnectorAccountKey = "claude.legacyConnectorAccount.v1"
+    private static let readinessRevisionKey = "claude.readinessRevision.v1"
+    private static let identityLock = NSLock()
+    nonisolated(unsafe) private static var observedIdentityThisProcess = false // guarded by identityLock
+
+    struct ReadinessScope: Equatable, Sendable {
+        let accountIdentity: String
+        let revision: Int
+    }
+    static var cachedAccountIdentity: String? { readinessScope?.accountIdentity }
+    static var legacyConnectorAccountIdentity: String? {
+        identityLock.withLock {
+            let value = UserDefaults.standard.string(forKey: legacyConnectorAccountKey)
+            return value?.isEmpty == false ? value : nil
+        }
+    }
+    static var readinessScope: ReadinessScope? {
+        identityLock.withLock {
+            guard observedIdentityThisProcess, cachedLoggedIn,
+                  let value = UserDefaults.standard.string(forKey: accountIdentityKey),
+                  !value.isEmpty else { return nil }
+            return .init(accountIdentity: value,
+                revision: UserDefaults.standard.integer(forKey: readinessRevisionKey))
+        }
+    }
+
+    /// Explicit login can change the account before a status probe finishes. Retire its proof
+    /// immediately; persisted source choices and knowledge remain intact.
+    static func beginAccountChange() {
+        identityLock.withLock {
+            let d = UserDefaults.standard
+            d.set(d.integer(forKey: readinessRevisionKey) &+ 1, forKey: readinessRevisionKey)
+            d.removeObject(forKey: accountIdentityKey)
+            observedIdentityThisProcess = false
+            // If no old account was observed yet, a deliberate new login must not adopt an
+            // unidentified legacy connector cache for the account being signed into.
+            if d.object(forKey: legacyConnectorAccountKey) == nil {
+                d.set("", forKey: legacyConnectorAccountKey)
+            }
+        }
+    }
 
     static var cachedLoggedIn: Bool { UserDefaults.standard.bool(forKey: loggedInKey) }
     static var cachedPlan: String? {
@@ -58,8 +112,9 @@ nonisolated enum ClaudeAuth {
     /// either way) and cache the verdict. Called from Settings/health refreshes and after a
     /// login — never per run (validate() caches availability the same way codex does).
     static func refresh() async -> Status {
+        let revision = identityLock.withLock { UserDefaults.standard.integer(forKey: readinessRevisionKey) }
         guard let bin = ClaudeCLI.locateBinary() else {
-            cache(.loggedOut)
+            cache(.loggedOut, expectedRevision: revision)
             return .loggedOut
         }
         guard let out = try? await CodexCLI.executeAsync(binary: bin, args: ["auth", "status"],
@@ -70,7 +125,7 @@ nonisolated enum ClaudeAuth {
             return Status(loggedIn: cachedLoggedIn, plan: cachedPlan, email: nil)
         }
         let status = parse(out.stdout) ?? .loggedOut
-        cache(status)
+        cache(status, expectedRevision: revision)
         return status
     }
 
@@ -82,21 +137,37 @@ nonisolated enum ClaudeAuth {
         let plan = (obj["subscriptionType"] as? String)?.lowercased()
         return Status(loggedIn: loggedIn,
                       plan: (plan?.isEmpty == false) ? plan : nil,
-                      email: obj["email"] as? String)
+                      email: obj["email"] as? String,
+                      organizationID: obj["orgId"] as? String)
     }
 
-    private static func cache(_ status: Status) {
-        let d = UserDefaults.standard
-        d.set(status.loggedIn, forKey: loggedInKey)
-        if let plan = status.plan { d.set(plan, forKey: planKey) }
-        else { d.removeObject(forKey: planKey) }
+    private static func cache(_ status: Status, expectedRevision: Int) {
+        identityLock.withLock {
+            let d = UserDefaults.standard
+            // A result begun before an explicit login/account transition cannot restore old proof.
+            guard d.integer(forKey: readinessRevisionKey) == expectedRevision else { return }
+            observedIdentityThisProcess = true
+            let identity = status.accountIdentity
+            if d.string(forKey: accountIdentityKey) != identity {
+                d.set(expectedRevision &+ 1, forKey: readinessRevisionKey)
+            }
+            if let identity { d.set(identity, forKey: accountIdentityKey) }
+            else { d.removeObject(forKey: accountIdentityKey) }
+            if let identity, d.object(forKey: legacyConnectorAccountKey) == nil {
+                d.set(identity, forKey: legacyConnectorAccountKey)
+            }
+            d.set(status.loggedIn, forKey: loggedInKey)
+            if let plan = status.plan { d.set(plan, forKey: planKey) }
+            else { d.removeObject(forKey: planKey) }
+        }
     }
 
     /// Wipe the cached identity (FactoryReset / Uninstall). The login itself belongs to the
     /// user's Claude Code (shared ~/.claude + Keychain) — never touched from here.
     static func destroy() {
         let d = UserDefaults.standard
-        [loggedInKey, planKey, ClaudeCLI.rateLimitResetsAtKey,
+        beginAccountChange()
+        [loggedInKey, planKey, accountIdentityKey, legacyConnectorAccountKey, ClaudeCLI.rateLimitResetsAtKey,
          ClaudeCLI.rateLimitTypeKey].forEach { d.removeObject(forKey: $0) }
     }
 }

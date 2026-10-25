@@ -31,6 +31,8 @@ final class CommandRunModel {
 
     var isRunning = false
     private(set) var isPreparing = false
+    private var permissionWait: PermissionWaitDraft.Snapshot?
+    private var permissionWaitCleanupFailed = false
     private(set) var isClearingChat = false
     #if DEBUG
     /// Isolated UI previews can exercise Clear chat without allowing a provider launch.
@@ -144,10 +146,13 @@ final class CommandRunModel {
                         return
                     }
                     do {
+                        guard let owner = self, owner.runID == generation else { throw CancellationError() }
+                        try owner.beginPermissionWait(text: task0, reply: reply)
                         try await ComputerUseGate.shared.waitUntilReady()
                         try Task.checkCancellation()
-                        self?.isPreparing = false
-                        self?.statusLine = CommandRouter.isActive ? "Thinking through your task"
+                        try owner.finishPermissionWait()
+                        owner.isPreparing = false
+                        owner.statusLine = CommandRouter.isActive ? "Thinking through your task"
                                                                  : "Starting \(mode.promptPhrase)…"
                         // Capture after required permissions settle. Frames go to the user's
                         // own model provider and are deleted when this request ends.
@@ -233,6 +238,7 @@ final class CommandRunModel {
                                            board: .refused, statusPresent: false, interruption: .unconfirmed)
                         }
                     } catch {
+                        self?.endPermissionWaitAfterFailure()
                         let secs = Int(Date().timeIntervalSince(started))
                         if Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled {
                             Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
@@ -305,13 +311,13 @@ final class CommandRunModel {
         return true
     }
 
-    private func presentFailure(_ line: String) {
+    private func presentFailure(_ line: String, upgradeOffer: SidekickUpgradeOffer? = nil) {
         guard !isDemo, !recoveryCancelled else { return }
         interaction?.recordRecovery("final_failure", error: line)
         let generation = runID
         let retry = retryAction
         let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
-        recovery.present(.failure(id: UUID(), error: line)) { [weak self] resolution in
+        recovery.present(.failure(id: UUID(), error: line, upgradeOffer: upgradeOffer)) { [weak self] resolution in
             guard let self, self.runID == generation else { return }
             guard case .answered(let answer) = resolution else {
                 if case .cancelled(let cause) = resolution, cause != .interrupted {
@@ -448,6 +454,7 @@ final class CommandRunModel {
     }
 
     func stop(cause: SidekickTaskEnd.StopCause = .user) {
+        cancelPermissionWait()
         guard !recoveryCancelled else { return }
         if isRunning, stopCause == nil { stopCause = cause }
         recoveryCancelled = true; queuedRetry = nil
@@ -461,6 +468,53 @@ final class CommandRunModel {
         // The callback covers the brief interval before task ownership transfers. Afterwards
         // cancel the app-owned Task; completion still arrives once from the fire's unwind.
         if let externalStop { externalStop() } else { task?.cancel() }
+    }
+
+    private func beginPermissionWait(text: String, reply: SidekickConversationEvent.ReplyReference?) throws {
+        guard let generation = conversation.generation else { throw PermissionWaitDraft.Failure.unavailable }
+        let snapshot = PermissionWaitDraft.Snapshot(generation: generation, runID: runID, text: text, reply: reply)
+        try PermissionWaitDraft.save(snapshot)
+        permissionWaitCleanupFailed = false
+        permissionWait = snapshot
+    }
+
+    private func finishPermissionWait() throws {
+        guard let waiting = permissionWait, waiting.runID == runID else { throw PermissionWaitDraft.Failure.changed }
+        try PermissionWaitDraft.clear(matching: waiting.runID)
+        permissionWait = nil
+    }
+
+    private func cancelPermissionWait() {
+        if let waiting = permissionWait {
+            do { try PermissionWaitDraft.cancel(matching: waiting.runID) }
+            catch { permissionWaitCleanupFailed = true }
+        }
+        permissionWait = nil
+    }
+
+    private func endPermissionWaitAfterFailure() {
+        if !SafeAppRelaunch.shared.isApplicationTerminating { cancelPermissionWait() }
+    }
+
+    var canSavePermissionWaitForRelaunch: Bool {
+        isRunning && isPreparing && !isExternal && permissionWait?.runID == runID
+            && permissionWait?.generation == conversation.generation
+            && conversation.draft.isEmpty && conversation.replyReference == nil
+    }
+
+    /// Only the exact pre-inference waiter can be cancelled by this explicit repair action.
+    /// The restored request is a draft; the user chooses whether to submit it after relaunch.
+    func savePermissionWaitForRelaunch() async -> Bool {
+        guard canSavePermissionWaitForRelaunch, let waiting = permissionWait else { return false }
+        conversation.draft = waiting.text
+        conversation.replyReference = waiting.reply
+        let waitingRun = runID
+        stop()
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        while isRunning, runID == waitingRun, ProcessInfo.processInfo.systemUptime < deadline {
+            do { try await Task.sleep(for: .milliseconds(20)) } catch { return false }
+        }
+        return !isRunning && runID == waitingRun
     }
 
     /// Teardown cannot remove runtime/data while an owned task still has effects in flight.
@@ -637,11 +691,13 @@ final class CommandRunModel {
         finish(SidekickTaskEnd(outcome: outcome, stop: stopCause), line: line)
     }
 
-    private func finish(_ end: SidekickTaskEnd, line: String) {
+    private func finish(_ end: SidekickTaskEnd, line: String, upgradeOffer: SidekickUpgradeOffer? = nil) {
         let outcome = end.outcome
         // A path-monitor hint must not overwrite a successful result or disguise the
         // actual terminal error. "Retrying" is shown only while a run is still alive.
-        var line = outcome == .stopped ? "■ stopped" : line
+        var line = outcome == .stopped
+            ? (permissionWaitCleanupFailed ? "Stopped. A saved permission draft could not be cleared." : "■ stopped") : line
+        permissionWaitCleanupFailed = false
         stopWatchingConnectivity()
         if !isDemo {
             interaction?.personalization?.finish(success: outcome == .success && !recoveryCancelled)
@@ -652,6 +708,9 @@ final class CommandRunModel {
             let saved = conversation.finish(recording, outcome: .init(rawValue: outcome.rawValue) ?? .failed,
                 status: outcome == .stopped ? (stopCause == .user ? "[Stopped by user]" : "Stopped before completion") : line,
                 finalText: lastAttemptDetail)
+            if saved, outcome == .success, !recoveryCancelled, source != "proactive_card" {
+                PersonalSetupProgress.recordSuccessfulTask()
+            }
             if !saved { line = outcome == .stopped ? "Stopped, but history couldn't be saved." : "Task ended, but history couldn't be saved. Check the result before retrying." }
             SidekickDiagnostics.event(.task, outcome: outcome == .stopped ? .stopped : .completed,
                 reason: outcome == .failed ? .providerFailure : .none, taskID: recording.taskID,
@@ -669,7 +728,7 @@ final class CommandRunModel {
         externalStop = nil
         task = nil
         if let retry = queuedRetry { queuedRetry = nil; retry(); return }
-        if outcome == .failed, !isDemo, !recoveryCancelled { presentFailure(line) }
+        if outcome == .failed, !isDemo, !recoveryCancelled { presentFailure(line, upgradeOffer: upgradeOffer) }
         else { onFinished?(outcome) }
         statusClearTask?.cancel()
         statusClearTask = Task { [weak self] in
@@ -845,7 +904,13 @@ final class CommandRunModel {
         Analytics.signal("ComputerUse.finished",
                          parameters: end.parameters.merging(["source": source, "method": executedMethod]) { _, new in new },
                          floatValue: Date().timeIntervalSince(runStarted))
-        finish(end, line: line)
+        let upgradeOffer: SidekickUpgradeOffer?
+        if end.outcome == .failed, let error, let recording = conversationTask,
+           let backend = ModelBackend(rawValue: recording.backend) {
+            upgradeOffer = SidekickUpgradeOffer.forProviderFailure(error, backend: backend,
+                planRaw: CodexAuth.currentPlan()?.raw, assertedPlus: CodexAuth.assertedPlus)
+        } else { upgradeOffer = nil }
+        finish(end, line: line, upgradeOffer: upgradeOffer)
     }
 
     private static func short(_ error: Error) -> String {

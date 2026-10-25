@@ -155,10 +155,10 @@ import UniformTypeIdentifiers
             report?.permissions = ["automation": String(describing: automation),
                 "sentientScreenRecording": screen ? "granted" : "denied",
                 "helperAccessibilityCached": ax.rawValue, "helperScreenRecordingCached": capture.rawValue]
-            // An unreadable TCC database is unknown, not proof of denial. The actual probe
-            // may still succeed; an explicit denied/unrequested grant points to setup first.
-            guard screen, automation == .granted, ax != .denied, ax != .notAsked,
-                  capture != .denied, capture != .notAsked else {
+            // Stored helper TCC rows are optional diagnostic evidence only: they can describe
+            // another signing identity or be unreadable without FDA. The effective probe below
+            // establishes helper capabilities; no database observation blocks that repair.
+            guard screen, automation == .granted else {
                 report?.update(stage, .needsAttention); report?.outcome = .permissionsNeeded; return
             }
             report?.update(stage, .passed)

@@ -1,8 +1,9 @@
 # Self-Testing: the headless eval harness
 
 How we verify backend behavior: run the REAL app binary headless with an environment variable, exercise
-the actual code paths, print the results, exit. No UI, no guessing. Self-tests are scaffolding: write one
-to nail a behavior, then delete it. That is why `Self Tests - Temp/` is named Temp and kept empty.
+the actual code paths, print the results, exit. `Self Tests - Temp/` is a historical folder name;
+the checked-in DEBUG-only fixtures and their Scripts runners provide repeatable regression evidence.
+Native UI fixtures additionally render and interact with only owned, isolated windows.
 
 The eval ladder, fastest to most real: the Xcode MCP `ExecuteSnippet` (run a snippet in a file's
 context, see prints) → a self-test (the real code over real data, this doc) → a full app run.
@@ -26,7 +27,9 @@ context, see prints) → a self-test (the real code over real data, this doc) �
    }
    ```
 
-2. **The hook.** Re-add the one-line call in the app struct's `init()` (`App/Sentient_OS_macOSApp.swift`; the placeholder comment marks the spot), under `#if DEBUG`, so it runs before the UI launches. Note `main.swift` is the real entry and branches into the wake helper first.
+2. **The hook.** The DEBUG dispatcher already exists. `main.swift` routes isolated `sidekickapp` and
+   `nativecua` modes before AppState; use those validated bootstraps for real-app UI/native tests.
+   The ordinary app initializer retains `SelfTest.runIfRequested()` for older headless fixtures.
 3. **The test.** Call the real code (`Engine`, a connector, `CodexCLI`, `MirrorClient`, …), print or assert, and use `Log()` so `/tmp/sentient-dev.log` carries it.
 
 Knobs are just more environment variables: `SENTIENT_MODEL_PATH` (the on-device model),
@@ -38,9 +41,29 @@ DEBUG-only by design.
 
 Self-tests launch the **Debug binary directly**, not through Xcode's Run.
 
-1. Build the Debug app through the Xcode GUI (the Xcode MCP `BuildProject` or ⌘B): that build owns the real accumulated database and knowledge base at `~/Library/Developer/Xcode/DerivedData/Sentient_OS_macOS-<hash>/Build/Products/Debug/`. A CLI `xcodebuild` must be isolated with `-derivedDataPath /tmp/…` (it shares the GUI's DerivedData otherwise and leaves an ad-hoc-signed LiteRT dylib that breaks the next Run); an isolated build is a fresh app with no data.
-2. Run headless: `SENTIENT_SELFTEST=mything SENTIENT_MODEL_PATH=… "<Debug>/Sentient OS.app/Contents/MacOS/Sentient OS"`. `AppState` skips every launch side effect under `SENTIENT_SELFTEST` (the scheduler, the hotkey, the updater, the model download, the codex install), and `Notify` is silent, so a test can never trip a password dialog or a permission prompt.
-3. Inspect, iterate, then DELETE the test.
+1. Build the Debug app through Xcode or use an isolated CLI `xcodebuild -derivedDataPath /tmp/…`. Do not reuse the GUI's DerivedData: CLI signing can replace its LiteRT dylib and break the next Run. A separate build directory isolates build products only; a normally launched app with the same bundle identity still uses the user's preferences and Application Support. Use a runner that establishes isolated defaults and data roots before constructing app services.
+2. Run headless: `SENTIENT_SELFTEST=mything SENTIENT_MODEL_PATH=… "<Debug>/Sentient OS.app/Contents/MacOS/Sentient OS"`. `AppState` skips automatic launch side effects under `SENTIENT_SELFTEST` (scheduler, hotkey, updater, model download and Codex install), and `Notify` is silent. The flag alone does not isolate preferences or make arbitrary test code safe: each fixture must guard its own explicit I/O and permission actions.
+3. Inspect receipts and captures. Keep focused regression checks; temporary exploratory fixtures can be removed.
+
+## Onboarding regression checks
+
+`test_personal_setup_flow.py`, `test_source_consent.py`, `test_processing_source_readiness.py`,
+`test_health_requirements.py`, and `test_sidekick_plan_recovery.py` compile actual policies with
+synthetic collaborators and isolated preferences. Permission readiness, pending-request and safe
+relaunch scripts exercise cancellation, live-proof lifetime and subprocess handoff without real
+permissions or model calls.
+
+Run `test_personal_setup_home.py --app <signed Debug app>` and `test_personal_setup_sources.py --app
+<signed Debug app>` for native UI verification. They install a process-local preference suite before
+AppState, redirect app support/vault data to marked fixture roots, and prohibit provider submission.
+Receipts include interaction/layout assertions and owned-window captures. Optional `--manual-review`
+on the Home runner holds the fixture for CUA inspection, then runs the same assertions.
+
+`test_native_permissions_no_fda.py --app <signed Debug app>` is the live model-free capability
+check. It copies only verified runtime code, denies TCC database access and live app-data access,
+captures only its synthetic window, and writes boolean evidence. It never changes TCC or logs in.
+It deliberately refuses to displace a competing computer-use helper; run it only when that helper's
+owner can safely release it. This is separate from the synthetic permission regression suites.
 
 ## Modes that existed and can be recreated
 
