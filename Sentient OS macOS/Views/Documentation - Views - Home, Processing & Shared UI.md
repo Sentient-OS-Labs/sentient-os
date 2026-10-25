@@ -49,7 +49,7 @@ drops the window's 1040×800 minimum during a takeover for screen recordings.
 
 ## The home (`HomeView`)
 
-Before personal setup, Home gives Sidekick the main workspace and keeps a compact setup invitation
+Before personal setup, Home gives Sidekick the main workspace and keeps a 360-point setup sidebar
 on the right. This is controlled by `AppState.hasCompletedPersonalSetup`, independently of the
 `ProcessingCoordinator.initialComplete` knowledge milestone. The setup panel appears only for the
 real deck and unfinished personal setup; completed users retain their real cards. A legacy completed
@@ -59,7 +59,7 @@ the user into a reduced onboarding mode. Upgrade or model-change help belongs to
 or usage failure. The old knowledge-only layout remains available for explicit diagnostic previews;
 its setup link is retained for fixture compatibility, not as the Free/Go product flow.
 
-The four reward descriptions are followed by the orb and **Finish setup** at the bottom. The CTA
+The four reward descriptions lead directly to **Finish setup**, with no decorative orb. The CTA
 calls Root's `onFinishSetup`; the sources flow remains optional and does not own the conversation.
 All examples start closed. Selecting a reward opens its clearly labeled synthetic example in the
 left workspace; its upper-left X and Escape both dismiss it. This never changes the active surface,
@@ -68,8 +68,8 @@ conversation navigation closes any existing example. The transcript is not marke
 covered. The composer remains the same mounted instance throughout.
 
 Four suggestions above the composer fill its real draft and request keyboard focus; they do not
-submit. The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses soft pools from
-`GlowHalo.stops`, matching the Double Tap personal-context line. The durable successful-task milestone
+submit. The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses plain text
+without a colored glow. The durable successful-task milestone
 shifts emphasis to Finish setup without resetting chat or automatically opening setup. During pending
 setup, Analysis and the Double Tap lesson route to Finish setup; after setup they show the actual
 processing status. Paused and attention states explicitly say setup is saved, while Double Tap and

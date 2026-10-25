@@ -41,32 +41,32 @@ enum HomePersonalFeature: String, CaseIterable, Identifiable {
 }
 
 struct HomePersonalSetupPanel: View {
+    static let width: CGFloat = 360
     let selectedFeature: HomePersonalFeature?
     let emphasizeSetup: Bool
     let active: Bool
     var previewEnabled = true
     let onSelectFeature: (HomePersonalFeature) -> Void
     let onFinishSetup: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reducedMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Finish Sentient Setup to unlock:")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(SidekickStyle.ink)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, 10)
+                .padding(.bottom, 12)
 
             ForEach(HomePersonalFeature.allCases) { feature in
                 Button { onSelectFeature(feature) } label: {
                     HStack(alignment: .top, spacing: 9) {
                         Image(systemName: feature.symbol)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 14, weight: .medium))
                             .frame(width: 16).padding(.top, 2)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(feature.title).font(.system(size: 12, weight: .medium))
+                            Text(feature.title).font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(SidekickStyle.ink)
-                            Text(feature.detail).font(.system(size: 11.5))
+                            Text(feature.detail).font(.system(size: 13))
                                 .foregroundStyle(SidekickStyle.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -75,7 +75,7 @@ struct HomePersonalSetupPanel: View {
                             .font(.system(size: 9, weight: .medium)).padding(.top, 4)
                     }
                     .foregroundStyle(selectedFeature == feature ? SidekickStyle.ink : SidekickStyle.secondary)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.white.opacity(selectedFeature == feature ? 0.035 : 0))
                     .contentShape(Rectangle())
@@ -90,29 +90,26 @@ struct HomePersonalSetupPanel: View {
                 Rectangle().fill(.white.opacity(0.045)).frame(height: 1)
             }
 
-            // The rewards come first. The orb and the one setup action finish the panel.
-            Orb(size: 49, paused: !active || reducedMotion)
-                .frame(maxWidth: .infinity).padding(.top, 8)
-                .accessibilityHidden(true)
+            // The rewards lead directly to the one setup action.
             Button(action: onFinishSetup) {
                 HStack(spacing: 16) {
-                    Text("Finish setup").font(.system(size: 12.5, weight: .medium))
+                    Text("Finish setup").font(.system(size: 14, weight: .medium))
                     Spacer(minLength: 0)
                     Image(systemName: "arrow.right").font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(SidekickStyle.ink)
-                .padding(.horizontal, 15).frame(height: 42)
+                .padding(.horizontal, 17).frame(height: 46)
                 .background(Color(white: 0.105), in: Capsule())
                 .overlay(Capsule().strokeBorder(.white.opacity(emphasizeSetup ? 0.28 : 0.16), lineWidth: 1))
                 .contentShape(Capsule())
             }
             .buttonStyle(SidekickPressStyle())
             .background(GlowHalo(active: emphasizeSetup, intensity: 0.27, period: 12, animating: active))
-            .padding(.top, 9)
+            .padding(.top, 20)
             .accessibilityIdentifier("personalSetup.finish")
             .accessibilityHint("Connect three sources to build your personal context")
         }
-        .padding(21)
+        .padding(26)
         .background(Color(white: 0.055), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous)
             .strokeBorder(.white.opacity(0.095), lineWidth: 1))
@@ -122,7 +119,6 @@ struct HomePersonalSetupPanel: View {
 }
 
 struct HomeSidekickInvitation: View {
-    var emphasized = true
     var compact = false
 
     var body: some View {
@@ -136,23 +132,6 @@ struct HomeSidekickInvitation: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 16)
-        .background {
-            // Same soft pools and canonical palette as the Double Tap personal-context line.
-            // Keep the color behind the words, with no animated wallpaper or gradient type.
-            GeometryReader { geometry in
-                HStack(spacing: -8) {
-                    ForEach([0, 1, 3, 4, 6], id: \.self) { index in
-                        Circle()
-                            .fill(RadialGradient(colors: [GlowHalo.stops[index].opacity(emphasized ? 0.29 : 0.07), .clear],
-                                                 center: .center, startRadius: 0, endRadius: 64))
-                            .frame(width: 128, height: 128)
-                            .scaleEffect(x: 1.25, y: 0.8)
-                    }
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height)
-            }
-            .accessibilityHidden(true).allowsHitTesting(false)
-        }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("sidekick.readyInvitation")
     }
@@ -310,7 +289,7 @@ struct HomePersonalFeaturePreview: View {
 #Preview("Personal setup reward panel") {
     HomePersonalSetupPanel(selectedFeature: nil, emphasizeSetup: false, active: false,
                            onSelectFeature: { _ in }, onFinishSetup: {})
-        .frame(width: 278).padding(30).background(SidekickStyle.base).preferredColorScheme(.dark)
+        .frame(width: HomePersonalSetupPanel.width).padding(30).background(SidekickStyle.base).preferredColorScheme(.dark)
 }
 
 #Preview("Personal setup Double Tap example") {

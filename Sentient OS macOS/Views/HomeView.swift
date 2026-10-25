@@ -113,7 +113,7 @@ struct HomeView: View {
     private var homeCanvas: some View {
         GeometryReader { geo in
             let layout = overviewLayout(in: geo.size)
-            let workspaceWidth = needsPersonalSetup ? geo.size.width - 324 : geo.size.width
+            let workspaceWidth = needsPersonalSetup ? geo.size.width - (HomePersonalSetupPanel.width + 46) : geo.size.width
             ZStack {
                 SidekickAtmosphere(focused: presentation.composerFocused,
                                    sendPulse: presentation.sendPulse,
@@ -175,7 +175,7 @@ struct HomeView: View {
                                                    previewEnabled: !appState.commandCoordinator.run.isRunning && !appState.commandCoordinator.run.recovery.isPending,
                                                    onSelectFeature: selectPersonalFeature,
                                                    onFinishSetup: finishPersonalSetup)
-                                .frame(width: 278)
+                                .frame(width: HomePersonalSetupPanel.width)
                                 .padding(.trailing, 38).padding(.top, chromeHeight + 20).padding(.bottom, 28)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                         }
@@ -796,7 +796,7 @@ struct HomeView: View {
                 .position(x: width / 2, y: top + height / 2)
                 .transition(.opacity)
         } else if !inConversation {
-            HomeSidekickInvitation(emphasized: !appState.hasCompletedFirstSidekickTask, compact: width < 650)
+            HomeSidekickInvitation(compact: width < 650)
                 .frame(width: width - 108, alignment: .leading)
                 .position(x: width / 2, y: top + height / 2)
                 .allowsHitTesting(false)
