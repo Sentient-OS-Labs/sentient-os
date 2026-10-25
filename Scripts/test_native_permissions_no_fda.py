@@ -114,12 +114,15 @@ def main():
         raise RuntimeError('Native permission lab failed; inspect the retained receipt/log')
     required = ['isolatedRuntimeVerified','automationGranted','helperAccessibilityVerified',
                 'helperScreenRecordingVerified','permissionReadinessVerified','proofClearedAfterClose',
-                'systemTCCDenyConfirmed','userTCCDenyConfirmed']
+                'systemTCCDenyConfirmed']
     if not all(receipt.get(key) is True for key in required):
         raise RuntimeError('Effective native permission proof did not pass')
+    if receipt.get('userTCCDenyConfirmed') is not True and receipt.get('userTCCMissing') is not True:
+        raise RuntimeError('User TCC database was neither denied nor absent')
     if any(receipt.get(key) is not False for key in ['helperAccessibilityTCCReadable','helperScreenRecordingTCCReadable','systemTCCReadable','userTCCReadable']):
         raise RuntimeError('TCC reads were not actually denied')
-    summary = {key:receipt[key] for key in required+['helperAccessibilityTCCReadable','helperScreenRecordingTCCReadable','systemTCCReadable','userTCCReadable']}
+    summary = {key:receipt[key] for key in required+['userTCCDenyConfirmed','userTCCMissing',
+        'helperAccessibilityTCCReadable','helperScreenRecordingTCCReadable','systemTCCReadable','userTCCReadable']}
     (root/'boolean-receipt.json').write_text(json.dumps(summary,indent=2)+'\n')
     print('PASS: actual owned-window AX + capture with both TCC database reads unavailable; no permission changes',flush=True)
 

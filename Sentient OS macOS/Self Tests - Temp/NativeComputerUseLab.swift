@@ -54,10 +54,10 @@ nonisolated enum NativeComputerUseLab {
                     throw LabError.missingFixture
                 }
                 result["isolatedRuntimeVerified"] = true
-                func tccReadObservation(_ path: String) -> (readable: Bool, denied: Bool) {
+                func tccReadObservation(_ path: String) -> (readable: Bool, denied: Bool, missing: Bool) {
                     let descriptor = Darwin.open(path, O_RDONLY | O_CLOEXEC)
-                    if descriptor >= 0 { Darwin.close(descriptor); return (true, false) }
-                    return (false, errno == EPERM || errno == EACCES)
+                    if descriptor >= 0 { Darwin.close(descriptor); return (true, false, false) }
+                    return (false, errno == EPERM || errno == EACCES, errno == ENOENT)
                 }
                 let systemTCC = tccReadObservation("/Library/Application Support/com.apple.TCC/TCC.db")
                 let userTCC = tccReadObservation(FileManager.default.homeDirectoryForCurrentUser
@@ -66,8 +66,14 @@ nonisolated enum NativeComputerUseLab {
                 result["userTCCReadable"] = userTCC.readable
                 result["systemTCCDenyConfirmed"] = systemTCC.denied
                 result["userTCCDenyConfirmed"] = userTCC.denied
+                result["userTCCMissing"] = userTCC.missing
                 if env["LAB_DENY_TCC_REQUIRED"] == "1" {
-                    guard systemTCC.denied, userTCC.denied else { throw LabError.permissionDatabaseReadable }
+                    // Some Macs have no per-user database. Keep that distinct from an actual
+                    // sandbox denial, while requiring a real system-DB denial to prove the
+                    // sandbox is active. Neither missing nor denied can supply TCC evidence.
+                    guard systemTCC.denied, userTCC.denied || userTCC.missing else {
+                        throw LabError.permissionDatabaseReadable
+                    }
                 }
                 let axObservation = Permissions.tccState(service: "kTCCServiceAccessibility", clientBundleID: helperID)
                 let captureObservation = Permissions.tccState(service: "kTCCServiceScreenCapture", clientBundleID: helperID)

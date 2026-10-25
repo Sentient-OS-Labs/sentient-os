@@ -79,7 +79,14 @@ import SwiftUI
         }
         func click(_ identifier: String) async throws {
             phase = "click:" + identifier
-            guard window.isKeyWindow, NSApp.isActive, let target = find(identifier) else { throw Failure.accessibility }
+            // These events enter this fixture's NSApplication queue with its exact window
+            // number; they never become global desktop input. macOS can keep another app
+            // active during desktop-independent capture, so global focus is not a prerequisite.
+            // Retain strict ownership/visibility guards and assert each resulting UI change.
+            guard window.isVisible, window.contentView === host,
+                  NSApp.windows.contains(where: { $0 === window }),
+                  let target = find(identifier) else { throw Failure.accessibility }
+            window.makeKey()
             try SidekickPolishLab.postClick(window: window, screenPoint: CGPoint(x: target.frame.midX, y: target.frame.midY))
             try await settle()
         }
@@ -239,9 +246,18 @@ import SwiftUI
             && find("sidekick.expandHistory") == nil && find("sidekick.readyInvitation") != nil
             && find("personalSetup.finish") != nil && find("sidekick.composer") != nil
         try await capture("personal-setup-06-empty-first-home")
+        let presentationCapture = FileManager.default.fileExists(atPath: root.appendingPathComponent("personal-setup-presentation-capture").path)
+        if presentationCapture {
+            window.setContentSize(CGSize(width: 1280, height: 760))
+            window.center()
+            try await settle(700)
+            recordLayout("presentation")
+            checks["presentation_window_fully_visible"] = window.screen?.visibleFrame.insetBy(dx: -1, dy: -1).contains(window.frame) == true
+            try await capture("personal-setup-07-full-window")
+        }
         checks["personal_setup_never_starts_analysis"] = !app.processing.isBusy && !app.processing.initialComplete
         checks["saved_instructions_preserved"] = try SidekickInstructionStore.read().text == memory
-        checks["ten_owned_window_captures"] = captures.count == 10
+        checks["expected_owned_window_captures"] = captures.count == (presentationCapture ? 11 : 10)
         completed = true; phase = "complete"
         return checks
     }
