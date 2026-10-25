@@ -9,6 +9,7 @@ import SwiftUI
     static func run(app: AppState, root: URL) async throws -> [String: Bool] {
         typealias Failure = SidekickPolishLab.Failure
         let environment = ProcessInfo.processInfo.environment
+        let presentationCapture = FileManager.default.fileExists(atPath: root.appendingPathComponent("personal-setup-presentation-capture").path)
         guard environment["SENTIENT_SELFTEST"] == "sidekickapp",
               environment["LAB_SIDEKICK_STAGE"] == "ui-personal-setup",
               let configuredRoot = environment["LAB_SIDEKICK_ROOT"],
@@ -53,11 +54,12 @@ import SwiftUI
         presentation.surface = .suggestions
         conversation.draft = ""
         MainNavigation.shared.reset()
-        func home() -> AnyView { AnyView(HomeView(deck: .real, onFinishSetup: { finishRequests += 1 })
+        func home(reducedMotion: Bool? = nil) -> AnyView { AnyView(HomeView(deck: .real, onFinishSetup: { finishRequests += 1 })
             .environment(app)
             // Native fixture hosts have no SwiftUI App scene to activate this environment
             // when an assistive client attaches. Ask SwiftUI to expose its real semantics.
             .environment(\.accessibilityEnabled, true)
+            .environment(\.sidekickReduceMotionOverride, reducedMotion)
             .preferredColorScheme(.dark)) }
         let host = NSHostingView(rootView: home())
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1040, height: 800),
@@ -68,7 +70,7 @@ import SwiftUI
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         defer { window.close() }
 
-        func settle(_ milliseconds: Int = 300) async throws { try await SidekickPolishLab.settle(milliseconds) }
+        func settle(_ milliseconds: Int = 450) async throws { try await SidekickPolishLab.settle(milliseconds) }
         func elements() -> [SidekickPolishLab.Element] {
             let values = SidekickPolishLab.elements(host, maximumDepth: 80)
             lastElements = values.map { ["id": $0.identifier, "role": $0.role, "label": $0.label,
@@ -178,6 +180,72 @@ import SwiftUI
             checks[feature.rawValue + "_escape_dismisses"] = find("personalSetup.preview." + feature.rawValue) == nil
         }
 
+        // Exercise the actual local showcase controls, independently of the task composer.
+        host.rootView = home(reducedMotion: false)
+        window.setContentSize(CGSize(width: 1280, height: 800)); window.center(); try await settle()
+        let showcaseDraft = "Help me get ready for my next customer call."
+        conversation.draft = showcaseDraft
+        try await click("personalSetup.feature.proactive")
+        checks["proactive_shows_actual_cards"] = find("proactive.offer.setup-example-followup") != nil
+            && find("proactive.offer.setup-example-renewal") != nil
+        if presentationCapture { try await capture("showcase-proactive-wide") }
+        try await click("proactive.offer.setup-example-followup")
+        checks["proactive_opens_prepared_draft"] = find("personalSetup.proactive.detail.followup") != nil
+        if presentationCapture { try await capture("showcase-proactive-draft") }
+        try await click("personalSetup.proactive.back")
+        try await click("proactive.offer.setup-example-renewal")
+        checks["proactive_opens_prepared_plan"] = find("personalSetup.proactive.detail.renewal") != nil
+        if presentationCapture { try await capture("showcase-proactive-plan") }
+        try await click("personalSetup.proactive.back")
+        checks["proactive_back_restores_both_cards"] = find("proactive.offer.setup-example-followup") != nil
+            && find("proactive.offer.setup-example-renewal") != nil
+        try await click("personalSetup.preview.close")
+
+        try await click("personalSetup.feature.knowledge")
+        checks["knowledge_starts_with_project"] = find("personalSetup.knowledge.note.project") != nil
+        if presentationCapture { try await capture("showcase-knowledge-wide") }
+        try await click("personalSetup.knowledge.person")
+        checks["knowledge_person_node_opens_note"] = find("personalSetup.knowledge.note.person") != nil
+        if presentationCapture { try await capture("showcase-knowledge-person") }
+        try await click("personalSetup.knowledge.commitment")
+        checks["knowledge_commitment_node_opens_note"] = find("personalSetup.knowledge.note.commitment") != nil
+        try await click("personalSetup.preview.close")
+
+        try await click("personalSetup.feature.sidekick")
+        if presentationCapture { try await capture("showcase-sidekick-wide") }
+        try await click("personalSetup.sidekick.openBrief")
+        checks["sidekick_opens_local_brief"] = find("personalSetup.sidekick.brief") != nil
+        if presentationCapture { try await capture("showcase-sidekick-brief") }
+        try await click("personalSetup.sidekick.back")
+        checks["sidekick_back_restores_example_conversation"] = find("personalSetup.sidekick.openBrief") != nil
+        try await click("personalSetup.preview.close")
+
+        try await click("personalSetup.feature.doubleTap")
+        try await click("personalSetup.doubleTap.replay")
+        try await settle(500)
+        checks["double_tap_replays_local_draft"] = find("personalSetup.doubleTap.draft") != nil
+        if presentationCapture { try await capture("showcase-doubleTap-wide") }
+        guard let replayButton = find("personalSetup.doubleTap.replay") else { throw Failure.accessibility }
+        try SidekickPolishLab.postClick(window: window, screenPoint: CGPoint(x: replayButton.frame.midX, y: replayButton.frame.midY))
+        try await settle(40)
+        try await click("personalSetup.preview.close")
+        try await settle(500)
+        checks["closing_double_tap_cancels_replay"] = find("personalSetup.preview.doubleTap") == nil
+            && conversation.draft == showcaseDraft && !run.isRunning
+
+        host.rootView = home(reducedMotion: true); try await settle()
+        try await click("personalSetup.feature.doubleTap")
+        try await click("personalSetup.doubleTap.replay")
+        checks["reduced_motion_hides_draft_without_animation"] = find("personalSetup.doubleTap.draft") == nil
+        try await click("personalSetup.doubleTap.replay")
+        checks["reduced_motion_restores_draft_without_animation"] = find("personalSetup.doubleTap.draft") != nil
+        try await escape()
+        host.rootView = home(); try await settle()
+        checks["showcases_preserve_real_app_state"] = try store.latestSequence == baseline
+            && conversation.draft == showcaseDraft && finishRequests == 0
+            && !app.hasCompletedPersonalSetup && !app.hasCompletedFirstSidekickTask
+            && !run.isRunning && run.interaction == nil && !app.processing.isBusy
+
         for suggestion in HomeSidekickSuggestions.suggestions {
             try await click("sidekick.suggestion." + suggestion.id)
             let sequence = try store.latestSequence
@@ -261,7 +329,6 @@ import SwiftUI
             && find("sidekick.expandHistory") == nil && find("sidekick.readyInvitation") != nil
             && find("personalSetup.finish") != nil && find("sidekick.composer") != nil
         try await capture("personal-setup-06-empty-first-home")
-        let presentationCapture = FileManager.default.fileExists(atPath: root.appendingPathComponent("personal-setup-presentation-capture").path)
         if presentationCapture {
             window.setContentSize(CGSize(width: 1280, height: 760))
             window.center()
@@ -272,7 +339,7 @@ import SwiftUI
         }
         checks["personal_setup_never_starts_analysis"] = !app.processing.isBusy && !app.processing.initialComplete
         checks["saved_instructions_preserved"] = try SidekickInstructionStore.read().text == memory
-        checks["expected_owned_window_captures"] = captures.count == (presentationCapture ? 11 : 10)
+        checks["expected_owned_window_captures"] = captures.count == (presentationCapture ? 19 : 10)
         completed = true; phase = "complete"
         return checks
     }

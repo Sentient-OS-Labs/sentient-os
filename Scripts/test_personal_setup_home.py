@@ -23,7 +23,7 @@ def main() -> int:
     parser.add_argument("--manual-review", action="store_true",
                         help="Hold the isolated Home for up to 90 seconds; create the printed continue file after native inspection")
     parser.add_argument("--presentation-capture", action="store_true",
-                        help="Also capture the empty Home at 1280x760 and verify the entire window is on screen")
+                        help="Also capture the full empty Home and the interactive feature showcases")
     args = parser.parse_args()
     root = None
     try:
@@ -47,7 +47,7 @@ def main() -> int:
         receipt = app.run_stage(executable, root, fixture, runtime, "ui-personal-setup", 180 if args.manual_review else 90)
         manifest = app.read_json(root / "personal-setup-manifest.json")
         captures = manifest.get("captures", [])
-        app.require(manifest.get("completed") is True and len(captures) == (11 if args.presentation_capture else 10)
+        app.require(manifest.get("completed") is True and len(captures) == (19 if args.presentation_capture else 10)
                     and manifest.get("provider_calls") == 0, "Incomplete native fixture")
         app.require(manifest.get("capture_scope") == "current_process_windows_only", "Unexpected screenshot scope")
         for capture in captures:

@@ -68,6 +68,7 @@ struct HomeView: View {
         !kbOnly && deck == .real && personalSetupPending
     }
     @State private var selectedPersonalFeature: HomePersonalFeature?
+    @State private var personalPreviewHeight: CGFloat = 380
     @State private var composerFocusRequest = 0
     @State private var overviewPage = 0
     @State private var overviewPull: Double = 0
@@ -154,7 +155,8 @@ struct HomeView: View {
                                     .accessibilityHidden(!inConversation || selectedPersonalFeature != nil)
                             } else { Spacer() }
                             VStack(spacing: 0) {
-                                if !kbOnly && !inConversation && (!needsPersonalSetup || !conversation.messages.isEmpty) {
+                                if !kbOnly && !inConversation && selectedPersonalFeature == nil
+                                    && (!needsPersonalSetup || !conversation.messages.isEmpty) {
                                     conversationPeek.padding(.horizontal, 38).padding(.bottom, 13)
                                         .transition(SidekickStyle.entrance(reducedMotion))
                                 }
@@ -791,10 +793,17 @@ struct HomeView: View {
         let bottom = overviewDockTop > top ? overviewDockTop - 24 : size.height - 224
         let height = max(180, bottom - top)
         if let selectedPersonalFeature {
-            HomePersonalFeaturePreview(feature: selectedPersonalFeature, onClose: closePersonalFeature)
-                .frame(width: width - 76, height: min(380, height))
+            HomePersonalFeaturePreview(feature: selectedPersonalFeature, onClose: closePersonalFeature) { naturalHeight in
+                guard self.selectedPersonalFeature == selectedPersonalFeature else { return }
+                let fitted = min(520, max(180, naturalHeight))
+                guard abs(personalPreviewHeight - fitted) > 1 else { return }
+                withAnimation(reducedMotion ? nil : .easeInOut(duration: 0.22)) { personalPreviewHeight = fitted }
+            }
+                .id(selectedPersonalFeature)
+                .frame(width: min(760, width - 76), height: min(personalPreviewHeight, height))
                 .position(x: width / 2, y: top + height / 2)
-                .transition(.opacity)
+                .transition(reducedMotion ? .opacity : .asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity), removal: .opacity))
         } else if !inConversation {
             HomeSidekickInvitation(compact: width < 650)
                 .frame(width: width - 108, alignment: .leading)
@@ -805,7 +814,8 @@ struct HomeView: View {
 
     private func selectPersonalFeature(_ feature: HomePersonalFeature) {
         guard !appState.commandCoordinator.run.isRunning, !appState.commandCoordinator.run.recovery.isPending else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(reducedMotion ? .easeOut(duration: 0.12) : .spring(response: 0.42, dampingFraction: 0.9)) {
+            if selectedPersonalFeature != feature { personalPreviewHeight = 380 }
             selectedPersonalFeature = selectedPersonalFeature == feature ? nil : feature
         }
     }

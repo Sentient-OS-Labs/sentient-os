@@ -17,16 +17,17 @@ serif italic display, no borrowed brand hues.
 
 | File | Job |
 |---|---|
-| `RootView.swift` | The main window's switchboard: onboarding → the home ⟷ the processing takeover. Owns the analyze/source state, the bottom-left whispers, the update-gate overlay, the Dev Tools sheet, and the onboarding finale. |
+| `RootView.swift` | The main window's switchboard: introduction/model → Home, with retained Settings and Knowledge pages. Routes optional setup and analysis to separate windows, and owns background whispers, the update gate and Dev Tools. |
 | `HomeView.swift` | THE home: chrome, measured caution placement, paged card spreads, chat, the empty state, the retained legacy diagnostic preview, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
 | `HomePersonalSetup.swift` | Sidekick-first invitation, four draft-only suggestions, the optional personal-setup reward panel, and local feature examples. No source access or task execution. |
+| `HomeFeatureShowcases.swift` | Interactive, synthetic product examples: actual proactive cards and prepared artifacts, a local Double Tap replay, linked knowledge notes, and a contextual Sidekick brief. |
 | `Briefing.swift` | The card model (`Briefing`, `BriefingDeck`), built from a `PreparedAction`, from the gift markdown, or from the two hard-coded demo decks. |
 | `BriefingCard.swift` | One card through its four lives (sealed envelope → offer → working → done), `OfferButton`, the envelope. |
 | `HomePopovers.swift` | Home's Analysis popover (things understood, vault counts, Analyze Now, the run footer, overnight-on-battery switch, source chips) and Knowledge's optional Use with your AIs popover. `SourceChip`, `HomeStats`. |
 | `HomeShortcuts.swift` | Double Tap's persistent toolbar lesson and deferred ready hint, plus the proactive screen's temporary notch cue. Uses the configured shortcut and local discovery acknowledgements. |
 | `Sidekick/` | Shared conversation presentation/composer, selectable Markdown, atmosphere/glass, measured overview layout and scoped scroll-to-dock gesture. Storage and runtime contracts are in the Sidekick Conversation Backend documentation. |
 | `PromptBar.swift` | Legacy command bar retained for remaining callers; Home uses `SidekickComposer`. |
-| `ProcessingView.swift` | The one analysis takeover, shared by the home, onboarding, and the dev buttons; `RunSource` and `RunSource.connectors(from:)`. |
+| `ProcessingView.swift` | Analysis progress content hosted by the app-owned processing window; `RunSource` and `RunSource.connectors(from:)`. |
 | `ComputerUseUpdateNotice.swift` | The ordinary computer-use update notice: real download progress, verification, retry, and completion, fed by the shared installer. |
 | `CautionCapsule.swift` | The banner capsule (amber / red / green) and the self-contained `UpdateNoticeCapsule`. |
 | `LetterBody.swift` · `LetterPaper.swift` · `PlanEditor.swift` · `GiftShareImage.swift` | The letter renderer (the light Markdown subset), the dog-eared page for research notes, the mono step-plan editor, and the gift's Save-to-Desktop poster. |
@@ -36,16 +37,13 @@ serif italic display, no borrowed brand hues.
 
 ## `RootView`
 
-Renders `OnboardingView` until onboarding completes; then either `ProcessingView` (Analyze Now) or the
-home, cross-faded. Analyze Now runs the shared `SourceSelection` picks through `ProcessingView` in
-`.auto` mode with the Gmail/Calendar flags, and `fullCycle: true` whenever the card deck is `.real` (the
-default), so it is byte-for-byte what the 3 AM run does. After a run it calls `maybeAutoEnable()`.
-The onboarding finale: when the first analysis finishes, onboarding dissolves into the home and the
-Knowledge window (the Constellation) opens on top a beat later. Also mounted here: the bottom-left
-whispers (`ModelDownloadWhisper` while the model lands in the background; "Setting up Codex computer
-use in the background." while `ComputerUseSetup.current.isInstalling`), `UpdateGateView(host: .home)`, and
-the `Home.opened` core analytics signal (launch vs reopen). A dev knob (`dev.processing.resizableDemo`)
-drops the window's 1040×800 minimum during a takeover for screen recordings.
+Renders `OnboardingView` through the intro and frontier-model connection, then admits Home.
+Home remains mounted behind the Settings and Knowledge pages so its composer, transcript and
+presentation keep their lifetime. Analyze routes unfinished personal setup to `PersonalSetupView`;
+otherwise it requests work from `ProcessingCoordinator` and opens `ProcessingWindowView`.
+The coordinator owns processing independently of either window, and overnight scheduling follows
+an explicit setup choice. Also mounted here: background model/computer-use setup whispers,
+`UpdateGateView`, the optional writing-sample retry and the `Home.opened` analytics signal.
 
 ## The home (`HomeView`)
 
@@ -67,6 +65,17 @@ clears a draft, or creates a task. Active work/recovery disables the examples, a
 conversation navigation closes any existing example. The transcript is not marked visible while
 covered. The composer remains the same mounted instance throughout.
 
+The showcase slides out beside the setup panel and fits its content within the space above the
+composer. The history peek yields while it is open. Proactive Intelligence uses the production
+`BriefingCard` renderer: two sample cards open a prepared follow-up or cancellation plan, with a
+Back action and source labels. Double Tap replays a local email draft with two keycap beats; its
+SwiftUI-owned task cancels on close. Reduce Motion uses immediate show/hide controls instead.
+Knowledge links a project, person and commitment to readable sample notes. Personal Sidekick opens
+a prepared call brief from a sample conversation. Every example shares the same fictional Northstar
+pilot, stays explicitly labeled Example, and never touches real conversations, sources or providers.
+Local detail navigation resets the preview's scroll position; compact layouts prioritize the artifact
+over supplementary labels. All examples retain the top-left close button and Escape dismissal.
+
 Four suggestions above the composer fill its real draft and request keyboard focus; they do not
 submit. The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses plain text
 without a colored glow. The durable successful-task milestone
@@ -80,14 +89,17 @@ AppState or external calls. Native integration checks should use isolated defaul
 `personalSetup.*` and `sidekick.suggestion.*` accessibility identifiers at 1040×800 and 840×680.
 `Scripts/test_personal_setup_home.py --app <signed-debug-app>` runs the isolated `ui-personal-setup`
 lab: it checks both sizes, all four X/Escape dismissal paths, draft-only suggestions, continued work,
-the successful-task emphasis state, completed users' real-card path, and empty first Home. Its ten
+the successful-task emphasis state, completed users' real-card path, and empty first Home. It also
+checks local card/detail navigation, knowledge-node selection, Double Tap replay/cancellation and
+Reduce Motion, and verifies that the real composer and task state remain untouched. Its ten
 screenshots include only fixture-owned windows; the runner never starts a provider or analysis.
+`--presentation-capture` adds wide Home and showcase captures, for nineteen screenshots in total.
 `--manual-review` offers a bounded 90-second hold for a native accessibility inspection, followed by
 the same assertions. It does not bypass failures or authorize real work.
 `Scripts/test_personal_setup_sources.py --app <signed-debug-app>` runs the actual source picker and
 timing sheet against three empty directories inside its isolated fixture. It verifies the zero/two/three
 source threshold, Run now's callback after native sheet dismissal, and retained sources and Sidekick
-draft across reopening. Six screenshots cover standard 840×760 and minimum 700×560 setup windows.
+draft across reopening. Eight screenshots cover standard 840×760 and minimum 700×560 setup windows.
 The callback is captured; no analysis, cloud connection, protected database read, or wake setup starts.
 
 Layers, bottom to top: one animated atmosphere, the suggestion spread or transcript, the shared

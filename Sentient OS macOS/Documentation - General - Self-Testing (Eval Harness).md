@@ -58,8 +58,9 @@ Run `test_personal_setup_home.py --app <signed Debug app>` and `test_personal_se
 AppState, redirect app support/vault data to marked fixture roots, and prohibit provider submission.
 Receipts include interaction/layout assertions and owned-window captures. Optional `--manual-review`
 on the Home runner holds the fixture for CUA inspection, then runs the same assertions.
-`--presentation-capture` adds a 1280×760 empty-Home capture and verifies the whole native window
-and all primary controls fit on the display; it does not alter the production UI.
+`--presentation-capture` adds a 1280×760 empty-Home capture and wide captures of each interactive
+showcase, including prepared artifacts. It verifies whole-window bounds and primary controls;
+it does not alter the production UI.
 
 `test_native_permissions_no_fda.py --app <signed Debug app>` is the live model-free capability
 check. It copies only verified runtime code, denies TCC database access and live app-data access,

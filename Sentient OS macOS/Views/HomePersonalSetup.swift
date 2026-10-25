@@ -30,14 +30,6 @@ enum HomePersonalFeature: String, CaseIterable, Identifiable {
         case .sidekick: "sparkles"
         }
     }
-    var previewTitle: String {
-        switch self {
-        case .doubleTap: "A reply, already in your voice"
-        case .proactive: "Useful work, prepared before you ask."
-        case .knowledge: "The details, remembered."
-        case .sidekick: "Skip the backstory."
-        }
-    }
 }
 
 struct HomePersonalSetupPanel: View {
@@ -190,8 +182,14 @@ struct HomeSidekickSuggestions: View {
 struct HomePersonalFeaturePreview: View {
     let feature: HomePersonalFeature
     let onClose: () -> Void
+    var onContentHeightChange: (CGFloat) -> Void = { _ in }
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    @State private var pageRevision = 0
+    private var reducedMotion: Bool { motionOverride ?? systemReducedMotion }
 
     var body: some View {
+        GeometryReader { geometry in
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Button(action: onClose) {
@@ -206,7 +204,7 @@ struct HomePersonalFeaturePreview: View {
                 .help("Close example (Escape)")
                 .accessibilityLabel("Close " + feature.title + " example")
                 .accessibilityIdentifier("personalSetup.preview.close")
-                Text(feature.previewTitle).font(.system(size: 12, weight: .medium))
+                Text(feature.title).font(.system(size: 14, weight: .medium))
                     .foregroundStyle(SidekickStyle.ink)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
@@ -215,73 +213,41 @@ struct HomePersonalFeaturePreview: View {
             }
             .padding(.horizontal, 15).padding(.vertical, 12)
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
-            ScrollView {
-                example.padding(22).frame(maxWidth: .infinity, alignment: .leading)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    example(width: max(1, geometry.size.width - 40))
+                        .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            onContentHeightChange($0 + 55) // fixed close/title row and hairline
+                        }
+                        .id("showcase-top")
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .onChange(of: pageRevision) { _, _ in
+                    proxy.scrollTo("showcase-top", anchor: .top)
+                }
             }
-            .scrollBounceBehavior(.basedOnSize)
-            Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
-            Text("Informed by your context. Reviewed by you.")
-                .font(.system(size: 10.5)).foregroundStyle(SidekickStyle.secondary)
-                .padding(.horizontal, 22).padding(.vertical, 13)
         }
-        .background(Color(white: 0.065), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 1))
-        .shadow(color: .black.opacity(0.25), radius: 22, y: 10)
+        }
+        .background(Color(white: 0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 28, y: 12)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("personalSetup.preview." + feature.rawValue)
     }
 
-    @ViewBuilder private var example: some View {
+    @ViewBuilder private func example(width: CGFloat) -> some View {
         switch feature {
         case .doubleTap:
-            VStack(alignment: .leading, spacing: 17) {
-                HStack(spacing: 10) {
-                    Text("A").font(.system(size: 11, weight: .medium))
-                        .frame(width: 29, height: 29).background(.white.opacity(0.07), in: Circle())
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Alex · Northstar").font(.system(size: 11.5, weight: .medium))
-                        Text("To you").font(.system(size: 10)).foregroundStyle(SidekickStyle.secondary)
-                    }
-                }
-                Text("How’s the pilot looking? Anything we should cover on tomorrow’s call?")
-                    .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary).lineSpacing(4)
-                HStack(alignment: .top, spacing: 13) {
-                    RoundedRectangle(cornerRadius: 1).fill(.white.opacity(0.3)).frame(width: 2)
-                    VStack(alignment: .leading, spacing: 7) {
-                        Label("Your draft", systemImage: "sparkles").font(.system(size: 11, weight: .medium))
-                        Text("Hey Alex, the team’s been using it all week and the feedback’s looking good. Let’s walk through the rollout plan tomorrow; I’ve got a couple of ideas.")
-                            .font(.system(size: 13)).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
-                    }
-                }.fixedSize(horizontal: false, vertical: true)
-            }
-            .foregroundStyle(SidekickStyle.ink)
+            HomeDoubleTapShowcase(reducedMotion: reducedMotion, compact: width < 430)
         case .proactive:
-            exampleDescription(title: "Your customer brief is ready.",
-                               detail: "Pilot feedback, open questions, and a draft follow-up for tomorrow’s call.")
+            HomeProactiveShowcase(width: width, reducedMotion: reducedMotion, onNavigate: { pageRevision &+= 1 })
         case .knowledge:
-            exampleDescription(title: "Northstar pilot",
-                               detail: "Alex owns the pilot. The demo goes out Thursday. Launch is planned for Friday.")
+            HomeKnowledgeShowcase(reducedMotion: reducedMotion, compact: width < 430)
         case .sidekick:
-            VStack(alignment: .leading, spacing: 20) {
-                Text("“Prep me for the Northstar call.”")
-                    .font(.system(size: 14)).foregroundStyle(SidekickStyle.secondary)
-                Label {
-                    Text("I’ll bring together Alex’s feedback, the pilot notes, and your rollout plan.")
-                        .font(.system(size: 15)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "sparkles").font(.system(size: 15))
-                }
-                .foregroundStyle(SidekickStyle.ink)
-            }
+            HomeSidekickShowcase(reducedMotion: reducedMotion, compact: width < 430, onNavigate: { pageRevision &+= 1 })
         }
-    }
-
-    private func exampleDescription(title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Text(title).font(.system(size: 23, weight: .medium)).foregroundStyle(SidekickStyle.ink)
-            Text(detail).font(.system(size: 14)).lineSpacing(6).foregroundStyle(SidekickStyle.secondary)
-        }
-        .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
     }
 }
 
