@@ -40,6 +40,7 @@ struct HomePersonalSetupPanel: View {
     var previewEnabled = true
     let onSelectFeature: (HomePersonalFeature) -> Void
     let onFinishSetup: () -> Void
+    @State private var hoveredFeature: HomePersonalFeature?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -50,35 +51,7 @@ struct HomePersonalSetupPanel: View {
                 .padding(.bottom, 12)
 
             ForEach(HomePersonalFeature.allCases) { feature in
-                Button { onSelectFeature(feature) } label: {
-                    HStack(alignment: .top, spacing: 9) {
-                        Image(systemName: feature.symbol)
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 16).padding(.top, 2)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(feature.title).font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(SidekickStyle.ink)
-                            Text(feature.detail).font(.system(size: 13))
-                                .foregroundStyle(SidekickStyle.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: selectedFeature == feature ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 9, weight: .medium)).padding(.top, 4)
-                    }
-                    .foregroundStyle(selectedFeature == feature ? SidekickStyle.ink : SidekickStyle.secondary)
-                    .padding(.vertical, 16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.white.opacity(selectedFeature == feature ? 0.035 : 0))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!previewEnabled)
-                .help(previewEnabled ? "Show an example" : "Examples are available after your current task")
-                .accessibilityLabel(feature.title + ". " + feature.detail)
-                .accessibilityValue(selectedFeature == feature ? "Example open" : "Example closed")
-                .accessibilityHint("Show an example without sending a request")
-                .accessibilityIdentifier("personalSetup.feature." + feature.rawValue)
+                featureButton(feature)
                 Rectangle().fill(.white.opacity(0.045)).frame(height: 1)
             }
 
@@ -107,6 +80,52 @@ struct HomePersonalSetupPanel: View {
             .strokeBorder(.white.opacity(0.095), lineWidth: 1))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("personalSetup.panel")
+    }
+
+    private func featureButton(_ feature: HomePersonalFeature) -> some View {
+        let selected = selectedFeature == feature
+        let fillOpacity: Double = selected ? 0.045 : (previewEnabled && hoveredFeature == feature ? 0.025 : 0)
+        return Button { onSelectFeature(feature) } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: feature.symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 16).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(feature.title).font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(SidekickStyle.ink)
+                    Text(feature.detail).font(.system(size: 13))
+                        .foregroundStyle(SidekickStyle.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: selected ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .medium)).padding(.top, 4)
+            }
+            .foregroundStyle(selected ? SidekickStyle.ink : SidekickStyle.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(fillOpacity),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(.white.opacity(selected ? 0.08 : 0), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        // Outset the button, not its text: every row keeps the same alignment, with
+        // a real clickable gutter around the icon and disclosure arrow.
+        .padding(.horizontal, -12).padding(.vertical, 3)
+        .onHover { hovering in
+            if hovering { hoveredFeature = feature }
+            else if hoveredFeature == feature { hoveredFeature = nil }
+        }
+        .animation(.easeOut(duration: 0.12), value: hoveredFeature)
+        .animation(.easeOut(duration: 0.12), value: selectedFeature)
+        .disabled(!previewEnabled)
+        .help(previewEnabled ? "Show an example" : "Examples are available after your current task")
+        .accessibilityLabel(feature.title + ". " + feature.detail)
+        .accessibilityValue(selected ? "Example open" : "Example closed")
+        .accessibilityHint("Show an example without sending a request")
+        .accessibilityIdentifier("personalSetup.feature." + feature.rawValue)
     }
 }
 
