@@ -123,6 +123,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)
+        .modifier(LifetimeUpgradePresentation())
         .overlay { UpdateGateView() }
         .background(MainWindowCloseGuard())
         .onChange(of: navigation.page) { _, page in

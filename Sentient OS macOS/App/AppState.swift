@@ -149,6 +149,7 @@ final class AppState {
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        LifetimeUpgradeAnnouncement.shared.start()
         // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
         // the network monitor now so a codex failure right after a wake never reads "unknown", and
         // leave one breadcrumb saying what codex's login looks like at launch.

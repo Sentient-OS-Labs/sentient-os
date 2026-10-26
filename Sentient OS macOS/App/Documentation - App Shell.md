@@ -64,3 +64,25 @@ Factory Reset clears the pending upgrade and its live window session after rewin
 ## Related docs
 
 `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md` (the helper branch), `Notch Magic/Documentation - Sidekick - General.md` (the coordinator and notch), `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md`, `Views/Onboarding/Documentation - Onboarding.md`.
+
+## Lifetime upgrade announcement
+
+`LifetimeUpgradeAnnouncement` checks the existing invitation identity at launch, including silent
+menu-bar launches, and on Home activation. Supabase targets only the 661 earlier FINAL_1000 courtesy
+recipients upgraded on 25 October 2026. The cutoff and owner-only receipt live in migration
+`20261025020000_invite_upgrade_announcements.sql`; newer redemptions do not receive the announcement.
+
+A background app may send one quiet macOS notification only when permission already exists. An atomic
+server claim prevents duplicates across launches and devices. This path never requests permission,
+activates Sentient, or opens Home. Clicking the notification explicitly uses `HomeWindowOpening`,
+including its cold-start scene registration and unsaved-editor guard. Foreground delivery is silent.
+
+`LifetimeUpgradePresentation` waits for an active, visible Home without a sheet, task, setup, draft,
+analysis or mandatory update. It presents the existing envelope animation with upgrade-specific copy.
+Actual appearance marks it seen locally before asynchronously acknowledging it on the server, so a
+quit, offline dismissal or later relaunch does not repeat it. Notification delivery is independent of
+seeing the in-app gift; denied/missed notifications still leave the celebration for the next Home visit.
+The receipt and claim require an updated app release; deploying the migration alone shows no new UI.
+
+Checks: `Scripts/test_lifetime_upgrade.swift`, `Scripts/test_invitation_response.swift`,
+`Scripts/test_invitation_database.mjs --isolated`, and `Scripts/test_invite_upgrade_api.mjs`.

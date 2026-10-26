@@ -203,6 +203,9 @@ private struct NotificationRouting: ViewModifier {
                 HomeWindowOpening.open(.settings, settingsPane: .sources)
                 NSApp.activate(ignoringOtherApps: true)
             }
+            Notify.setLifetimeUpgradeHandler {
+                HomeWindowOpening.open()
+            }
         }
     }
 }
