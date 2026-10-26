@@ -28,6 +28,7 @@ processes those summaries; the raw source material is not uploaded for this loca
 | `SiYuanNote.swift` | One `.sy` note → Markdown (block tree, plus database blocks read from `storage/av`). |
 | `AppleMailSource.swift` · `AppleMailMIME.swift` | Selected Mail accounts, safe index snapshots, bounded body extraction and local identity checks. |
 | `AppleCalendarSource.swift` | User-selected EventKit calendars, bounded occurrence snapshots, opaque local IDs, and validation before publication. |
+| `CalendarInviteText.swift` | Removes Microsoft Teams join blocks and Outlook link annotations from event notes before projection. |
 
 The connectors that adapt these to the pipeline are in `Ingestion/Connectors/`.
 
@@ -176,7 +177,11 @@ occurrence date so separate instances do not collapse when one instance moves. T
 provenance IDs, not portable Google/Outlook event IDs; a full provider resync can change them.
 
 Raw title, notes, location, and schedule data are bounded and remain in memory for on-device triage.
-Dedicated attendee, organizer, and conferencing URL fields are omitted. Retained summaries receive
+Dedicated attendee, organizer, and conferencing URL fields are omitted. Before the byte budget, notes drop
+Outlook's Teams join sections (the rule-delimited block with the join link, meeting ID, passcode and
+dial-in text) and `<https://…>` link annotations. The credential preflight runs on the same readable
+notes, so a standard Teams passcode no longer marks an otherwise useful event sensitive; the revision
+still hashes the complete native fields. Retained summaries receive
 native start/end, time zone, all-day, status, availability, and participation metadata. A scheduled
 event is not evidence of attendance. Calendar/account names and raw provider IDs are not downstream
 tags. Rejected events leave no per-event durable record.

@@ -342,7 +342,7 @@ enum Triage {
     }
 
     nonisolated private static let calendarCredentialPattern = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:password|passcode|passwd|api[\s_-]*key|access[\s_-]*token|secret[\s_-]*key|recovery[\s_-]*code|verification[\s_-]*code|one[\s_-]*time[\s_-]*(?:code|password)|otp)\b[\s\"']*(?::|=|\bis\b)\s*\S+"#)
+        pattern: #"(?i)\b(?:password|passcode|passwd|api[\s_-]*key|access[\s_-]*token|secret[\s_-]*key|recovery[\s_-]*code|verification[\s_-]*code|one[\s_-]*time[\s_-]*(?:code|password)|otp|pin|contrase(?:ñ|n)a|clave(?:\s+de\s+acceso)?|c[oó]digo\s+de\s+(?:acceso|verificaci[oó]n|seguridad))\b[\s\"']*(?::|=|\bis\b|\bes\b)\s*\S+"#)
 
     nonisolated private static let calendarOverridePattern = try! NSRegularExpression(
         pattern: #"(?is)\b(?:ignore|override|disregard)\b.{0,80}\b(?:rules|instructions|prompt)\b|\b(?:junk|sensitive)\b[\s\"']*[:=][\s\"']*false\b|<\|(?:system|assistant|im_start)\|>"#)
