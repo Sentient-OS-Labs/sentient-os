@@ -62,10 +62,9 @@ struct HomePersonalSetupPanel: View {
                     Spacer(minLength: 0)
                     Image(systemName: "arrow.right").font(.system(size: 12, weight: .medium))
                 }
-                .foregroundStyle(SidekickStyle.ink)
+                .foregroundStyle(Color(white: 0.08))
                 .padding(.horizontal, 17).frame(height: 46)
-                .background(Color(white: 0.105), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(emphasizeSetup ? 0.28 : 0.16), lineWidth: 1))
+                .background(.white, in: Capsule())
                 .contentShape(Capsule())
             }
             .buttonStyle(SidekickPressStyle())
