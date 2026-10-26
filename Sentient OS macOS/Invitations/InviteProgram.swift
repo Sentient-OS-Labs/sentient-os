@@ -67,13 +67,26 @@ final class InviteProgram {
 
     func clearError() { errorMessage = nil }
 
-    private func perform(code: String? = nil, reportErrors: Bool = true) async -> Bool {
+    @discardableResult
+    func acknowledgeUpgrade(_ id: UUID) async -> Bool {
+        guard !isBusy else { return false }
+        return await perform(acknowledgingUpgrade: id, reportErrors: false)
+    }
+
+    func claimUpgradeNotification(_ id: UUID) async -> Bool {
+        guard !isBusy else { return false }
+        isBusy = true
+        defer { isBusy = false }
+        return (try? await InviteCloud.shared.claimUpgradeNotification(id)) ?? false
+    }
+
+    private func perform(code: String? = nil, acknowledgingUpgrade id: UUID? = nil, reportErrors: Bool = true) async -> Bool {
         isBusy = true
         isRedeeming = code != nil
         if reportErrors { errorMessage = nil }
         defer { isBusy = false; isRedeeming = false }
         do {
-            let result = try await InviteCloud.shared.fetch(redeeming: code)
+            let result = try await InviteCloud.shared.fetch(redeeming: code, acknowledgingUpgrade: id)
             // Publish only after the receipt is safely cached. A lost response or failed save
             // can be retried; the server returns the same permanent grant.
             try InviteCredential.write("snapshot", data: JSONEncoder().encode(result))

@@ -14,10 +14,12 @@ import UserNotifications
 
 @MainActor
 enum Notify {
-    enum Destination: String, Sendable { case knowledgeSources }
+    enum Destination: String, Sendable { case knowledgeSources, lifetimeUpgrade }
     private static let delegate = NotificationDelegate()
     private static var openKnowledgeSources: (() -> Void)?
     private static var pendingKnowledgeSources = false
+    private static var openLifetimeUpgrade: (() -> Void)?
+    private static var pendingLifetimeUpgrade = false
 
     static func installRouting() {
         guard !suppressed else { return }
@@ -33,6 +35,44 @@ enum Notify {
         if let openKnowledgeSources { openKnowledgeSources() }
         else { pendingKnowledgeSources = true }
     }
+
+    static func setLifetimeUpgradeHandler(_ handler: @escaping () -> Void) {
+        openLifetimeUpgrade = handler
+        if pendingLifetimeUpgrade { pendingLifetimeUpgrade = false; handler() }
+    }
+
+    fileprivate static func openUpgrade() {
+        if let openLifetimeUpgrade { openLifetimeUpgrade() }
+        else { pendingLifetimeUpgrade = true }
+    }
+
+    /// This gift never prompts for permission or opens a window by itself.
+    static func canDeliverLifetimeUpgrade() async -> Bool {
+        guard !suppressed else { return false }
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        return status == .authorized || status == .provisional
+    }
+
+    static func lifetimeUpgrade(_ id: UUID) async {
+        guard await canDeliverLifetimeUpgrade() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "You've been upgraded."
+        content.body = "Sentient is yours for life. Open Sentient to see your gift."
+        content.userInfo["destination"] = Destination.lifetimeUpgrade.rawValue
+        // A single quiet notification; the server claim prevents repeated sends.
+        let request = UNNotificationRequest(identifier: upgradeIdentifier(id), content: content, trigger: nil)
+        do { try await UNUserNotificationCenter.current().add(request) }
+        catch { Log("Notify: lifetime upgrade delivery failed — \(ErrorLabel(error))") }
+    }
+
+    static func clearLifetimeUpgrade(_ id: UUID) {
+        guard !suppressed else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [upgradeIdentifier(id)])
+        center.removeDeliveredNotifications(withIdentifiers: [upgradeIdentifier(id)])
+    }
+
+    private static func upgradeIdentifier(_ id: UUID) -> String { "invite-lifetime-upgrade-" + id.uuidString }
 
     static func connectorsUnavailable(_ slugs: Set<String>) async {
         guard !Task.isCancelled else { return }
@@ -108,9 +148,12 @@ enum Notify {
 private final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              response.notification.request.content.userInfo["destination"] as? String == "knowledgeSources" else { return }
-        await Notify.openSources()
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        switch response.notification.request.content.userInfo["destination"] as? String {
+        case "knowledgeSources": await Notify.openSources()
+        case "lifetimeUpgrade": await Notify.openUpgrade()
+        default: break
+        }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,

@@ -27,6 +27,30 @@ import Foundation
         }
         let restored = try InviteCloud.verifiedSnapshot(from: response(), redeeming: nil)
         precondition(restored.hasLifetimeAccess)
+        let noticeID = UUID()
+        var upgradeResponse = try JSONSerialization.jsonObject(with: response()) as! [String: Any]
+        upgradeResponse["lifetimeUpgrade"] = ["id": noticeID.uuidString, "upgradedAt": 2345.0]
+        let upgraded = try InviteCloud.verifiedSnapshot(from: JSONSerialization.data(withJSONObject: upgradeResponse), redeeming: nil)
+        precondition(upgraded.lifetimeUpgrade?.id == noticeID && upgraded.lifetimeUpgrade?.seenAt == nil)
+        let savedUpgrade = try JSONDecoder().decode(InviteSnapshot.self, from: JSONEncoder().encode(upgraded))
+        precondition(savedUpgrade == upgraded, "Upgrade targeting must survive the Keychain snapshot round-trip")
+        for invalid in [
+            ["id": noticeID.uuidString, "upgradedAt": 0] as [String: Any],
+            ["id": "not-a-uuid", "upgradedAt": 2345.0],
+            ["id": noticeID.uuidString, "upgradedAt": 2345.0, "seenAt": -1]
+        ] {
+            upgradeResponse["lifetimeUpgrade"] = invalid
+            do {
+                _ = try InviteCloud.verifiedSnapshot(from: JSONSerialization.data(withJSONObject: upgradeResponse), redeeming: nil)
+                fatalError("Invalid upgrade receipt accepted")
+            } catch InviteCloud.Failure.response {} catch { fatalError("Unexpected failure") }
+        }
+        upgradeResponse["lifetimeUpgrade"] = ["id": noticeID.uuidString, "upgradedAt": 2345.0]
+        upgradeResponse["redeemedAt"] = NSNull()
+        do {
+            _ = try InviteCloud.verifiedSnapshot(from: JSONSerialization.data(withJSONObject: upgradeResponse), redeeming: nil)
+            fatalError("Upgrade announcement accepted without lifetime access")
+        } catch InviteCloud.Failure.response {} catch { fatalError("Unexpected failure") }
         var late: [String: Any] = ["code": NSNull(), "campaignActive": false, "endsAt": NSNull(),
             "redeemedAt": NSNull(), "redemptionCount": 0, "validatedCode": "FINAL_1000",
             "lateUse": ["code": "FINAL_1000", "recordedAt": 1234.0, "email": "gift@example.invalid"]]

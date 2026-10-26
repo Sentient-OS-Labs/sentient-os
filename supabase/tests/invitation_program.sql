@@ -536,3 +536,63 @@ begin
 end;
 $$;
 select 'PASS: FINAL_1000 grants lifetime access past 1000 recipients; all courtesy gifts upgraded' as unlimited_final_checks;
+
+-- Only the owner sees/claims/acknowledges an upgrade. Notification delivery and
+-- in-app acknowledgement are independent; retries never generate another nudge.
+do $$
+declare
+    recipient uuid := gen_random_uuid();
+    other_user uuid := gen_random_uuid();
+    notice uuid;
+    other_notice uuid;
+    receipt jsonb;
+    seen jsonb;
+begin
+    insert into auth.users(id, aud, role, is_anonymous)
+        values (recipient, 'authenticated', 'authenticated', true),
+               (other_user, 'authenticated', 'authenticated', true);
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    receipt := public.redeem_invite('FINAL_1000');
+    if receipt->'lifetimeUpgrade' <> 'null'::jsonb then raise exception 'New redemption received the historical upgrade notice'; end if;
+    reset role;
+    insert into public.invite_upgrade_announcements(user_id) values (recipient) returning id into notice;
+    insert into public.invite_upgrade_announcements(user_id) values (other_user) returning id into other_notice;
+    set local role authenticated;
+    receipt := public.invite_status();
+    if receipt->'lifetimeUpgrade'->>'id' is distinct from notice::text then raise exception 'Own upgrade receipt missing'; end if;
+    if public.claim_invite_upgrade_notification(other_notice)->>'claimed' is distinct from 'false' then raise exception 'Claimed another user notification'; end if;
+    if public.claim_invite_upgrade_notification(notice)->>'claimed' is distinct from 'true' then raise exception 'First notification claim rejected'; end if;
+    if public.claim_invite_upgrade_notification(notice)->>'claimed' is distinct from 'false' then raise exception 'Notification could be sent twice'; end if;
+    if public.invite_status()->'lifetimeUpgrade'->>'seenAt' is not null then raise exception 'Notification consumed the in-app celebration'; end if;
+    if public.acknowledge_invite_upgrade(other_notice)->>'error' is distinct from 'invalid_notice' then raise exception 'Acknowledged another user notice'; end if;
+    seen := public.acknowledge_invite_upgrade(notice);
+    if seen->'lifetimeUpgrade'->>'seenAt' is null then raise exception 'Seen receipt missing'; end if;
+    if public.acknowledge_invite_upgrade(notice)->'lifetimeUpgrade' is distinct from seen->'lifetimeUpgrade' then raise exception 'Acknowledgement not idempotent'; end if;
+    if public.claim_invite_upgrade_notification(notice)->>'claimed' is distinct from 'false' then raise exception 'Seen notice notified again'; end if;
+    begin
+        perform * from public.invite_upgrade_announcements;
+        raise exception 'Client could enumerate the recipient cohort';
+    exception when insufficient_privilege then null; end;
+    begin
+        update public.invite_upgrade_announcements set seen_at = null where user_id = recipient;
+        raise exception 'Client could reset the notice';
+    exception when insufficient_privilege then null; end;
+    reset role;
+    if (select seen_at from public.invite_upgrade_announcements where user_id = other_user) is not null then
+        raise exception 'Another user was changed';
+    end if;
+    perform set_config('request.jwt.claims', '{}', true);
+    set local role anon;
+    begin
+        perform public.claim_invite_upgrade_notification(notice);
+        raise exception 'Unauthenticated claim accepted';
+    exception when insufficient_privilege then null; end;
+    begin
+        perform public.acknowledge_invite_upgrade(notice);
+        raise exception 'Unauthenticated acknowledgement accepted';
+    exception when insufficient_privilege then null; end;
+    reset role;
+end;
+$$;
+select 'PASS: private upgrade receipts, atomic notification claim, idempotent acknowledgement, independent channels and new-user exclusion' as upgrade_announcement_checks;

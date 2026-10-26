@@ -7,6 +7,7 @@ import SwiftUI
 struct InviteCelebration: View {
     let ticketNamespace: Namespace.ID
     var lateGift = false
+    var upgrade = false
     var continueTitle = "Continue setup"
     let onClose: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -35,13 +36,13 @@ struct InviteCelebration: View {
                     .allowsHitTesting(false)
 
                 if !claimed {
-                    Text(ready && !lateGift ? "SOME THINGS ARE YOURS FOREVER" : "A LITTLE SOMETHING, JUST FOR YOU")
+                    Text(upgrade ? "A GIFT FOR OUR EARLY SUPPORTERS" : ready && !lateGift ? "SOME THINGS ARE YOURS FOREVER" : "A LITTLE SOMETHING, JUST FOR YOU")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .tracking(2.5).foregroundStyle(.white.opacity(0.5))
                         .position(x: center.x, y: center.y - (lateGift ? 285 : 260))
                         .opacity(arrived ? 1 : 0)
 
-                    InviteEnvelope(opened: opened, letterVisible: letterVisible, lateGift: lateGift)
+                    InviteEnvelope(opened: opened, letterVisible: letterVisible, lateGift: lateGift, upgrade: upgrade)
                         .frame(width: 430, height: 270)
                         .rotationEffect(.degrees(arrived ? 0 : -9))
                         .offset(y: reduceMotion || arrived ? 0 : 170)
@@ -66,7 +67,7 @@ struct InviteCelebration: View {
                         Text(lateGift ? "Enjoy Sentient!" : "All yours. For life.")
                             .font(.system(size: 43, weight: .medium))
                             .foregroundStyle(InvitePaper.light)
-                        Text(lateGift ? "A couple of weeks of unlimited Sidekick, on us." : "Thanks for being here early.")
+                        Text(upgrade ? "Your upgrade is already saved. Thanks for being here early." : lateGift ? "A couple of weeks of unlimited Sidekick, on us." : "Thanks for being here early.")
                             .font(.system(size: 16)).foregroundStyle(.white.opacity(0.58))
                     }
                     .position(x: center.x, y: center.y - 155)
@@ -82,7 +83,7 @@ struct InviteCelebration: View {
                 VStack(spacing: 12) {
                     Button(action: claimed ? onClose : claim) {
                         HStack(spacing: 12) {
-                            Text(claimed ? continueTitle : lateGift ? "Enjoy Sentient!" : "Claim lifetime access")
+                            Text(claimed ? continueTitle : upgrade ? "See my lifetime pass" : lateGift ? "Enjoy Sentient!" : "Claim lifetime access")
                             Image(systemName: claimed ? "arrow.right" : "sparkle")
                         }
                         .font(.system(size: 14, weight: .semibold))
@@ -95,7 +96,8 @@ struct InviteCelebration: View {
                     .focused($claimFocused)
                     .disabled(!ready)
 
-                    Text(lateGift ? "Your Sidekick gift is saved. Make yourself at home."
+                    Text(upgrade && !claimed ? "We've upgraded your earlier gift to free lifetime access."
+                         : lateGift ? "Your Sidekick gift is saved. Make yourself at home."
                          : claimed ? "Your lifetime pass is saved. Make yourself at home."
                                    : "Sentient OS, free for life. A gift from us to you.")
                         .font(.system(size: 12)).foregroundStyle(.white.opacity(0.48))
@@ -170,6 +172,7 @@ private struct InviteEnvelope: View {
     let opened: Bool
     let letterVisible: Bool
     var lateGift = false
+    var upgrade = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -222,6 +225,7 @@ private struct InviteEnvelope: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(letterVisible
             ? (lateGift ? InviteLateUse.message + " Enjoy Sentient! -- Jesai & Aditya"
+                        : upgrade ? "You've been upgraded. Sentient OS, yours for life. Your lifetime access is already unlocked."
                         : "Welcome. Sentient OS, yours for life. Lifetime access verified.")
             : "Opening your invitation")
     }
@@ -239,7 +243,7 @@ private struct InviteEnvelope: View {
                 }
                 .padding(26)
             } else {
-                Text("WELCOME TO YOUR FOREVER PLAN")
+                Text(upgrade ? "YOU'VE BEEN UPGRADED" : "WELCOME TO YOUR FOREVER PLAN")
                     .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.5)
                     .opacity(0.6).padding(.top, 27)
                 Text("Sentient OS.\nYours for life.")
@@ -247,7 +251,7 @@ private struct InviteEnvelope: View {
                     .multilineTextAlignment(.center).lineSpacing(0)
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.seal.fill")
-                    Text("Lifetime access, reserved for you.")
+                    Text(upgrade ? "Your lifetime access is already unlocked." : "Lifetime access, reserved for you.")
                 }
                 .font(.system(size: 11)).opacity(0.65)
                 Spacer(minLength: 0)
