@@ -42,8 +42,12 @@ struct SidekickRecoveryLayout {
         let chromeHeight = metrics.topRowHeight + metrics.topPad + metrics.bottomPad
             + Self.topPad + Self.bottomPad + Self.fieldSpacing + Self.fieldHeight
         let availableScrollHeight = max(0, maximum.height - chromeHeight)
+        let upgradeHeight = content.upgradeOffer.map {
+            Self.height($0.explanation, font: Self.errorFont, width: textWidth)
+                + SidekickUpgradeActions.actionRowsHeight + Self.sectionSpacing
+        } ?? 0
         let questionAndAnswersHeight = questionHeight + answersHeight + 2 * Self.scrollVPad
-            + (content.question == nil ? 0 : Self.sectionSpacing)
+            + (content.question == nil ? 0 : Self.sectionSpacing) + upgradeHeight
         let errorChrome = Self.labelHeight + 6 + (content.question == nil ? 0 : Self.sectionSpacing)
         // Give the question and answers room first. A long error can scroll in the remaining
         // space; long questions/answers still scroll as a group above the fixed input.
@@ -106,6 +110,9 @@ struct SidekickRecoveryView: View {
                             .mask { scrollEdges }
                             .accessibilityLabel("Complete error")
                         }
+                    }
+                    if content.upgradeOffer != nil {
+                        SidekickUpgradeActions(recovery: recovery, content: content)
                     }
                     if let question = content.question {
                         Text(question.question)
@@ -190,6 +197,50 @@ struct SidekickRecoveryView: View {
     private func send() {
         guard canSend else { return }
         recovery.answer(id: content.id)
+    }
+}
+
+/// Appears only for an evidence-backed Free/Go provider limit. Every external action is a
+/// deliberate click; opening pricing never buys a subscription or changes provider settings.
+struct SidekickUpgradeActions: View {
+    @Bindable var recovery: SidekickRecovery
+    let content: SidekickRecoveryContent
+    static let actionRowsHeight: CGFloat = 36 // one 28-point action row and its 8-point gap
+
+    var body: some View {
+        if let offer = content.upgradeOffer {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(offer.explanation)
+                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Upgrade to Plus") {
+                        guard recovery.content?.id == content.id else { return }
+                        recovery.dismiss()
+                        NSWorkspace.shared.open(CodexAuth.upgradeURL)
+                    }
+                    .accessibilityIdentifier("sidekick.recovery.upgradePlus")
+                    Button("Change AI") {
+                        guard recovery.content?.id == content.id else { return }
+                        recovery.dismiss()
+                        HomeWindowOpening.open(.settings, settingsPane: .frontierModel)
+                    }
+                    .accessibilityIdentifier("sidekick.recovery.changeAI")
+                    Button("Try again") {
+                        guard recovery.content?.id == content.id else { return }
+                        let guidance = recovery.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        recovery.answer(id: content.id, text: guidance.isEmpty ? "Try this task again." : guidance)
+                    }
+                    .accessibilityIdentifier("sidekick.recovery.retry")
+                    Button("Stop") { recovery.cancel(id: content.id) }
+                        .accessibilityIdentifier("sidekick.recovery.stop")
+                }
+                .frame(height: 28)
+            }
+            .buttonStyle(.bordered)
+            .font(.system(size: 11, weight: .medium))
+            .controlSize(.small)
+        }
     }
 }
 

@@ -73,6 +73,20 @@ struct IterativeRun {
 
     enum Mode { case initial, iterative, auto }
 
+    private static func sourceName(_ kind: SourceKind) -> String {
+        switch kind {
+        case .file: "Files"
+        case .whatsapp: "WhatsApp"
+        case .imessage: "iMessage"
+        case .notes: "Apple Notes"
+        case .appleMail: "Apple Mail"
+        case .appleCalendar: "Apple Calendar"
+        case .gmail: "Gmail"
+        case .calendar: "Google Calendar"
+        case .mcp: "Connected apps"
+        }
+    }
+
     static let preemptiveReloadEvery = 40
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
@@ -274,7 +288,11 @@ struct IterativeRun {
                     tags: ["source": connector.kind.rawValue, "error": String(describing: type(of: error))],
                     fingerprint: ["source", "dropped", connector.kind.rawValue])
                 SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "incomplete")
-                p.failed += 1
+                let message = error is ChatSelectionReadError
+                    ? "Some selected chats are unavailable. Review this source in Knowledge Sources, then retry."
+                    : "This source could not be read. Restore access or review its selection in Knowledge Sources, then retry."
+                p.failSourceRead(name: Self.sourceName(connector.kind), message: message)
+                onProgress(p)
                 continue
             }
 
@@ -348,7 +366,7 @@ struct IterativeRun {
                         finished = false
                         capped = true
                         SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "time_cap")
-                        let name = connector.kind == .file ? "Files" : connector.kind.rawValue.capitalized
+                        let name = Self.sourceName(connector.kind)
                         p.sourceReadFailures[name] = "More items remain. Completed items are saved; the next analysis continues from the checkpoint."
                         onProgress(p)
                         break bucketLoop
@@ -435,7 +453,7 @@ struct IterativeRun {
             }
             if !capped {
                 SourceHealth.recordReadOutcome(source: connector.kind.rawValue, outcome: "ok")
-                p.successfulSources.insert(connector.kind == .file ? "Files" : connector.kind.rawValue.capitalized)
+                p.successfulSources.insert(Self.sourceName(connector.kind))
             }
         }
         await engine.unload()

@@ -7,6 +7,8 @@ import AppKit
 struct HomeDoubleTapButton: View {
     let active: Bool
     @Binding var presented: Bool
+    var needsPersonalSetup = false
+    var onFinishSetup: () -> Void = {}
     var onViewAnalysis: () -> Void
     @AppStorage(ShortcutPreferences.storageKey) private var shortcutRaw = ShortcutKey.rightCommand.rawValue
     @AppStorage(DoubleTap.enabledKey) private var enabled = true
@@ -137,16 +139,20 @@ struct HomeDoubleTapButton: View {
                     Text("Ready after your first analysis.")
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(SidekickStyle.ink)
                         .accessibilityIdentifier("doubleTap.waiting")
-                    Text("Your first analysis gives Double Tap your personal context. Then click a reply box and tap \(key.label) twice.")
+                    Text(needsPersonalSetup
+                         ? "Finish setup and connect three sources to give Double Tap your personal context. After your first analysis, click a reply box and tap \(key.label) twice."
+                         : "Your first analysis gives Double Tap your personal context. Then click a reply box and tap \(key.label) twice.")
                         .font(.system(size: 12)).foregroundStyle(SidekickStyle.secondary).lineSpacing(3)
                 }
                 Button {
-                    presented = false; onViewAnalysis()
+                    presented = false
+                    if needsPersonalSetup { onFinishSetup() } else { onViewAnalysis() }
                 } label: {
-                    Label("View analysis", systemImage: "arrow.up.right")
+                    Label(needsPersonalSetup ? "Finish setup" : "View analysis", systemImage: "arrow.up.right")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(SidekickStyle.ink)
                         .padding(.vertical, 5).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("doubleTap.viewAnalysis")
+                }.buttonStyle(.plain)
+                    .accessibilityIdentifier(needsPersonalSetup ? "doubleTap.finishSetup" : "doubleTap.viewAnalysis")
             } else {
                 VStack(alignment: .leading, spacing: 9) {
                     Text("Click a reply box, then tap **\(key.label) twice**.")

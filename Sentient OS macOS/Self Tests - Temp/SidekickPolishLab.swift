@@ -3,6 +3,7 @@
 // Five captures of this process's windows only. No provider, computer-use helper or other app.
 // Doc: ../Documentation - General - Self-Testing (Eval Harness).md
 import AppKit
+import ApplicationServices
 import Foundation
 import ScreenCaptureKit
 import SwiftUI
@@ -10,11 +11,12 @@ import WebKit
 
 @MainActor enum SidekickPolishLab {
     enum Failure: String, Error { case isolation, screenLocked, unavailable, capture, accessibility, foreground }
-    private struct Element {
+    struct Element {
         let identifier: String
         let label: String
         let role: String
         let frame: CGRect
+        var enabled: Bool? = nil
     }
     @MainActor private final class MenuObservation {
         var opened = 0
@@ -696,7 +698,7 @@ import WebKit
             setViewport(OnboardingWindowLayout.initialSize(visibleSize: visibleSize))
             host.rootView = AnyView(ZStack {
                 Color.black.ignoresSafeArea()
-                OnboardingCanvas(scale: scale) { OnboardingView(onFinished: { _ in }) }
+                OnboardingCanvas(scale: scale) { OnboardingView(onFinished: {}) }
             }.environment(app).id("film-\(index)").preferredColorScheme(.dark))
             window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             var ready = false
@@ -819,7 +821,7 @@ import WebKit
         return checks
     }
 
-    private static func postClick(window: NSWindow, screenPoint: CGPoint) throws {
+    static func postClick(window: NSWindow, screenPoint: CGPoint) throws {
         let point = window.convertPoint(fromScreen: screenPoint)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
@@ -846,35 +848,78 @@ import WebKit
                 demoText: phase == .typing ? "Help me with this" : nil, metrics: metrics)
         }.environment(\.colorScheme, .dark))
     }
-    private static func settle(_ milliseconds: Int) async throws {
+    static func settle(_ milliseconds: Int) async throws {
         await Task.yield(); try await Task.sleep(for: .milliseconds(milliseconds))
     }
-    private static func elements(_ view: NSView) -> [Element] {
+    /// SwiftUI exposes semantic nodes lazily when a real assistive client reads them.
+    /// Query only our process through the public AX API, off-main so AppKit can answer.
+    /// Include scroll contents/visible children: warming only the native window/footer can
+    /// otherwise leave a newly attached sheet's choice buttons as in-process AXUnknown nodes.
+    static func activateOwnAccessibility() async -> Int {
+        let pid = getpid()
+        return await Task.detached(priority: .userInitiated) {
+            let application = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(application, 0.15)
+            var raw: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &raw)
+            guard result == .success, let windows = raw as? [AXUIElement] else { return Int(result.rawValue) }
+            let deadline = Date().addingTimeInterval(3)
+            var pending = windows, visited: [AXUIElement] = []
+            var index = 0
+            while index < pending.count, visited.count < 192, Date() < deadline {
+                let node = pending[index]; index += 1
+                guard !visited.contains(where: { CFEqual($0, node) }) else { continue }
+                visited.append(node)
+                AXUIElementSetMessagingTimeout(node, 0.15)
+                for attribute in [kAXRoleAttribute, kAXIdentifierAttribute] {
+                    var value: CFTypeRef?
+                    _ = AXUIElementCopyAttributeValue(node, attribute as CFString, &value)
+                }
+                for attribute in [kAXChildrenAttribute, kAXContentsAttribute, kAXVisibleChildrenAttribute] {
+                    guard Date() < deadline else { break }
+                    var children: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(node, attribute as CFString, &children) == .success,
+                       let values = children as? [AXUIElement] {
+                        pending.append(contentsOf: values.prefix(32))
+                    }
+                }
+            }
+            return Int(result.rawValue)
+        }.value
+    }
+
+    static func elements(_ view: NSView, maximumDepth: Int = 35) -> [Element] {
         var result: [Element] = []
         var visited = Set<ObjectIdentifier>()
         func text(_ value: Any?) -> String? {
             let value = (value as? NSAttributedString)?.string ?? (value as? String)
             return value?.isEmpty == false ? value : nil
         }
+        func enabled(_ value: Any) -> Bool? {
+            guard let node = value as? NSObject,
+                  node.responds(to: NSSelectorFromString("isAccessibilityEnabled"))
+                    || node.responds(to: NSSelectorFromString("accessibilityEnabled")) else { return nil }
+            return node.value(forKey: "accessibilityEnabled") as? Bool
+        }
         @MainActor func walk(_ value: Any, depth: Int) {
-            guard depth < 35, result.count < 3000 else { return }
+            guard depth < maximumDepth, result.count < 6000 else { return }
             let identity = ObjectIdentifier(value as AnyObject)
             guard visited.insert(identity).inserted else { return }
             var children: [Any] = []
             if let node = value as? NSView {
                 result.append(Element(identifier: node.accessibilityIdentifier(),
                     label: text(node.accessibilityLabel()) ?? text(node.accessibilityTitle()) ?? text(node.accessibilityValue()) ?? "",
-                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame()))
+                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame(), enabled: enabled(node)))
                 children = (node.accessibilityChildren() ?? []) + node.subviews
             } else if let node = value as? NSAccessibilityElement {
                 result.append(Element(identifier: node.accessibilityIdentifier() ?? "",
                     label: text(node.accessibilityLabel()) ?? text(node.accessibilityTitle()) ?? text(node.accessibilityValue()) ?? "",
-                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame()))
+                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame(), enabled: enabled(node)))
                 children = node.accessibilityChildren() ?? []
             } else if let node = value as? any NSAccessibilityProtocol {
                 result.append(Element(identifier: node.accessibilityIdentifier() ?? "",
                     label: text(node.accessibilityLabel()) ?? text(node.accessibilityTitle()) ?? text(node.accessibilityValue()) ?? "",
-                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame()))
+                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame(), enabled: enabled(node)))
                 children = node.accessibilityChildren() ?? []
             } else if let node = value as? NSObject {
                 // SwiftUI AccessibilityNode implements AppKit's informal getters without
@@ -882,10 +927,13 @@ import WebKit
                 func attribute(_ key: String) -> Any? {
                     node.responds(to: NSSelectorFromString(key)) ? node.value(forKey: key) : nil
                 }
-                guard let frame = attribute("accessibilityFrame") as? NSValue else { return }
-                result.append(Element(identifier: text(attribute("accessibilityIdentifier")) ?? "",
-                    label: text(attribute("accessibilityLabel")) ?? text(attribute("accessibilityTitle")) ?? text(attribute("accessibilityValue")) ?? "",
-                    role: text(attribute("accessibilityRole")) ?? "", frame: frame.rectValue))
+                if let frame = attribute("accessibilityFrame") as? NSValue {
+                    result.append(Element(identifier: text(attribute("accessibilityIdentifier")) ?? "",
+                        label: text(attribute("accessibilityLabel")) ?? text(attribute("accessibilityTitle")) ?? text(attribute("accessibilityValue")) ?? "",
+                        role: text(attribute("accessibilityRole")) ?? "", frame: frame.rectValue, enabled: enabled(node)))
+                }
+                // Some SwiftUI container nodes expose children without their own frame.
+                // They are transparent to navigation, not the end of the accessibility tree.
                 children = attribute("accessibilityChildren") as? [Any] ?? []
             }
             for child in children { walk(child, depth: depth + 1) }
@@ -916,7 +964,7 @@ import WebKit
         try await settle(300)
         return observation.opened > 0
     }
-    private static func capture(_ view: NSView, name: String, directory: URL, includingChild: NSWindow? = nil) async throws -> [String: Any] {
+    static func capture(_ view: NSView, name: String, directory: URL, includingChild: NSWindow? = nil) async throws -> [String: Any] {
         guard let window = view.window, window.isVisible else { throw Failure.capture }
         view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
         let content = try await SCShareableContent.currentProcess

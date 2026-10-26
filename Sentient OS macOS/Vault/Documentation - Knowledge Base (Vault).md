@@ -17,8 +17,12 @@ own data paths. Optional MCP sharing uploads an encrypted copy only when enabled
 
 ## Your voice and your edits
 
-`writingstyle.md` is a separate **one-time snapshot** of selected sent-message examples, not a
-continuously collected message history. Knowledge builds and updates preserve it, including your
+`writingstyle.md` is a separate **one-time snapshot** of sent-message examples from explicitly
+selected chats and enabled, connected supported email sources, not a continuously collected message
+history. It never discovers unselected local databases or requires FDA for a cloud-only selection.
+New empty collections leave no file, allowing later source opt-ins to supply samples. Existing files,
+including empty user files, are preserved. Missing examples do not prevent Double Tap from using the
+normal knowledge context. Knowledge builds and updates preserve it, including your
 edits. Double Tap includes it in drafting requests, and whole-folder MCP sharing includes it too.
 Open it with **Settings → Double Tap → Show writing examples in Finder**; the Knowledge window hides
 this support file from ordinary navigation. See the Double Tap guide for collection scope.

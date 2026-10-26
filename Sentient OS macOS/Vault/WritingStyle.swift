@@ -41,37 +41,49 @@ nonisolated enum WritingStyle {
 
     @MainActor struct Selection: Equatable {
         let backend = ModelBackend.current
-        // Writing samples are independent of the regular analysis/chat-picker selections.
-        // All local one-to-one conversations participate when their source is present.
+        // Reuse the user's explicit source and chat consent; available local databases and
+        // connected-but-disabled mail accounts never grant writing-sample access.
+        let imessageGUIDs: Set<String>
+        let whatsappJIDs: Set<String>
         let imessage: Bool
         let whatsapp: Bool
         let mail: [String]
         let origins: [String]
+        var hasSources: Bool { imessage || whatsapp || !mail.isEmpty }
         init() {
             #if DEBUG
             if let sources = acceptanceSources {
-                imessage = sources.contains("imessage")
-                whatsapp = sources.contains("whatsapp")
+                imessageGUIDs = sources.contains("imessage") ? SourceSelection.imessageGUIDs : []
+                whatsappJIDs = sources.contains("whatsapp") ? SourceSelection.chatJIDs : []
+                imessage = !imessageGUIDs.isEmpty
+                whatsapp = !whatsappJIDs.isEmpty
                 mail = ["gmail", OutlookMailConnector.slug].filter { sources.contains($0) }
                 origins = mail.map { ConnectorRegistry.readOrigin(slug: $0, backend: ModelBackend.current) }
                 return
             }
             #endif
-            imessage = FileManager.default.fileExists(atPath: iMessageSource().dbPath)
-            whatsapp = WhatsAppSource.isInstalled && FileManager.default.fileExists(atPath: WhatsAppSource().dbPath)
+            imessageGUIDs = SourceSelection.isSelected("dbg.run.imessage")
+                && !SourceSelection.imessageGUIDs.isEmpty && ProtectedLocalSource.imessage.isReadable
+                ? SourceSelection.imessageGUIDs : []
+            whatsappJIDs = SourceSelection.isSelected("dbg.run.whatsapp")
+                && !SourceSelection.chatJIDs.isEmpty && ProtectedLocalSource.whatsapp.isReadable
+                ? SourceSelection.chatJIDs : []
+            imessage = !imessageGUIDs.isEmpty
+            whatsapp = !whatsappJIDs.isEmpty
             var slugs: [String] = []
-            if ModelBackend.connectorsAvailable {
-                if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") {
-                    slugs.append("gmail")
-                }
-                if ConnectorRegistry.detectedForCurrentBackend().contains(where: { $0.slug == OutlookMailConnector.slug && $0.healthy }) {
-                    slugs.append(OutlookMailConnector.slug)
-                }
+            if SourceSelection.hostedSourceReady("gmail") { slugs.append("gmail") }
+            if SourceSelection.readyConnectors.contains(where: { $0.slug == OutlookMailConnector.slug }) {
+                slugs.append(OutlookMailConnector.slug)
             }
             mail = slugs
             origins = slugs.map { ConnectorRegistry.readOrigin(slug: $0, backend: ModelBackend.current) }
         }
     }
+
+    /// Stable, in-memory consent/readiness identity for a once-per-selection background retry.
+    /// It includes only already-enabled sources and never persists chat/account identifiers.
+    @MainActor static var selectionIdentity: Selection { Selection() }
+    @MainActor static var hasSources: Bool { selectionIdentity.hasSources }
 
     /// Collect, then land the file, for a knowledge base that already exists: the home's silent
     /// setup and the introduction sheet. Initial processing calls the two halves itself, so the
@@ -82,6 +94,7 @@ nonisolated enum WritingStyle {
         let root = VaultGenerator.vaultRoot
         guard !exists(in: root) else { return }
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent("README.md").path) else { throw Failure.noVault }
+        guard hasSources else { return }
         let task = Task { @MainActor in
             try Task.checkCancellation()
             let content = try await collect(progress: progress)
@@ -118,16 +131,16 @@ nonisolated enum WritingStyle {
         PipelineActivity.begin()
         defer { generating = false; PipelineActivity.end() }
         let selection = Selection()
-        if selection.imessage || selection.whatsapp {
-            guard Permissions.hasFullDiskAccess() else { throw Failure.permissions }
-        }
         let imessagePath = iMessageSource().dbPath, whatsappPath = WhatsAppSource().dbPath
         progress("Reading your sent messages…")
         let localTask = Task.detached {
-            // The Mac's Contacts name iMessage handles and email addresses alike; best-effort.
-            let names = selection.imessage || !selection.mail.isEmpty ? AddressBookNames.loadMap() : [:]
-            let imessage = selection.imessage ? try LocalWritingSamples.iMessage(path: imessagePath, names: names) : []
-            let whatsapp = selection.whatsapp ? try LocalWritingSamples.whatsApp(path: whatsappPath) : []
+            // Do not discover Contacts independently, especially for cloud-only setups. Mail
+            // supplies its recipient labels; chats retain their own labels or raw handles.
+            let names: [String: String] = [:]
+            let imessage = selection.imessage ? try LocalWritingSamples.iMessage(path: imessagePath,
+                names: names, chatGUIDs: selection.imessageGUIDs) : []
+            let whatsapp = selection.whatsapp ? try LocalWritingSamples.whatsApp(path: whatsappPath,
+                chatJIDs: selection.whatsappJIDs) : []
             return (imessage, whatsapp, names)
         }
         let (imessage, whatsapp, names) = try await withTaskCancellationHandler { try await localTask.value } onCancel: { localTask.cancel() }
@@ -160,6 +173,9 @@ nonisolated enum WritingStyle {
     /// or another run's, always wins.
     @MainActor static func publishIfNeeded(_ content: String, in root: URL = VaultGenerator.vaultRoot) throws {
         if exists(in: root) { return }
+        // No examples is a valid outcome, not a permanent one-time snapshot. Leaving the file
+        // absent allows a later explicit source selection or Settings retry to collect samples.
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         do { try publish(content, in: root) }
         catch {
             Diagnostics.report(.knowledgeFailed, phase: .publish, reason: "writing_samples", error: error)

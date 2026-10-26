@@ -609,6 +609,12 @@ import SwiftUI
         let memoryBefore = try SidekickInstructionStore.read().text
         let vaultFile = root.appendingPathComponent("vault/README.md")
         let vaultBefore = try Data(contentsOf: vaultFile)
+        // The migrated legacy fixture can contain only prompts/statuses. Add an owned
+        // incoming row so a real visibility receipt exists before the chat is cleared.
+        let oldIncomingID = "clear-ui.incoming-update"
+        _ = try store.append(Event(id: oldIncomingID, taskID: UUID(), kind: .assistantMessage,
+            text: "An in-progress fixture update.", source: source, messageKind: .update))
+        conversation.refresh()
         let generation = try store.generation, sequence = try store.latestSequence
         guard sequence > 0 else { throw Failure.invalidFixture }
         let first = try store.transcriptPage().records.first!
@@ -641,7 +647,7 @@ import SwiftUI
         try await settle(300)
         guard let sheetView = window.attachedSheet?.contentView else { throw Failure.invalidFixture }
         captures.append(try await capture(sheetView, name: "02-clear-confirmation", directory: directory))
-        cancel()
+        try cancel()
         try await settle(350)
         checks["cancel_preserves_history"] = try store.generation == generation && store.latestSequence == sequence
         checks["cancel_preserves_draft_and_reply"] = conversation.draft == draft && conversation.replyReference != nil
@@ -650,11 +656,14 @@ import SwiftUI
         await presentation.find(conversation: conversation)
         presentation.clearChatConfirmationShown = true
         let clear = try await confirmationButton("Clear chat", window: window)
-        clear()
+        try clear()
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while (try store.generation == generation || coordinator.run.isClearingChat), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
+        // Recreate a delayed visibility callback from a removed row, without a user reply.
+        // The model also defends against an older caller incorrectly using the new identity.
+        conversation.markRead(messageIDs: [oldIncomingID], generation: try store.generation)
         try await settle(650)
         captures.append(try await capture(host, name: "03-overview-after-clear", directory: directory))
         checks["history_generation_rotated"] = try store.generation != generation
@@ -663,6 +672,8 @@ import SwiftUI
         checks["search_and_reading_state_empty"] = presentation.rows.isEmpty && presentation.searchResults.isEmpty && presentation.search.isEmpty && !presentation.searchShown
         checks["proactive_surface_restored"] = presentation.surface == .suggestions && !presentation.cards.entries.isEmpty
         checks["cleared_projection_idle"] = !presentation.loading && presentation.error == nil && conversation.storageError == nil
+        checks["late_receipt_has_no_reply_warning"] = conversation.replyReference == nil
+            && conversation.storageError == nil
         conversation.requestNavigation()
         try await settle(800)
         captures.append(try await capture(host, name: "04-empty-conversation", directory: directory))
@@ -698,25 +709,26 @@ import SwiftUI
         return checks
     }
 
-    private static func confirmationButton(_ title: String, window: NSWindow) async throws -> () -> Void {
-        func action(_ element: Any) -> (() -> Void)? {
-            if let button = element as? NSButton, button.title == title, button.isEnabled {
-                return { button.performClick(nil) }
-            }
-            if let accessible = element as? NSAccessibilityProtocol {
-                if accessible.accessibilityRole() == .button,
-                   accessible.accessibilityLabel() == title || accessible.accessibilityTitle() == title {
-                    return { _ = accessible.accessibilityPerformPress() }
-                }
-                for child in accessible.accessibilityChildren() ?? [] {
-                    if let press = action(child) { return press }
-                }
-            }
-            return nil
-        }
+    private static func confirmationButton(_ title: String, window: NSWindow) async throws -> () throws -> Void {
+        var warmedWindow: Int?
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while ContinuousClock.now < deadline {
-            if let sheet = window.attachedSheet, let press = action(sheet) { return press }
+            if let sheet = window.attachedSheet, let view = sheet.contentView {
+                if warmedWindow != sheet.windowNumber {
+                    _ = await SidekickPolishLab.activateOwnAccessibility()
+                    warmedWindow = sheet.windowNumber
+                }
+                if let button = SidekickPolishLab.elements(view, maximumDepth: 80).first(where: {
+                    $0.role == NSAccessibility.Role.button.rawValue && $0.label == title && $0.enabled == true
+                        && $0.frame.width > 0 && $0.frame.height > 0
+                }) {
+                    return {
+                        guard window.attachedSheet === sheet, sheet.isVisible else { throw Failure.invalidFixture }
+                        try SidekickPolishLab.postClick(window: sheet,
+                            screenPoint: CGPoint(x: button.frame.midX, y: button.frame.midY))
+                    }
+                }
+            }
             try await Task.sleep(for: .milliseconds(20))
         }
         throw Failure.invalidFixture
@@ -732,6 +744,7 @@ import SwiftUI
     }
     private static func rootPage(_ app: AppState, reduced: Bool) -> AnyView {
         AnyView(RootView().environment(app)
+            .environment(\.accessibilityEnabled, true)
             .environment(\.sidekickReduceMotionOverride, reduced)
             .environment(\.sidekickReduceTransparencyOverride, false)
             .preferredColorScheme(.dark))

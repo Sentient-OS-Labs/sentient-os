@@ -1,10 +1,14 @@
 # Onboarding (Views/Onboarding/)
 
-First launch, no separate Sentient account: the film and native Double Tap lesson → choose your frontier model (with the codex login embedded) →
-the plan crossroads (free/go ChatGPT accounts only) → permissions → the ready-to-process screen → the
-REAL first analysis (pausable) → the finale (the home appears and the Knowledge window's Constellation
-opens on top). The current step persists (`onboarding.step`), so the quit-and-relaunch that granting
-Full Disk Access requires resumes exactly where the user left off.
+First launch has two steps: the existing film/Sidekick/Double Tap lessons, then choose and connect a
+frontier model. Continue opens Home immediately. Sidekick asks for its essential computer-use access
+on first use; personal sources, FDA, analysis, overnight wake, login items, voice and notifications
+are not prerequisites for Home.
+
+Home's Sidekick-first workspace keeps the composer usable beside an optional personal-setup panel.
+The four feature examples start closed and have a top-left close button and Escape dismissal. Opening
+an example never starts analysis or a task. Suggestions only fill the existing draft. After a real
+successful non-demo Sidekick task, the setup invitation gains emphasis when Home is idle.
 
 ## Files
 
@@ -13,10 +17,12 @@ Full Disk Access requires resumes exactly where the user left off.
 | `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, and the DEBUG "SKIP TO HOME" handle. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
 | `OnboardingFilmView.swift` · `OnboardingDoubleTapView.swift` | Step 0: the website film, native Sidekick interaction, then the native Double Tap lesson. |
 | `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; engine preparation and login, the `codex --help` confirmation poll (skipped until a codex install exists), the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
-| `OnboardingPlanView.swift` | Step 2: the plan crossroads. |
-| `OnboardingPermissionsView.swift` | Step 3: overnight wake → launch at login → Full Disk Access, unlocking sequentially. |
-| `OnboardingReadyView.swift` | Step 4: the source tiles and the big Start Analysis glow. |
-| `OnboardingModelDownloadView.swift` | Shown between Start Analysis and the takeover if the model has not finished landing. |
+| `PersonalSetupView.swift` | Optional independent window; Home and Sidekick retain their lifetime while sources are connected. |
+| `OnboardingPermissionsView.swift` | `OvernightSetupRequirements`: wake and login controls shown only after choosing overnight analysis. |
+| `OnboardingReadyView.swift` | Resumable source picker with three usable selections required before first analysis. No mandatory email prompt. |
+| `AnalysisTimingSheet.swift` | Explicit Run now or Overnight choice, and overnight-only prerequisites. |
+| `App/PersonalSetupProgress.swift` | Separate Home, personal-setup, first-task milestones and legacy migration. |
+| `System/SafeAppRelaunch.swift` | Refuses active-work restarts, preserves an unsent draft and resumes personal setup after an explicit source-permission relaunch. |
 | `OnboardingTelemetryConsent.swift` | Privacy policy and diagnostic controls over the frontier-model step; Read More opens the policy and Configure Telemetry uses the same two keys as Settings. |
 
 ## The steps
@@ -86,30 +92,64 @@ keeps the current engine and stays on this step. Sign-in and installation retry 
 needed, and Settings keeps its explicit Use Claude action. Other choices require the visible tab to
 match the active engine: ChatGPT logged in, or the selected custom endpoint that passed Test & Select.
 
-**2 · The plan crossroads.** Only free/go ChatGPT accounts see it; full plans, the Claude engine,
-and custom engines auto-advance before a pixel renders (Back knows to skip over it for them). "We noticed you're not on
-ChatGPT Plus." with the three feature rows, then Upgrade on ChatGPT (opens the pricing page and waits,
-quietly re-checking via `CodexAuth.refreshPlan` on foreground), "I've upgraded to ChatGPT Plus" (a
-native confirm, then we take their word: `assertedPlus`), or "Continue with just the knowledge base"
-(`knowledgeBaseOnly`). See the Plan Gate doc.
+**Plan access.** Free/Go users can enter Home and try Sidekick. The picker describes limited usage
+without another plan screen. A provider-reported usage limit or plan denial on a known Free/Go
+ChatGPT task offers Upgrade to Plus, Change AI, Try again and Stop in recovery. Generic network,
+permission, connector or model errors do not become a billing prompt. Migration retires the old
+`plan.kbOnly` flag; no upgrade requires erasing knowledge or repeating onboarding.
 
-**3 · Permissions.** Three `StatusLine` rows, unlocking sequentially: Overnight wake (the password
-installer; a daemon toggled off in Login Items gets a deep link instead), Launch at login (needs-approval
-escorts the user with the guide's instruction panel), and Full Disk Access LAST because it forces a
-relaunch (the floating drag panel with Sentient itself as the card, then "Relaunch Sentient"; the
-persisted step brings the user right back). Notification permission is asked silently on appear
-(`Notify.ask()`). Continue needs all three green; statuses re-probe on foreground.
+## Optional personal setup
 
-**4 · Ready to process.** The Settings-grade source tiles on the SAME keys as Settings (Desktop,
-Downloads, Documents armed by default; WhatsApp / iMessage pickers; Notes; Apple Mail and Calendar selections; Gmail / Calendar connect
-sheets, locked where connectors are unavailable), the shared four-selection minimum, and the
-full-brightness Start Analysis glow. Start presents the real `ProcessingView` (`.auto`, `pausable`,
-`fullCycle` when the deck is real). If the on-device model has not finished downloading, the
-downloading screen (`OnboardingModelDownloadView`: the signature glow bar, GB of GB, Try Again on
-failure) covers the tail and hands off to the analysis by itself the moment the model verifies. Only a
-finished run calls `onFinished`. Gmail and Outlook Mail collect and save the detected address when
-the user presses Done in the connection sheet, with an inline email-only feedback-list notice and no extra popup.
-Missing connections or undetectable addresses are skipped without asking for manual entry.
+The panel, Analysis, Double Tap lesson and menu bar open the same `personal-setup` window. Source
+selections persist immediately. Closing it returns to Home without starting work. Three selected,
+usable sources are required; a disconnected connector or unavailable local database does not count.
+Hosted Done verifies native connection metadata without a model call or content read. Proof belongs
+to the current account. Claude's shared login is checked this process before cached proof can count;
+an older account's check cannot certify a newer login. A later Stop reading or reconnect in another
+window invalidates pending confirmation for that source, so late results cannot restore an opt-out.
+Fresh Desktop/Downloads/Documents toggles are off. Migration preserves established users' old
+implicit defaults and every explicit saved choice, including false.
+
+Selecting a protected source opens its own FDA explanation. Cloud sources, Apple Calendar and
+user-selected folders use their appropriate access paths. No broad FDA screen precedes the picker.
+The pending protected source survives a deliberate restart, while resetting Sentient clears that UI
+intent. Relaunch preserves the current unsent request and cannot interrupt an active task or analysis.
+
+Start Analysis opens timing selection. Its chosen result is handed off only after SwiftUI reports
+dismissal and the native parent window has no attached sheet. `AnalysisTimingHandoff` combines the
+native did-end-sheet notification with attachment observation, consumes the result once, and cancels
+it if the owner closes, detaches or resets. This avoids closing setup underneath a live native sheet.
+
+Start Analysis opens timing selection. Run now records an explicit request and opens the separate
+progress window. Overnight shows wake and launch-at-login controls, then records a scheduled request.
+Neither path asks for voice or notification access. A timing choice completes personal *setup*;
+`ProcessingPlan.initialCompletedAt` remains the separate proof of successful initial *analysis*.
+Local-source analysis waits for the local model; cloud-only analysis can proceed without it.
+Partial and empty runs retain useful work and explain what needs attention without unlocking
+personal-context features prematurely. Sidekick stays available throughout.
+
+Gmail and Outlook Mail retain the disclosed email-only feedback-list behavior. Explicit Done in
+their connection sheet records that consent; collection waits for a later authorized mailbox run.
+Missing connections/addresses remain pending. There is no forced manual email form in the new flow.
+
+## Durable state and migration
+
+- `hasCompletedOnboarding` now admits Home after the model step. It does not consent to sources.
+- `onboarding.personalSetupCompleted` records the explicit analysis-timing choice.
+- `scheduler.firstCycleCompletedAt` retains the shipped successful-analysis milestone.
+- `onboarding.firstSuccessfulSidekickTask` excludes demos, cancelled work and proactive-card runs.
+- `onboarding.personalSetupStage` remembers Sources/Timing; ordinary quit returns to Home.
+- `onboarding.resumePersonalSetup` is consumed once after an explicit permission restart.
+- `onboarding.sidekickFirstVersion` prevents a new Home-only user being mistaken for completed
+  legacy setup on a later launch.
+
+Old completed users retain access, source choices, knowledge and schedule intent. Users already past
+the old model step enter Home with setup still optional. Interrupted analysis retains its persisted
+plan. Factory Reset clears the new milestones and restart intent while retaining explicit sources.
+After successful cleanup, `AppState.didResetPersonalData` also clears the app-owned Home presentation:
+conversation/search controls, old cards, and remembered visit state. Completing onboarding in that
+same process returns to the Sidekick invitation and four suggestions. Ordinary window reopen still
+preserves the user's chosen conversation view.
 
 ## Privacy explanations at setup
 
@@ -119,15 +159,17 @@ a ChatGPT or Claude subscription. Hosted connectors, Double Tap and optional sha
 settings rather than one blanket “everything stays local” promise.
 
 The native Double Tap lesson explains its unsent draft and low-latency covered route. One-time
-writing-style setup is separate from regular source selections. The frontier step links to the full
+writing-style setup reads only opted-in chats and enabled connected mail. Missing samples never block
+Double Tap or completion of useful initial analysis. Home retries absent samples once per eligible
+selection; an existing user-authored file is never replaced. The frontier step links to the full
 policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `PrivacyCopy`.
 
 ## Things that happen around the steps
 
-- AppState starts shared Codex CLI and native helper preparation on every normal launch, before model selection. Compatible installations are reused; setup is shared with Settings and task startup and is not canceled by pausing analysis. Claude Code remains an engine-specific install. The on-device model starts downloading after the post-FDA relaunch.
-- `DisplayAwake` holds the screen on for the whole flow (the download and the first analysis run behind the slides).
+- AppState starts shared Codex CLI/native preparation at launch. Compatible installations are reused. The local model starts downloading during the intro into app-owned Application Support without FDA; it never gates Home or Sidekick. Claude Code remains engine-specific.
+- `DisplayAwake` holds the screen on during the introduction and model connection; Home ends that hold.
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
-- Sidekick is home-only: before the film's notch beat a press does nothing; after it, the honest "finish onboarding to use Sidekick" aside; the notch's hover swell is off before the beat too.
+- Sidekick is available after the model connection and remains available during personal setup. The film retains its isolated notch demo and the existing pre-Home gesture policy.
 - The DEBUG "SKIP TO HOME" handle quietly flips the flag (no finale). `FactoryReset` rewinds here.
 
 ## Related docs

@@ -27,7 +27,8 @@ nonisolated enum LocalWritingSamples {
 
     /// Multiple SMS/iMessage conversations with the same handle count as one person. `names` is
     /// the Mac's Contacts map (AddressBookNames.loadMap); a handle nobody saved stays a handle.
-    static func iMessage(path: String, names: [String: String]) throws -> [Sample] {
+    static func iMessage(path: String, names: [String: String], chatGUIDs: Set<String>) throws -> [Sample] {
+        guard !chatGUIDs.isEmpty else { return [] }
         let (copy, directory) = try SQLiteDB.walSafeCopy(of: path, requireCompleteWAL: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let reader = try SQLiteReader(path: copy.path)
@@ -36,12 +37,14 @@ nonisolated enum LocalWritingSamples {
             SELECT c.ROWID, c.guid, c.chat_identifier, MAX(m.date)
             FROM chat c JOIN chat_message_join j ON j.chat_id = c.ROWID
             JOIN message m ON m.ROWID = j.message_id
-            WHERE c.style = 45 AND COALESCE(c.is_filtered, 0) <= 1
+            WHERE c.guid IN (\(sqlList(chatGUIDs)))
+              AND c.style = 45 AND COALESCE(c.is_filtered, 0) <= 1
               AND COALESCE(c.is_blackholed, 0) = 0
               AND m.associated_message_type = 0 AND m.item_type = 0
             GROUP BY c.ROWID
             """) { row in
-            guard let handle = row.text(2), !handle.isEmpty else { return }
+            guard let guid = row.text(1), chatGUIDs.contains(guid),
+                  let handle = row.text(2), !handle.isEmpty else { return }
             let key = handle.lowercased()
             var contact = contacts[key]
                 ?? Contact(rows: [], lastActive: 0, name: AddressBookNames.resolve(handle, in: names) ?? handle)
@@ -72,7 +75,8 @@ nonisolated enum LocalWritingSamples {
     }
 
     /// WhatsApp stores the contact's name beside the chat; an unnamed chat keeps its phone handle.
-    static func whatsApp(path: String) throws -> [Sample] {
+    static func whatsApp(path: String, chatJIDs: Set<String>) throws -> [Sample] {
+        guard !chatJIDs.isEmpty else { return [] }
         let (copy, directory) = try SQLiteDB.walSafeCopy(of: path, requireCompleteWAL: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let reader = try SQLiteReader(path: copy.path)
@@ -80,10 +84,10 @@ nonisolated enum LocalWritingSamples {
         try reader.forEachRow("""
             SELECT s.Z_PK, s.ZCONTACTJID, MAX(m.ZMESSAGEDATE), s.ZPARTNERNAME
             FROM ZWACHATSESSION s JOIN ZWAMESSAGE m ON m.ZCHATSESSION = s.Z_PK
-            WHERE s.ZSESSIONTYPE = 0
+            WHERE s.ZCONTACTJID IN (\(sqlList(chatJIDs))) AND s.ZSESSIONTYPE = 0
             GROUP BY s.Z_PK
             """) { row in
-            guard let jid = row.text(1),
+            guard let jid = row.text(1), chatJIDs.contains(jid),
                   jid.hasSuffix("@s.whatsapp.net") || jid.hasSuffix("@lid") else { return }
             let name = WhatsAppSource.cleanName(row.text(3))
                 ?? (jid.hasSuffix("@lid") ? "Unknown contact" : WhatsAppSource.handle(jid))
@@ -122,6 +126,11 @@ nonisolated enum LocalWritingSamples {
             if count == peopleLimit { break }
         }
         return result
+    }
+
+    /// IDs are data, never executable SQL. SQLite string literals escape quotes by doubling.
+    private static func sqlList(_ values: Set<String>) -> String {
+        values.sorted().map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ",")
     }
 
     private static func usable(_ body: String) -> Bool {

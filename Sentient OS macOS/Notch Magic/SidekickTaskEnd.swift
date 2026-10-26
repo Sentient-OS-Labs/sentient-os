@@ -194,3 +194,36 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
          "interruption_evidence": evidence.rawValue, "interruption_version": "1"]
     }
 }
+
+// Billing recovery uses the original provider error, never a model report or displayed text.
+extension SidekickUpgradeOffer {
+    nonisolated static func forProviderFailure(_ error: Error, backend: ModelBackend, planRaw: String?,
+                                   assertedPlus: Bool) -> Self? {
+        guard backend == .chatgpt, !assertedPlus,
+              let plan = planRaw?.lowercased(), ["free", "go"].contains(plan),
+              let providerError = error as? CodexCLI.CLIError else { return nil }
+        switch providerError {
+        case .usageLimit:
+            return .usageLimit
+        case .exitFailure(_, let message):
+            let text = String(message.prefix(8192)).lowercased()
+            // The shared telemetry classifier intentionally has broad text fallbacks. An
+            // upgrade action is narrower: a missing/unsupported model is not a plan denial.
+            guard text.range(of: "(^|[^0-9])403([^0-9]|$)", options: .regularExpression) == nil,
+                  !["permission denied", "access denied", "forbidden", "sandbox", "dns error",
+                    "could not resolve", "certificate", "connection refused", "timed out", "network is unreachable"]
+                    .contains(where: text.contains),
+                  !["model_not_found", "model_not_available", "does not exist", "unknown model",
+                    "unsupported model", "no such model", "not a valid model", "invalid model"]
+                .contains(where: text.contains),
+                  CodexFailureReason.classify(text: text) == .planDenied,
+                  ["not available for your plan", "not available on your plan", "requires chatgpt plus",
+                   "requires a paid", "not entitled", "entitlement", "plan_denied"]
+                    .contains(where: text.contains) else { return nil }
+            return .planDenied
+        default:
+            return nil
+        }
+    }
+
+}

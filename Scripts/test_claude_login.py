@@ -21,6 +21,8 @@ final class Process: @unchecked Sendable {
     struct Status { var loggedIn: Bool }
     static var status: () async -> Bool = { false }
     static var planDisplayName: String? { "Pro" }
+    static var accountChanges = 0
+    static func beginAccountChange() { accountChanges += 1 }
     static func refresh() async -> Status { Status(loggedIn: await status()) }
 }
 @MainActor enum ClaudeCLI {
@@ -61,6 +63,7 @@ __METHODS__
         let setup = Setup(), firstLink = URL(string: "https://example.com/first")!
         let secondLink = URL(string: "https://example.com/second")!
         setup.startLogin()
+        check(ClaudeAuth.accountChanges == 1, "Starting login invalidates earlier connector readiness immediately")
         let first = ClaudeCLI.processes.last!
         first.onURL?(firstLink); await settle()
         check(setup.loggingIn && setup.loginURL == firstLink, "URL arrival preserves waiting state")

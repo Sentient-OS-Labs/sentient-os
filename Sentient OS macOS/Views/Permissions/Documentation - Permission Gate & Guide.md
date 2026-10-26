@@ -38,9 +38,10 @@ The required grants follow the selected runtime:
 | All | Microphone and Speech are optional; typed commands work without them. |
 
 OpenAI Automation is checked through Apple's asynchronous API after launching the signed helper.
-Visible permission setup requests unasked consent through the macOS Apple Events dialog; the user chooses Allow there. Granted and denied states are not re-prompted automatically. Automation remains an internal readiness check rather than a separate permission row. Denied or unavailable consent exposes a contextual Settings/retry action. The helper's own Accessibility/Screen Recording rows use the floating drag guide
-with the helper bundle, while Sentient's rows carry Sentient itself. Full Disk Access permits read-only
-helper grant checks; there are no direct permission-database writes.
+Visible permission setup requests unasked consent through the macOS Apple Events dialog; the user chooses Allow there. Granted and denied states are not re-prompted automatically. The Automation row distinguishes granted, unasked, denied and unavailable states, with contextual Settings/retry actions. The helper's own Accessibility/Screen Recording rows use the floating drag guide
+with the helper bundle, while Sentient's rows carry Sentient itself. Full Disk Access is not a
+computer-use prerequisite. Helper admission never reads TCC databases; unknown capability is shown
+as **not checked**, with **Check computer use** and contextual System Settings actions.
 
 Native first-use setup checks both the compatible Codex CLI and helper installation, and exposes
 the shared installer when either needs preparation. Claude users are not asked for a ChatGPT login. Existing grants are reused. `SentientPermissionRows` and
@@ -48,23 +49,60 @@ the shared installer when either needs preparation. Claude users are not asked f
 
 ## The gate (`ComputerUseGate`)
 
-`intercept(action)` returns true when it took over (window up, action stashed) and the caller must
-abort. Two cases:
+`intercept(action)` returns true when it holds an action for required setup or a readiness check.
+A user-started task can automatically check previously granted helper capabilities. Missing installation,
+Sentient Screen Recording or Automation consent opens the setup window. Continue requires all
+required capabilities; closing or cancelling drops the action, and late results cannot revive it.
+Once required setup is ready, typed commands proceed immediately. There is no optional voice offer.
+The legacy `computerUse.micSpeechOffered` key remains only for reset cleanup.
 
-- **A required grant is missing → BLOCKING.** The window shows (or re-focuses) and re-holds the action
-  every time, until the selected runtime and all its required grants are ready; Continue is disabled, and closing the window DROPS
-  the action (never fired blind).
-- **Required green, but Microphone & Speech has never been offered → NON-BLOCKING, once ever**
-  (persisted flag `computerUse.micSpeechOffered`, cleared by FactoryReset). Continue is enabled
-  immediately and closing still FIRES the held command, so the nudge never eats what the user asked
-  for.
+Before waiting, `CommandRunModel` writes a private `PermissionWaitDraft` bound to its run ID and
+conversation generation. It must successfully remove that snapshot before any screen context,
+router or model work. Explicit Stop/cancel retires it; approved application termination preserves
+it for macOS's own Quit and Reopen. Next launch can restore it only into an empty composer of the
+same generation, as an unsent draft. It is never submitted automatically.
 
-All required green and the optional offered = it never appears at all. `interceptBeforeStart()` gates
-a surface that must not even OPEN while a grant is missing (the Sidekick hotkey press, so the notch
-never drops open to listen and only meets the gate at submit). `presentVoiceFixIfDenied()` raises the
-window as a non-blocking fix surface when a voice HOLD hits a DENIED mic/speech grant (a denied grant
-has no native prompt left to show). Passing the required checks latches
-the native runtime's `HealthCaution` readiness latch, so only a later regression can banner.
+When Sentient's Screen Recording needs a restart, **Save request & relaunch** is available only for
+the exact pre-inference waiter with an empty composer. It preserves request/reply, cancels and
+drains only that waiter, then uses the ordinary guarded restart. An already executing task cannot
+use that path. Native helper restarts remain distinct from restarting Sentient itself.
+
+`presentVoiceFixIfDenied()` is used only after deliberate voice input encounters denied Microphone or
+Speech access. Its voice-only window has Done and no held typed action. Unasked voice permission
+continues through the native voice-input request. Settings retains its separate voice controls.
+
+### Effective helper readiness without Full Disk Access
+
+`NativePermissionReadiness` validates one `get_app_state` reply for a temporary Sentient-owned window.
+It requires a fresh unique marker in the accessibility text and a decodable screenshot from the same
+read. The marker is not sent to the tool, so request echo cannot establish access. `list_apps`,
+AX text alone, a screenshot alone, a stale marker, timeout, interrupted window or generic error never
+turns the rows green. An exact ScreenCaptureKit user-denied domain/code identifies Screen Recording
+as denied; unrelated auth, policy and transport failures remain unknown with their actual error.
+
+`NativePermissionCheck` owns the small read-only window. It runs only for an explicit held computer
+task or visible setup/check action, never a background health refresh. It targets Sentient by its app
+path, performs no clicks or typing, discards the response and closes the window on every outcome.
+A 12-second tool timeout bounds the read; session initialization has its own bounded waits. Closing
+setup or Stop cancels the held action and active check. Reset/uninstall can drain it through `close()`.
+
+Successful proof stays in memory with the exact helper configuration/PID and a model-free connection
+that prevents normal idle helper teardown. Helper exit, changed installation/configuration, dead
+connection, explicit repair/teardown or native permission errors invalidate the proof. No persistent
+permission flag substitutes for capability evidence. Passive Health refresh reads this same state
+without opening a window. A fresh launch's unknown state is not a denial; the next explicit task can
+verify existing grants. The actual task still enforces macOS permissions and preserves native errors.
+
+Passing required checks latches `HealthCaution`'s native readiness history. The isolated fixtures
+`test_native_permission_readiness.py`, `test_native_permission_lifecycle.py` and
+`test_computer_use_gate.py` cover no-FDA evidence, malformed/partial replies, cancellation, process
+lifecycle, concurrent callers, and held-action ownership without real grants or app storage.
+Signed `NativeComputerUseLab` mode `permission-readiness` exercises the real read-only check and
+records booleans for effective AX/capture and optional TCC-read availability. Run it with isolated
+storage/runtime paths; an external fixture sandbox can deny both TCC database reads to exercise the
+no-FDA path. It never asks for Automation, changes grants or stores screenshots, and closes the
+retained proof client before finishing. A competing helper is reported rather than terminated.
+
 
 The window is AppKit-owned (a floating `NSWindow`, black, hidden title) so it can appear over OTHER
 apps; Sidekick fires from anywhere and a SwiftUI `Window` scene cannot be raised from the coordinator.
@@ -121,8 +159,7 @@ back to front.
 
 ## Where it is wired
 
-`CommandCoordinator.submit` (the bar, Sidekick, notch typing), the hotkey press and notch click
-(`interceptBeforeStart`), `ForYouModel.run` (real cards), `AppState` and all regular app scenes
+`CommandCoordinator.submit` (the bar, Sidekick, notch typing), `ForYouModel.run` (real cards), `AppState` and all regular app scenes
 (`ComputerUseUpgrade` plus `ComputerUseWindowGuard`), onboarding's permissions step (FDA drag, Login Items
 instruction), and Settings → Health (FDA, Accessibility, Screen Recording).
 

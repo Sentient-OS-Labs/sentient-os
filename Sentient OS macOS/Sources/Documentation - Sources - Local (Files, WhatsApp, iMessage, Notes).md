@@ -31,16 +31,39 @@ The connectors that adapt these to the pipeline are in `Ingestion/Connectors/`.
 
 ## Shared machinery
 
-**Selection (`SourceSelection`).** The preference keys are historical `dbg.*` names but they ARE the
-production keys, persisted on user machines: `dbg.run.downloads` / `desktop` / `documents` (default on),
-`dbg.run.notes` / `whatsapp` / `imessage` (default off), the chat pickers' `dbg.whatsapp.chats` /
-`dbg.imessage.chats` (comma-separated ids), and the cloud pair `dbg.gmail.connected` + `dbg.run.gmail`
-(same for calendar). Never rename them without a migration. `CustomRoots` stores user-added folders as
-one newline-joined string under `files.customRoots` so any view can watch it with `@AppStorage`.
-`SourceSelection.current(fdaGranted:)` builds the run's `[RunSource]`; `selectionCount` counts armed
-selections for the shared **four-selection minimum** that onboarding's ready screen and Settings both
-enforce (each folder, each chat source with chats picked, Notes, Apple Mail, Apple Calendar, and each connected cloud source count
-as one; hosted sources require a supported subscription backend).
+**Selection (`SourceSelection`).** The historical `dbg.*` names are production preferences and
+must not be renamed. Every new installation starts with all standard folders and database sources
+off. `migrateLegacyFolderDefaults(hadPersonalSetup:)` runs before views load: it preserves saved
+values, including explicit false, and materializes the old implicit folder defaults only for a
+legacy setup that had already completed or started personal analysis. `CustomRoots` stores explicitly
+added folders under `files.customRoots`; duplicate paths never inflate the source count.
+
+Personal setup requires **three usable selected sources**. `selectionCount` and `current()` use the
+same local readiness: selected folders must exist and be readable; protected sources need a nonempty
+chat/account choice where applicable and a readable database. No contents are analyzed to calculate
+readiness. A connected source with no history can count, and an actual read still validates stale
+selections or provider failures. Hosted Gmail/Calendar require selected and connected flags plus a healthy
+native verification record for the current provider. Browser Done alone never creates that proof.
+Old selections without verified evidence remain saved but need connection confirmation before
+counting toward first setup. Established users may still attempt healthy legacy selections; validated
+read success establishes the marker, and authentication failures remain actionable. Other connectors count only while selected, supported and healthy.
+The production processing request retains every known unavailable selection as an actionable issue,
+so healthy remaining reads cannot silently certify the first analysis. Saved sources stay removable
+when a backend switch makes their connector unavailable. Sources are
+always revocable in Settings, even when removing one drops below the setup minimum.
+
+The picker never automatically enables a detected connection. A click on Mail, WhatsApp, iMessage or
+Notes checks only that source and offers its own Full Disk Access explanation when access is missing.
+There is no global FDA gate or banner for cloud-only setup. A pending source survives an explicitly
+requested safe relaunch, which is refused while tasks are active. Chat/account selection is saved
+only when the user finishes choosing; access alone never selects other apps or folders. Apple
+Calendar keeps its separate explicit EventKit grant. Folder additions use the system folder picker.
+
+**Writing samples.** The one-time collector shares these opt-ins: only selected iMessage/WhatsApp
+chat IDs and enabled, connected supported mail sources participate. It does not discover local
+databases or Contacts independently, and a cloud-only selection does not request FDA. Empty chat
+selections return before opening a database. SQL scopes local samples to the selected conversations;
+groups and incoming messages remain excluded. Existing `writingstyle.md` files are preserved.
 
 **WAL-safe copy (`SQLiteDB`).** Copy the database plus its `-wal` and `-shm` siblings into a fresh temp
 directory, open the COPY read-write so SQLite replays the WAL, read, and delete the directory the moment
@@ -86,12 +109,14 @@ constructing one by hand. Thresholds were tuned on real Macs but are judgment ca
 Database: `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`
 (plaintext, WAL). Message dates are seconds since 2001, exactly Swift's reference date. `isInstalled`
 is a LaunchServices lookup on `net.whatsapp.WhatsApp` (no FDA needed) and hides the WhatsApp chip
-everywhere when the app is not on the Mac.
+when the app is not on the Mac unless it remains selected. An unavailable selected WhatsApp source
+stays visible and removable, so uninstalling WhatsApp cannot trap analysis behind an invisible source.
 
 - **Session whitelist:** `ZSESSIONTYPE IN (0, 1)` (DMs and real groups), which excludes broadcast lists, status, and community homes automatically. A second clause removes community *announcement* channels, which are stored as ordinary groups but share the community's exact name. The `IS NOT NULL` guards inside that clause are essential: SQL's `NOT IN` over a set containing a NULL hides every group.
 - **Naming:** unnamed groups roll up from their *active* members; the saved contact name is often an empty string, so the profile push-name is the reliable fallback. `cleanName` rejects WhatsApp's opaque LID tokens (a single long or slashed token) so they never reach a summary; multi-word names are always real.
 - **Windows:** one bucket per opted-in chat (`whatsapp:<jid>`), each window keyed by its last message row id, newest first. The message query filters to the opted-in sessions first so a busy un-opted chat cannot eat the budget.
-- Diagnostics: installed-but-zero-sessions and opted-in-but-nothing-matched both emit structured events.
+- Missing saved chat IDs fail the source before message reads; the user can reselect current chats.
+  This is distinct from a valid selected chat with no messages in the read window. Diagnostics omit IDs.
 
 There is no separate WhatsApp Business Mac app; business accounts share the same database.
 
@@ -102,7 +127,8 @@ Database: `~/Library/Messages/chat.db`. Dates are nanoseconds since 2001.
 - **Bodies live in `attributedBody`** for ~99% of modern rows (`text` is NULL). The decoder is a small heuristic, deliberately not a full typedstream parser: find the `NSString` / `NSMutableString` marker, skip 5 bytes, read a 1-byte length (or `0x81` plus 2 bytes little-endian), decode UTF-8. Measured at 99.97% on 12,017 real messages; a collapse under 50% (with a real sample) emits `imessage.decode.degraded`.
 - **Filtering in SQL:** tapbacks (`associated_message_type != 0`) and system items (`item_type != 0`) are dropped, or every window fills with "Loved …" noise. Chats Messages itself hides are dropped too: `is_filtered` is a category code, not a bool (0 known sender, 1 unknown sender, 2 spam, 3+ the iOS SMS-filter category chats that iCloud syncs into chat.db but no Mac UI shows), so only `is_filtered <= 1` and `is_blackholed = 0` survive.
 - **Names:** `chat.style` 43 = group, 45 = DM; the opt-in key is `chat.guid`. Sender handles resolve through `AddressBookNames`; unnamed groups get the participant roll-up. A DM whose handle resolves to no contact and has no display name is marked `isSaved = false`, and the shared `ChatPicker` hides those behind a default-off "Show unsaved numbers" checkbox (presentation only; an already-selected chat is never hidden).
-- **Windows:** one bucket per opted-in chat (`imessage:<guid>`), keyed by the last ROWID.
+- **Windows:** one bucket per opted-in chat (`imessage:<guid>`), keyed by the last ROWID. Missing saved
+  chat IDs fail with a reselect instruction rather than returning an apparently empty successful read.
 
 ## Apple Notes (`NotesSource`)
 

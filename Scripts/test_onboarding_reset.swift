@@ -32,6 +32,7 @@ struct OnboardingResetChecks {
         try check(defaults.bool(forKey: "onboarding.emailSubmitted"), "Failed reset lost email completion")
         try check(defaults.integer(forKey: "onboarding.step") == 4, "Failed reset rewound setup")
         try check(app.hasCompletedOnboarding, "Failed reset changed the live screen")
+        try check(app.completedResets == 0, "Failed reset rewound retained Home presentation")
         try check(HostedConnectorSetup.active == false, "Failed reset left teardown active")
         print("PASS: failed reset preserves onboarding state")
 
@@ -42,6 +43,8 @@ struct OnboardingResetChecks {
         try check(defaults.integer(forKey: "onboarding.step") == 0, "Reset must restart setup")
         try check(!defaults.bool(forKey: AppState.onboardingKey), "Persisted onboarding is still complete")
         try check(!app.hasCompletedOnboarding, "Live app was not rewound")
+        try check(app.completedResets == 1 && !app.hasCompletedPersonalSetup && !app.hasCompletedFirstSidekickTask,
+                  "Successful reset did not use the complete live UI handoff")
         try check(defaults.bool(forKey: "mcp.mirror.enabled"), "Reset lost the mirror opt-in")
         try check(HostedConnectorSetup.active == false, "Successful reset left teardown active")
         print("PASS: successful reset re-arms email and company welcome")
@@ -99,6 +102,15 @@ enum CodexAuth {
 @MainActor final class AppState {
     static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding = true
+    var hasCompletedPersonalSetup = true
+    var hasCompletedFirstSidekickTask = true
+    var completedResets = 0
+    func didResetPersonalData() {
+        completedResets += 1
+        hasCompletedPersonalSetup = false
+        hasCompletedFirstSidekickTask = false
+        hasCompletedOnboarding = false
+    }
     let scheduler = Scheduler()
     let commandCoordinator = Coordinator()
     let processing = ProcessingCoordinator.shared
@@ -154,3 +166,16 @@ enum SourceHealth { static let readStatusKey = "test.sourceHealth" }
 enum AppleMailHealth { static let key = "test.mail"; static let needsRetryKey = "test.mailRetry" }
 enum AppleCalendarSource { static let issueKey = "test.calendar" }
 enum ProcessingPlan { static let key = "test.processing" }
+enum PersonalSetupProgress {
+    static func reset(defaults: UserDefaults) {
+        defaults.removeObject(forKey: "onboarding.personalSetupCompleted")
+        defaults.removeObject(forKey: "onboarding.firstSuccessfulSidekickTask")
+    }
+}
+enum PermissionRelaunchDraft { static func clear() {} }
+enum PermissionWaitDraft { static func clear() {} }
+@MainActor final class NativePermissionCheck {
+    static let shared = NativePermissionCheck()
+    func close() async {}
+}
+enum SourceSelection { static let pendingProtectedSourceKey = "test.pendingProtectedSource" }

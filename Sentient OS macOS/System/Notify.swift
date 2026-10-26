@@ -5,8 +5,8 @@
 //  One small wrapper over UNUserNotificationCenter. Notify.now() is LIVE for the "Sentient just
 //  updated." note (UpdateNotice.checkAtLaunch); the proactive-reminder tier still to come rides
 //  the same call (git 67d8078 has an old schedule/cancel implementation to mine). The permission
-//  ask is live too: onboarding's permissions screen fires Notify.ask() the moment it appears, so
-//  the native prompt happens once, with no extra UI; now() also asks lazily as a backstop.
+//  permission is requested only by an explicit notification setup action. Background events,
+//  updates and successful analysis never request notification access themselves.
 //
 
 import Foundation
@@ -97,8 +97,7 @@ enum Notify {
     /// Ask macOS for notification permission — the native "Sentient would like to send you
     /// notifications" prompt. A no-op unless the status is still `.notDetermined` (a prior
     /// allow/deny is final; only System Settings can change it), so it's safe to call on every
-    /// appearance. Onboarding's permissions screen fires this the moment it appears — no button,
-    /// no extra UI. Silent under SENTIENT_SELFTEST (the harness can't answer the dialog).
+    /// explicit action. Silent under SENTIENT_SELFTEST (the harness can't answer the dialog).
     static func ask() async {
         guard !suppressed else { return }
         await requestPermissionIfNeeded()
@@ -114,7 +113,6 @@ enum Notify {
     /// Fire a notification immediately.
     static func now(title: String, body: String, destination: Destination? = nil) async {
         guard !suppressed else { return }
-        await requestPermissionIfNeeded()
         let center = UNUserNotificationCenter.current()
 
         // §7.23: a denied/undetermined permission means proactive reminders silently never fire —

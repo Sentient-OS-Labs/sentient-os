@@ -75,6 +75,13 @@ the SwiftUI overlay and the renderer, so labels never slide under it. `SkyTuning
 a balanced set (scaled together to calm the motion without moving the equilibrium); scale them together
 or the composition changes.
 
+The optional Home showcase reuses this same view and renderer with `SkyGraph.onboardingExample()`
+and `NightSkyModel.preview(graph:)`. Its `sentient-example:` URLs are in-memory identities, never
+vault files. Embedded mode hides the full-window HUD and does not claim keyboard focus. A fitted
+camera keeps the sample inside compact viewports; hover-card positions are clamped to the viewport.
+Ambient animation can pause independently of input: pan, zoom, hover and dragging still work under
+Reduce Motion. Normal Knowledge view defaults retain the existing HUD, camera and interaction policy.
+
 ## Design notes: the "Starlight" scheme
 
 OLED-black reading pane against a moonlit-slate sidebar (`Theme.panel`, a cool graphite; the earlier
@@ -89,7 +96,8 @@ voice. `WindowChrome` forces the transparent title bar at launch.
 
 - All navigation funnels through the unsaved-edits guard.
 - No per-frame `@Published` / `@State` writes in the sky; no per-frame blur.
-- Never resolve wikilinks or build edges from anything but `KnowledgeVault.titleIndex`.
+- Resolve live-vault wikilinks through `KnowledgeVault.titleIndex`; synthetic preview graphs use
+  only their explicitly supplied in-memory note identities.
 
 ## Related docs
 
