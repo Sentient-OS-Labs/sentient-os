@@ -1,6 +1,6 @@
 #if DEBUG
 // Targeted native UI checks after SidekickAppLab isolates defaults and support files.
-// Five captures of this process's windows only. No provider, computer-use helper or other app.
+// Captures only this process's windows. No provider, computer-use helper or other app.
 // Doc: ../Documentation - General - Self-Testing (Eval Harness).md
 import AppKit
 import ApplicationServices
@@ -8,6 +8,18 @@ import Foundation
 import ScreenCaptureKit
 import SwiftUI
 import WebKit
+
+// A deliberate headless render surface for the film fixture only. Some remote Mac
+// sessions report every automated window fully occluded. WebKit then correctly pauses
+// rAF. The explicit runner flag supplies visibility to this owned test window; hiding
+// or minimizing it still pauses normally. Production NSWindows are never changed.
+@MainActor private final class FilmFixtureWindow: NSWindow {
+    var rendersWhileOccluded = false
+    override var occlusionState: NSWindow.OcclusionState {
+        rendersWhileOccluded && isVisible && !isMiniaturized
+            ? super.occlusionState.union(.visible) : super.occlusionState
+    }
+}
 
 @MainActor enum SidekickPolishLab {
     enum Failure: String, Error { case isolation, screenLocked, unavailable, capture, accessibility, foreground }
@@ -472,7 +484,14 @@ import WebKit
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: NotchPreferences.clickEnabledKey)
         defaults.set(ShortcutKey.rightCommand.rawValue, forKey: ShortcutPreferences.storageKey)
-        defaults.set("https://sentient-os.ai/onboarding?end=0.707&duration=1&delay=0", forKey: "dev.film.url")
+        var filmOrigin = "https://sentient-os.ai"
+        let originFile = root.appendingPathComponent("onboarding-film-origin.txt")
+        if let candidate = try? String(contentsOf: originFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let url = URL(string: candidate), ["localhost", "127.0.0.1", "sentient-os.ai"].contains(url.host ?? ""),
+           ["http", "https"].contains(url.scheme ?? ""), url.user == nil, url.password == nil {
+            filmOrigin = candidate
+        }
+        defaults.set(filmOrigin + "/onboarding?end=0.707&duration=1&delay=0", forKey: "dev.film.url")
         let coordinator = app.commandCoordinator
         coordinator.run.preventsTaskExecutionForUIFixture = true
         let notch = NotchWindowController(coordinator: coordinator)
@@ -484,19 +503,23 @@ import WebKit
         var completed = false
         defer {
             let manifest: [String: Any] = ["checks": checks, "captures": captures, "completed": completed,
-                "provider_calls": 0, "capture_scope": "current_process_windows_only"]
+                "provider_calls": 0, "capture_scope": "current_process_windows_only",
+                "render_mode": FileManager.default.fileExists(atPath: root.appendingPathComponent("onboarding-offscreen-render").path) ? "controlled-occlusion" : "onscreen"]
             if let data = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: root.appendingPathComponent("invitation-manifest.json"))
             }
             coordinator.disarmOnboardingNotchDemo(); coordinator.dismissTyping(); notch.shutdownForTesting()
         }
         func film() -> AnyView {
-            AnyView(OnboardingFilmView.invitationForTesting().environment(app).preferredColorScheme(.dark))
+            AnyView(OnboardingCanvas(scale: 1) {
+                OnboardingFilmView.invitationForTesting()
+            }.environment(app).environment(\.accessibilityEnabled, true).preferredColorScheme(.dark))
         }
         let host = NSHostingView(rootView: film())
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 680),
+        let window = FilmFixtureWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 680),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Sidekick onboarding · isolated preview"
+        window.rendersWhileOccluded = FileManager.default.fileExists(atPath: root.appendingPathComponent("onboarding-offscreen-render").path)
         window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = host; window.center()
         defer { window.close() }
@@ -522,6 +545,18 @@ import WebKit
                 if probe(host) != nil { try await settle(500); return }
                 try await settle(400)
             }
+            func findWeb(_ view: NSView) -> WKWebView? {
+                if let web = view as? WKWebView { return web }
+                return view.subviews.lazy.compactMap { findWeb($0) }.first
+            }
+            if let web = findWeb(host) {
+                let diagnostic = try? await web.evaluateJavaScript("JSON.stringify({visibility:document.visibilityState,url:location.href,scroll:scrollY,height:innerHeight,film:document.querySelector('main > section')?.offsetHeight,autopilot:typeof window.__sentientAutopilot,body:document.body.innerText.slice(0,300)})")
+                Log("Invitation film diagnostic: \(String(describing: diagnostic))")
+                Log("Invitation native geometry: host=\(host.frame), web=\(web.frame), hidden=\(web.isHiddenOrHasHiddenAncestor), alpha=\(web.alphaValue), visible=\(web.visibleRect), windowVisible=\(window.isVisible), occlusion=\(window.occlusionState.rawValue)")
+                var parent: NSView? = web
+                while let current = parent { Log("Invitation ancestor: \(type(of: current)) frame=\(current.frame) hidden=\(current.isHidden) alpha=\(current.alphaValue)"); parent = current.superview }
+            }
+            _ = try? await capture(host, name: "invitation-failure", directory: directory)
             throw Failure.unavailable
         }
         try await reveal()
@@ -604,6 +639,36 @@ import WebKit
         checks["key_opens_actual_notch_demo"] = coordinator.phase == .typing && notch.panelForTesting?.isVisible == true
         checks["instruction_yields_when_notch_opens"] = !elements(host).contains { $0.label == "Press right Command" }
         checks["no_real_task_started"] = !coordinator.run.isRunning
+        window.setContentSize(CGSize(width: 1100, height: 760))
+        window.center()
+        let firstTaskBefore = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey)
+        func waitForBeat(_ beat: OnboardingRestaurantStory.Beat) async throws {
+            for _ in 0..<150 {
+                if let current = coordinator.run.onboardingDemoBeat, current.index >= beat.index { return }
+                try await settle(200)
+            }
+            throw Failure.unavailable
+        }
+        for (beat, name) in [(OnboardingRestaurantStory.Beat.remember, "restaurant-05-remembering"),
+                             (.time, "restaurant-06-booking"), (.confirmed, "restaurant-07-confirmed"),
+                             (.done, "restaurant-08-replied")] {
+            try await waitForBeat(beat)
+            try await settle(beat == .remember ? 950 : 350)
+            checks["film_narrates_" + beat.rawValue] = (coordinator.run.onboardingDemoBeat?.index ?? -1) >= beat.index
+            if beat == .remember { checks["native_remembering_is_weekend_plan"] = coordinator.run.remembering == "Weekend plan" }
+            if let panel = notch.panelForTesting, let screen = window.screen {
+                captures.append(try await captureDisplay(windows: [window, panel], screen: screen, name: name, directory: directory))
+            } else { throw Failure.unavailable }
+        }
+        checks["scripted_run_finishes_without_provider"] = coordinator.run.isDemo && !coordinator.run.isRunning
+            && coordinator.run.interaction == nil
+        checks["demo_does_not_claim_first_successful_task"] = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey) == firstTaskBefore
+        coordinator.run.advanceOnboardingDemo(.read)
+        checks["late_film_message_cannot_restart_run"] = !coordinator.run.isRunning && coordinator.run.onboardingDemoBeat == .done
+        coordinator.run.startOnboardingDemo()
+        coordinator.run.advanceOnboardingDemo(.remember)
+        coordinator.disarmOnboardingNotchDemo()
+        checks["leaving_film_cancels_demo_and_memory"] = !coordinator.run.isRunning && coordinator.run.remembering == nil
         completed = true
         return checks
     }

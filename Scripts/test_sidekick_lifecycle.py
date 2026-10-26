@@ -327,6 +327,28 @@ import SQLite3
         try check(try !model.isClearingChat && store.latestSequence == 0, "UI fixture can clear chat while execution remains blocked")
         model.preventsTaskExecutionForUIFixture = false
         #endif
+        let beforeDemo = try store.latestSequence
+        model.startOnboardingDemo()
+        try check(model.isRunning && model.isDemo && model.onboardingDemoBeat == .read, "film demo starts without a provider or conversation task")
+        model.advanceOnboardingDemo(.remember)
+        try check(model.remembering == "Weekend plan", "real notch shows the remembered plan")
+        model.advanceOnboardingDemo(.open)
+        model.advanceOnboardingDemo(.remember)
+        try check(model.remembering == nil && model.onboardingDemoBeat == .open, "late or reversed frame cannot rewind native narration")
+        model.advanceOnboardingDemo(.confirmed)
+        model.advanceOnboardingDemo(.reply)
+        model.advanceOnboardingDemo(.done)
+        try check(!model.isRunning && model.statusLine == "✓ done" && model.remembering == nil, "confirmed film completion ends and clears the memory bloom")
+        model.advanceOnboardingDemo(.read)
+        try check(try !model.isRunning && store.latestSequence == beforeDemo, "late film events never restart a run or enter chat history")
+        try check(OnboardingRestaurantStory.beat(from: ["story": "restaurant-v1", "beat": "remember"]) == .remember, "known versioned film beat decodes")
+        for body: Any in [["story": "recipe", "beat": "done"], ["story": "restaurant-v1", "beat": "execute"], ["story": "restaurant-v1", "beat": 4], "done"] {
+            try check(OnboardingRestaurantStory.beat(from: body) == nil, "unrecognized film payload is inert")
+        }
+        model.startOnboardingDemo(); model.advanceOnboardingDemo(.remember); model.stop()
+        try await eventually { !model.isRunning }
+        model.advanceOnboardingDemo(.done)
+        try check(model.onboardingDemoBeat == .remember && model.remembering == nil, "cancelled film cannot become a success")
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
     static func stoppedRunReadReceipts(root: URL, defaults: UserDefaults) async throws {
@@ -934,7 +956,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
     names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
-    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift"]
+    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault"), "FIXTURE_PERMISSION_SUPPORT": str(tmp / "permission-support")})

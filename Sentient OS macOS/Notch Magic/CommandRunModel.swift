@@ -461,6 +461,11 @@ final class CommandRunModel {
         interaction?.personalization?.finish(success: false)
         recovery.cancel()
         guard isRunning else { return }
+        if isDemo {
+            task?.cancel(); task = nil
+            finish(.stopped, line: "■ stopped")
+            return
+        }
         stopWatchingConnectivity()
         isOffline = false
         clearRemembering()
@@ -633,14 +638,19 @@ final class CommandRunModel {
 
     // MARK: The onboarding notch demo
 
-    /// The film step's scripted run — the notch performs the film's shopping story on the user's
-    /// real bezel with NOTHING real underneath: no codex, no screenshots, and deliberately no
-    /// scoreboard or analytics (a demo is not a health signal, so complete() is bypassed). The
-    /// lines are codex-SHAPED and replay through the real push() cleaner, so the status bar and
-    /// the "Remembering" bloom render exactly as a live run does. Same finishing contract
-    /// (onFinished → the coordinator's ✓ flourish + retract); stop() cancels it like any run.
+    /// The webpage drives the demo's narration from its actual progress. This keeps
+    /// the notch in sync through slow loading, hidden-window pauses and dev fast-forward.
+    /// The only wall-clock task is a bounded cleanup watchdog, never a success signal.
+    private(set) var onboardingDemoBeat: OnboardingRestaurantStory.Beat?
+
     func startOnboardingDemo() {
-        guard !isRunning, mayStartTask else { return }
+        guard !isRunning, !isClearingChat else { return }
+        #if DEBUG
+        // Only the owned film fixture may play this inert demo while real task
+        // execution is blocked. Every other UI fixture retains its original gate.
+        guard !preventsTaskExecutionForUIFixture
+                || ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-invitation" else { return }
+        #endif
         recovery.cancel(); recoveryCancelled = false; runID = UUID()
         stopCause = nil
         retryAction = nil; interaction = nil
@@ -651,36 +661,27 @@ final class CommandRunModel {
         isRunning = true
         recent = []; section = ""
         remembering = nil; rememberClear?.cancel()
-        statusLine = "Starting computer use…"
-        Log("──────── 🤖 NOTCH DEMO (onboarding, scripted) ────────")
-        let vault = VaultGenerator.vaultRoot.path
-        // (pause-before-line, line) — paced to the film's background beat (~9s to ✓).
-        let script: [(Double, String)] = [
-            (0.8, "codex"),
-            (0.0, "Thinking through your task"),
-            (1.6, "exec"),
-            (0.0, "cat '\(vault)/Kitchen/Pantry & Fridge.md'"),
-            (2.1, "codex"),
-            (0.0, "You already have arborio rice, butter, and lemons"),
-            (2.2, "Opening amazing in a background window"),
-            (1.9, "Adding the missing ingredients to the cart"),
-        ]
+        onboardingDemoBeat = nil
+        advanceOnboardingDemo(.read)
+        let watchedRun = runID
         task = Task { [weak self] in
-            do {
-                for (pause, line) in script {
-                    try await Task.sleep(for: .seconds(pause))
-                    guard let self, self.isRunning else { return }
-                    self.push(line)
-                }
-                try await Task.sleep(for: .seconds(1.7))
-                guard let self, self.isRunning else { return }
-                Log("──────── 🤖 ✓ NOTCH DEMO done ────────")
-                self.finish(.success, line: "✓ done")
-            } catch {   // cancelled — a STOP mid-demo gets the honest beat, same as a real run
-                guard let self, self.isRunning else { return }
-                Log("──────── 🤖 ■ NOTCH DEMO stopped ────────")
-                self.finish(.stopped, line: "■ stopped")
-            }
+            do { try await Task.sleep(for: .seconds(45)) } catch { return }
+            guard let self, self.isDemo, self.isRunning, self.runID == watchedRun else { return }
+            self.finish(.stopped, line: "Demo paused")
+        }
+    }
+
+    func advanceOnboardingDemo(_ beat: OnboardingRestaurantStory.Beat) {
+        guard isDemo, isRunning,
+              beat.index > (onboardingDemoBeat?.index ?? -1) else { return }
+        onboardingDemoBeat = beat
+        rememberClear?.cancel(); rememberClear = nil
+        remembering = beat == .remember ? beat.status : nil
+        if beat == .done {
+            task?.cancel(); task = nil
+            finish(.success, line: "✓ done")
+        } else {
+            statusLine = beat == .remember ? "" : beat.status
         }
     }
 

@@ -46,21 +46,31 @@ canvas scale, so it still points at physical screen coordinates.
 The canvas must not clip its safe-area bounds: the film header and GitHub mark deliberately
 render into the transparent title bar. The native window supplies the outer clipping boundary.
 
-**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native` in
+**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native&story=restaurant-v1` in
 a webview that is a movie, not a page (hit-testing off, off-host navigation blocked, fades in only after
 the page reports ready). The page's autopilot scrolls the film and posts "parked" at each rest, which
 blooms the native Continue: leg 1 (the night film → the morning home), leg 2 (the Sidekick scene: it
 rides to the native invitation, **Click your notch** on a lone notched display or **Press right Command**
 (the actual configured key) otherwise, then WAITS for the user's real answer: the coordinator's armed one-shot demo takes a bezel
-click or a hotkey press and performs the shopping story on the user's own notch while the film rides on),
+click or a hotkey press and performs the restaurant story on the user's own notch while the film rides on),
+The restaurant story begins with “can you book that restaurant for the weekend?” and the
+native prompt “finish this for me”. The film reveals Weekend plan, books a fictional Juniper table,
+and replies “done!” in a sample Messages window. All contacts, reservations and pages are fictional;
+no real provider, vault, booking or send is involved. `OnboardingRestaurantStory` pins the version,
+command, duration and allowed narration beats. The main-frame, same-host `autopilot` handler accepts
+only that version's known beats while this step owns a running demo. The webpage drives the native
+Remembering bloom and status from its actual progress. Duplicate/backward/late events are inert;
+leaving the film cancels the demo, and a stalled film cannot announce success. Older installed apps
+omit `story=restaurant-v1` and keep the recipe footage matching their compiled narration.
+
 The final Sidekick park is `0.999`, followed by the native Double Tap lesson. The current native
 sequence does not visit the website's Under-the-hood exhibit, FAQ or footer. The film is passive;
 native controls handle progression.
-`OnboardingSidekickInvitation` keeps the recipe fully visible with one prominent native CTA at the
+`OnboardingSidekickInvitation` keeps the Messages request fully visible with one prominent native CTA at the
 very top: Click your notch, or Press right Command with a compact keycap. Its straight vertical arrow
 is a separate transparent, click-through `NSPanel`. The measured CTA aligns to the hardware's
 centerline, with 12 pt between its top edge and the arrow's tail and 10 pt below the notch at the tip.
-The arrow resizes when the app moves; the native film reserves a clear header above the recipe. It cannot become key, hides when onboarding loses focus, and is removed as Sidekick opens
+The arrow resizes when the app moves; the native film reserves a clear header above Messages. It cannot become key, hides when onboarding loses focus, and is removed as Sidekick opens
 or the step exits. Display changes and disabled notch clicks switch to the keyboard instruction.
 The arrow draws once and respects Reduce Motion. The website hides its older text/chevron only when
 the new `invitation=native` parameter accompanies the embedded notch cut; older apps keep their cues.

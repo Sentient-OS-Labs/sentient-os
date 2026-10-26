@@ -80,3 +80,18 @@ chat window budget, via `Engine(collectStats: true)`) · `parse` / `whatsapp` (t
 WhatsApp windows the model would see) · `imdecode` / `notesdecode` (the two decoders' rates) ·
 `modeldownload` (the downloader against the real job into a scratch dir: crash mid-download, resume to
 completion and verify, a flipped hash must refuse and wipe).
+
+
+### Restaurant onboarding render fixture
+
+`Scripts/test_sidekick_polish.py --invitation --film-origin http://localhost:3001` exercises
+the restaurant story through the actual WKWebView and native notch, including Weekend plan,
+booking, confirmation, reply, completion and cancellation. Its eight captures contain only
+owned windows; it never invokes a provider, reads a real vault, books or sends anything.
+The origin override is allowlisted and read only from the existing marked fixture root.
+
+On a headless desktop whose WindowServer marks automated windows fully occluded, add
+`--offscreen-render`. This explicitly opts the DEBUG-only `FilmFixtureWindow` into a controlled
+visible render surface while it is ordered in and not minimized. The receipt records
+`render_mode: controlled-occlusion`. This verifies rendering and the native bridge, not physical
+onscreen occlusion behavior. Ordinary tests and all production windows retain real visibility.

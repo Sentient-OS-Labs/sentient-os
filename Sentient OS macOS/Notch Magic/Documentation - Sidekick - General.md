@@ -171,8 +171,10 @@ or newer message cannot replace the preview mid-reply. Closing keeps the draft/r
 `test_sidekick_notch_reply.py` exercises native editing/Return and renders the real view in an inert
 nonactivating panel; attention and layout fixtures cover timing, coalescing and bounded reading space.
 
-`startOnboardingDemo()` performs the film step's scripted shopping story through the real cleaner with
-nothing real underneath (no codex, no screenshots, no scoreboard).
+`startOnboardingDemo()` starts the presentation-only restaurant story. Known, versioned webpage
+progress beats drive `advanceOnboardingDemo`, including the real Remembering bloom for Weekend plan.
+There is no provider, vault read, screenshot, booking, send, conversation record or first-task milestone.
+Stopping or leaving the film ends the demo immediately; backward and late beats cannot restart it.
 
 ## The prompt (`CommandRunModel.commandPrompt`)
 
