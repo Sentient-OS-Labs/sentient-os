@@ -247,7 +247,7 @@ struct OnboardingFilmView: View {
             if phase == .awaitingNotch {
                 appState.commandCoordinator.disarmOnboardingNotchDemo()
                 setPhase(.ridingSidekick)
-                driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
+                driver.continueTo(Self.sidekickEndP, delay: 0, seconds: Self.sidekickRideSeconds)
             }
         }
         .task(id: phase == .ridingToInvitation) {
@@ -324,7 +324,7 @@ struct OnboardingFilmView: View {
         driver.hideLogo()
         setPhase(.awaitingNotch)
         appState.commandCoordinator.armOnboardingNotchDemo { [self] in
-            driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
+            driver.continueTo(Self.sidekickEndP, delay: 0, seconds: Self.sidekickRideSeconds)
             setPhase(.ridingSidekick)
         }
     }

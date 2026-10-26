@@ -3,7 +3,7 @@
 import Foundation
 
 enum OnboardingRestaurantStory {
-    static let version = "restaurant-v1"
+    static let version = "restaurant-v2"
     static let command = "finish this for me"
     static let duration: Double = 20
 
@@ -12,14 +12,14 @@ enum OnboardingRestaurantStory {
         var index: Int { Self.allCases.firstIndex(of: self)! }
         var status: String {
             switch self {
-            case .read: "Reading Maya’s message"
+            case .read: "Starting computer use…"
             case .remember: "Weekend plan"
             case .open: "Opening Juniper’s reservations"
             case .date: "Finding a table for Saturday"
             case .time: "Choosing 7 PM for two"
             case .reserve: "Completing your reservation"
             case .confirmed: "Your table is booked"
-            case .reply: "Replying to Maya"
+            case .reply: "Replying to James"
             case .done: "done"
             }
         }

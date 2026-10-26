@@ -642,6 +642,20 @@ import WebKit
         window.setContentSize(CGSize(width: 1100, height: 760))
         window.center()
         let firstTaskBefore = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey)
+        for _ in 0..<400 {
+            if coordinator.run.isRunning && coordinator.run.isDemo { break }
+            try await settle(10)
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        checks["demo_starts_with_computer_use_caption"] = coordinator.run.statusLine == "Starting computer use…"
+        for _ in 0..<150 {
+            if coordinator.run.onboardingDemoBeat != .read { break }
+            try await settle(10)
+        }
+        let startingDuration = ProcessInfo.processInfo.systemUptime - startedAt
+        Log("Restaurant starting caption duration: \(startingDuration)")
+        checks["starting_caption_lasts_half_a_second"] = (0.35...0.68).contains(startingDuration)
+            && coordinator.run.onboardingDemoBeat == .remember
         func waitForBeat(_ beat: OnboardingRestaurantStory.Beat) async throws {
             for _ in 0..<150 {
                 if let current = coordinator.run.onboardingDemoBeat, current.index >= beat.index { return }

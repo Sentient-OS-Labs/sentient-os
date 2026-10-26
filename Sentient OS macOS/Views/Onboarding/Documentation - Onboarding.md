@@ -46,22 +46,24 @@ canvas scale, so it still points at physical screen coordinates.
 The canvas must not clip its safe-area bounds: the film header and GitHub mark deliberately
 render into the transparent title bar. The native window supplies the outer clipping boundary.
 
-**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native&story=restaurant-v1` in
+**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native&story=restaurant-v2` in
 a webview that is a movie, not a page (hit-testing off, off-host navigation blocked, fades in only after
 the page reports ready). The page's autopilot scrolls the film and posts "parked" at each rest, which
 blooms the native Continue: leg 1 (the night film → the morning home), leg 2 (the Sidekick scene: it
 rides to the native invitation, **Click your notch** on a lone notched display or **Press right Command**
 (the actual configured key) otherwise, then WAITS for the user's real answer: the coordinator's armed one-shot demo takes a bezel
 click or a hotkey press and performs the restaurant story on the user's own notch while the film rides on),
-The restaurant story begins with “can you book that restaurant for the weekend?” and the
-native prompt “finish this for me”. The film reveals Weekend plan, books a fictional Juniper table,
+The restaurant story shows one message from James, with no earlier chat or floating memory card. It begins with “can you book that restaurant for the weekend?” and the
+native prompt “finish this for me”. The notch shows Starting computer use for 0.5 seconds, then Remembering… with Weekend plan.
+Only afterward does the browser open. The film books a fictional Juniper table,
 and replies “done!” in a sample Messages window. All contacts, reservations and pages are fictional;
 no real provider, vault, booking or send is involved. `OnboardingRestaurantStory` pins the version,
 command, duration and allowed narration beats. The main-frame, same-host `autopilot` handler accepts
 only that version's known beats while this step owns a running demo. The webpage drives the native
 Remembering bloom and status from its actual progress. Duplicate/backward/late events are inert;
 leaving the film cancels the demo, and a stalled film cannot announce success. Older installed apps
-omit `story=restaurant-v1` and keep the recipe footage matching their compiled narration.
+without a restaurant version keep the recipe; v1 clients retain Maya and their original timing.
+V2 narration follows the unsprung, linear film clock, independently of the camera’s spring.
 
 The final Sidekick park is `0.999`, followed by the native Double Tap lesson. The current native
 sequence does not visit the website's Under-the-hood exhibit, FAQ or footer. The film is passive;

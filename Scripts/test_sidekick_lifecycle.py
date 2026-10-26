@@ -341,8 +341,8 @@ import SQLite3
         try check(!model.isRunning && model.statusLine == "✓ done" && model.remembering == nil, "confirmed film completion ends and clears the memory bloom")
         model.advanceOnboardingDemo(.read)
         try check(try !model.isRunning && store.latestSequence == beforeDemo, "late film events never restart a run or enter chat history")
-        try check(OnboardingRestaurantStory.beat(from: ["story": "restaurant-v1", "beat": "remember"]) == .remember, "known versioned film beat decodes")
-        for body: Any in [["story": "recipe", "beat": "done"], ["story": "restaurant-v1", "beat": "execute"], ["story": "restaurant-v1", "beat": 4], "done"] {
+        try check(OnboardingRestaurantStory.beat(from: ["story": "restaurant-v2", "beat": "remember"]) == .remember, "known versioned film beat decodes")
+        for body: Any in [["story": "recipe", "beat": "done"], ["story": "restaurant-v2", "beat": "execute"], ["story": "restaurant-v2", "beat": 4], "done"] {
             try check(OnboardingRestaurantStory.beat(from: body) == nil, "unrecognized film payload is inert")
         }
         model.startOnboardingDemo(); model.advanceOnboardingDemo(.remember); model.stop()
