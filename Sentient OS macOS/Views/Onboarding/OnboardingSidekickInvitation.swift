@@ -21,16 +21,15 @@ struct OnboardingSidekickInvitation: View {
                         Text(String(key.label.suffix(1)))
                             .font(.system(size: 19, weight: .medium))
                             .frame(width: 30, height: 28)
-                            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.22)))
+                            .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.14)))
                     }
                     Text(pointsToNotch ? "Click your notch" : "Press \(key.spokenLabel)")
                         .font(.system(size: 20, weight: .semibold))
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(Color(white: 0.08))
                 .padding(.horizontal, 22).padding(.vertical, 12)
-                .background(Color(white: 0.065).opacity(0.97), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+                .background(.white, in: Capsule())
                 .shadow(color: .black.opacity(0.55), radius: 14, y: 4)
                 .contentShape(Capsule())
             }
