@@ -158,7 +158,7 @@ struct HomeSidekickSuggestions: View {
         Suggestion(id: "subscriptions", title: "Find subscriptions to cancel", symbol: "creditcard",
                    prompt: "Find my recurring subscriptions using billing emails and account pages I can access. Show prices and renewal dates, and ask which I want to cancel. Don't assume a subscription is unused or cancel anything without my approval."),
         Suggestion(id: "followups", title: "Catch missed follow-ups", symbol: "arrowshape.turn.up.left",
-                   prompt: "Check my recent email conversations, plus iMessage and WhatsApp if installed and accessible, for up to three follow-ups I owe, including unanswered requests and commitments I made. Explain what needs attention and prepare a draft for each, leaving everything unsent. Ask which inbox or account to use if needed."),
+                   prompt: "Check my recent email conversations, plus iMessage, WhatsApp, and Slack if available and accessible, for up to three follow-ups I owe, including unanswered requests and commitments I made. Explain what needs attention and prepare a draft for each, leaving everything unsent. Ask which inbox, account, or workspace to use if needed."),
         Suggestion(id: "purchase", title: "Research a purchase", symbol: "magnifyingglass",
                    prompt: "Help me research a purchase. First ask what I'm buying, my budget, and what matters most. Then compare suitable options using current prices, specifications, and owner reviews. Give me a short recommendation with sources and total delivered prices where available."),
         Suggestion(id: "meeting", title: "Prep my next meeting", symbol: "calendar.badge.clock",
@@ -166,7 +166,7 @@ struct HomeSidekickSuggestions: View {
         Suggestion(id: "trip", title: "Plan my trip", symbol: "airplane",
                    prompt: "Help me plan a trip. First ask where and when I'm going, my departure city, budget, and preferences. Compare travel and accommodation options with current prices and build a practical itinerary with booking links. Don't book or pay for anything without my approval."),
         Suggestion(id: "catchup", title: "Catch me up", symbol: "text.bubble",
-                   prompt: "Catch me up on what needs my attention. First ask which inbox or project to check and how far back to look. Then review the available recent conversations and calendar items, summarize important changes and deadlines with links, and suggest the next actions. Leave messages and calendar events unchanged.")
+                   prompt: "Catch me up on what needs my attention. First ask which inbox, account, workspace, or project to check and how far back to look. Then review recent email conversations, iMessage, WhatsApp, and Slack if available and accessible, along with relevant calendar items. Summarize important changes and deadlines with links, and suggest the next actions. Leave messages and calendar events unchanged.")
     ]
     static let initialSuggestions = Array(suggestions.prefix(4))
     // These are draft starters, not tasks. Rotate only after Home accepts the draft.
