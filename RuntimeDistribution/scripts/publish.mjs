@@ -1,5 +1,5 @@
 // Upload only approved archive bytes. Never upload a directory or a user's live CODEX_HOME.
-// Usage: npm run publish:archives -- /absolute/path/to/audited/artifacts
+// Usage: npm run publish:archives -- /absolute/path/to/audited/artifacts [--dry-run]
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -7,7 +7,10 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import release from '../../Sentient OS macOS/Cloud/BundledCodexRelease.json' with { type: 'json' };
 
-if (process.argv.length !== 3) throw new Error('Provide the audited archive directory.');
+if (process.argv.length < 3 || process.argv.length > 4 ||
+    (process.argv.length === 4 && process.argv[3] !== '--dry-run')) {
+  throw new Error('Provide the audited archive directory, optionally followed by --dry-run.');
+}
 const directory = resolve(process.argv[2]);
 for (const artifact of [release.cli, release.helper]) {
   const file = join(directory, artifact.filename);
@@ -16,6 +19,10 @@ for (const artifact of [release.cli, release.helper]) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) hash.update(chunk);
   if (hash.digest('hex') !== artifact.sha256) throw new Error(`Archive fingerprint mismatch: ${artifact.filename}`);
+}
+if (process.argv[3] === '--dry-run') {
+  console.log('Verified both pinned archives. No uploads performed.');
+  process.exit(0);
 }
 for (const artifact of [release.cli, release.helper]) {
   const args = ['--no-install', 'wrangler', 'r2', 'object', 'put', `sentient-runtime-releases/releases/${artifact.filename}`,

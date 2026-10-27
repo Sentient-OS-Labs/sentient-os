@@ -46,7 +46,7 @@ production = "\n".join(declaration(helper, signature) for signature in (
     "enum RuntimeError:",
     "@concurrent static func acceptsRunningHelper(",
     "@MainActor static func stopConflictingHelpers(",
-    "@MainActor static func stopOwnedHelper()",
+    "@MainActor static func stopOwnedHelper(",
     "@MainActor private static func terminateHelpers(",
     "static func tomlString(_ value:",
 ))
@@ -153,6 +153,21 @@ __CLEANUP__
         precondition(ownApp.terminateCalls == 1)
         precondition([foreignApp, retiredApp, unknownApp].allSatisfy { $0.terminateCalls == 0 && $0.forceTerminateCalls == 0 })
         print("PASS uninstall terminates only the exact private helper")
+
+        let idleOwn = NSRunningApplication(own)
+        NSRunningApplication.applications = [idleOwn, foreignApp, retiredApp, unknownApp]
+        try await OpenAIComputerUse.stopOwnedHelper(allowForce: false)
+        precondition(idleOwn.isTerminated && idleOwn.terminateCalls == 1 && idleOwn.forceTerminateCalls == 0)
+        precondition([foreignApp, retiredApp, unknownApp].allSatisfy { $0.terminateCalls == 0 && $0.forceTerminateCalls == 0 })
+        let refusingOwn = NSRunningApplication(own)
+        refusingOwn.exitsOnTerminate = false
+        NSRunningApplication.applications = [refusingOwn]
+        do {
+            try await OpenAIComputerUse.stopOwnedHelper(allowForce: false)
+            preconditionFailure("update accepted a live helper")
+        } catch OpenAIComputerUse.RuntimeError.helperRunning {}
+        precondition(!refusingOwn.isTerminated && refusingOwn.forceTerminateCalls == 0)
+        print("PASS update gracefully stops only its idle helper and never force-quits a refusal")
 
         let healthyOwn = NSRunningApplication(own)
         let standalone = NSRunningApplication(foreign), retiredHelper = NSRunningApplication(retired)

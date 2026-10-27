@@ -1,0 +1,14 @@
+[
+  {
+    "version": "0.160.0",
+    "filename": "codex-package-0.160.0-aarch64-apple-darwin.tar.gz",
+    "bytes": 129976298,
+    "sha256": "007df41b607dbbc8d204b9746ce7fed2d4ce6c813f44c32ceee54175ca796525"
+  },
+  {
+    "version": "26.929.1001365",
+    "filename": "computer-use-26.929.1001365-arm64.zip",
+    "bytes": 35881436,
+    "sha256": "553b6fa2f54074ea5f44a85347d4ee7438e7c5ee06e01a21b5405c430cab9195"
+  }
+]
