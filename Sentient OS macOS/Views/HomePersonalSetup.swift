@@ -158,7 +158,7 @@ struct HomeSidekickSuggestions: View {
         Suggestion(id: "subscriptions", title: "Find subscriptions to cancel", symbol: "creditcard",
                    prompt: "Find my recurring subscriptions using billing emails and account pages I can access. Show prices and renewal dates, and ask which I want to cancel. Don't assume a subscription is unused or cancel anything without my approval."),
         Suggestion(id: "followups", title: "Catch missed follow-ups", symbol: "arrowshape.turn.up.left",
-                   prompt: "Check my recent email conversations for up to three follow-ups I owe, including unanswered requests and commitments I made. Explain what needs attention and prepare a draft for each, leaving everything unsent. Ask which inbox to use if needed."),
+                   prompt: "Check my recent email conversations, plus iMessage and WhatsApp if installed and accessible, for up to three follow-ups I owe, including unanswered requests and commitments I made. Explain what needs attention and prepare a draft for each, leaving everything unsent. Ask which inbox or account to use if needed."),
         Suggestion(id: "purchase", title: "Research a purchase", symbol: "magnifyingglass",
                    prompt: "Help me research a purchase. First ask what I'm buying, my budget, and what matters most. Then compare suitable options using current prices, specifications, and owner reviews. Give me a short recommendation with sources and total delivered prices where available."),
         Suggestion(id: "meeting", title: "Prep my next meeting", symbol: "calendar.badge.clock",
