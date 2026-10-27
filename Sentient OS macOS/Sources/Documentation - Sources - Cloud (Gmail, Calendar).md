@@ -31,25 +31,48 @@ calendar channels (see the Proactive doc).
 
 ## Connecting
 
-`CloudConnectSheet(.gmail)` / `.calendar` is reachable from Settings → Knowledge Sources, the home's
-Analysis popover, onboarding's ready screen, and Dev Tools. Flow: **Connect** opens the ENGINE'S
-connector page (`GmailConnect.connectorURL` / `CalendarConnect.connectorURL` pick per backend:
-OpenAI's hosted connector page on ChatGPT, claude.ai's connector directory on Claude; the sheet's
-copy follows, and the sources group header reads "Through Your ChatGPT" / "Through Your Claude")
-where the user links Google. Calendar's **Done** saves the user's declaration and selects the source.
-Gmail's **Done** reads and saves the connected email address directly: Codex discovers the address from its
-connector metadata; Claude Gmail reads one sent thread's metadata directly, without a model turn.
-The connection flow discloses cloud storage inline before Done; no additional popup appears. One distinct sender from messages marked
-SENT is saved automatically. Empty, ambiguous or unavailable results are skipped without asking for
-an email address. A missing connection returns to the picker without being marked linked.
-No message bodies, subjects or snippets are requested by this address-collection step. Only the
-email address is queued in Keychain until the feedback list accepts it; connector metadata is not
-retained in that list. “Stop reading” turns off knowledge selection; it does not unlink the provider
-or remove an address from the founder-feedback list.
+`CloudConnectSheet(.gmail)` / `.calendar` and the generic hosted connector sheet open the chosen
+AI's connector page. **Done** performs a bounded native connection check before saving the opt-in.
+Opening the page or declaring Done does not establish a connection. While checking, the sheet shows
+progress; an unavailable or unrecognized connection keeps the sheet open with a retry explanation.
+Cancelling or changing provider cannot save a late result. Source revisions also make a later
+Stop reading, reconnect or newer Done win over an older verification in another window. Reset
+drains pending verification before clearing state. None of these checks starts a model turn,
+reads source content, or changes OAuth.
 
-Outlook Mail's connector popup uses the same automatic collection flow on Done, reading Codex metadata or Claude
-Microsoft 365 `get_me`. Email-only storage, access controls and retention are documented in `Cloud/Mail Accounts/Documentation - Connected Email
-Accounts.md`. Message ingestion and its existing per-run identity checks remain independent.
+`HostedConnectorReadinessProbe` reuses the bounded control transport from `MailAccountProbe`:
+
+- ChatGPT: initialize the private Codex app-server and read `mcpServerStatus/list` with
+  `toolsAndAuthOnly`. Require the selected service identity, native `link_id` evidence, and at least
+  one reviewed read tool. Plugin-cache presence is addressing metadata, never readiness proof.
+- Claude: initialize the control channel without a user prompt and inspect `mcp_status`. Require a
+  connected server at the curated endpoint, connection identity, and a reviewed read tool. No
+  connector operation or content tool is called.
+
+The DEBUG `connectorlab` route `LAB_CMD=connectionreadiness LAB_SLUG=<curated-hosted-source>`
+checks the current provider without saving selection/readiness. Optional `LAB_ENGINE=codex|claude`
+must match that provider. It emits only field-shape/service-match booleans and the verification result;
+no IDs, account data or raw tool payloads are printed. It bypasses the lab's model/classifier routes.
+
+Unknown metadata shapes remain unverified and actionable; Sentient does not infer OAuth completion
+or reset a connection to make it pass. Verified metadata is scoped to its provider and account.
+Claude requires a native status observed this process; proof carries a local account fingerprint,
+and before/after login-revision checks reject an account change during verification. No raw email,
+organization or link identifier is stored as proof. `DetectedConnector.isReady` requires that evidence.
+An older healthy selected cache without
+an evidence marker does not count toward a new three-source setup. Users who already completed a
+first analysis may still attempt those legacy opted-in sources: validated read success establishes
+readiness, while a real authentication failure marks the source unavailable. Unmarked legacy Claude
+records belong only to the first authenticated account observed during migration. Catalog refreshes cannot
+silently reverse that failure. Opening connector settings invalidates readiness until reconfirmed.
+
+Supported Gmail/Outlook feedback-contact consent is recorded only after verified explicit Done;
+address collection remains deferred until actual mailbox processing. Opening a picker or verifying
+readiness never collects an address. The separate contact path uses native metadata, never message
+bodies, subjects or snippets. “Stop reading” removes knowledge selection and cancels pending
+contact collection without unlinking the provider or deleting existing feedback records.
+See `Cloud/Mail Accounts/Documentation - Connected Email
+Accounts.md` for that independent data path.
 
 ## How reads work
 

@@ -129,6 +129,7 @@ struct BriefingCard: View {
             HStack(spacing: 12) {
                 if let offer = briefing.offer {
                     OfferButton(label: offer, accent: briefing.accent, action: onOffer)
+                        .accessibilityIdentifier("proactive.offer." + briefing.id)
                         .disabled(fireDimmed)
                         .opacity(fireDimmed ? 0.45 : 1)
                         .animation(.easeInOut(duration: 0.25), value: fireDimmed)

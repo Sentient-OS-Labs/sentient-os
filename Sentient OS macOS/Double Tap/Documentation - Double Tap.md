@@ -42,15 +42,29 @@ Data Retention arrangement. See the in-app privacy policy for the service's data
 ## A one-time snapshot of your voice
 
 `Vault/WritingStyle.swift` prepares `writingstyle.md` inside `~/Sentient OS - Knowledge Base/`.
-It saves selected examples of your own sent messages from available one-to-one iMessage and WhatsApp
-conversations and supported connected sent email, with recipient or conversation context to help
-match your tone. This setup is separate from the chats selected for regular knowledge analysis.
-Apple Mail's local analysis does not currently supply this writing-style collector.
+It saves examples of your own sent messages only from explicitly selected one-to-one iMessage and
+WhatsApp chats and enabled, connected supported sent-email sources. A connected account that is off
+for analysis does not supply writing samples. The collector does not discover unrelated local
+databases or Contacts; a cloud-only selection never requires Full Disk Access. Recipient labels come
+from the selected source, with raw handles retained when no name is available. Apple Mail's local
+analysis does not currently supply this writing-style collector.
+
+Unavailable sources are omitted from the setup selection. No eligible sent examples leaves the
+snapshot absent; automatic setup never publishes an empty file that would prevent later collection.
+A read failure or changed selection never publishes a partial file. While no snapshot exists, a new
+source/consent identity can trigger another idle attempt; Settings → Double Tap → Collect examples
+provides an explicit retry using only the currently selected, connected sources.
 
 **Sentient does not continuously collect new writing-style examples.** If the file already exists,
 setup leaves it alone, and knowledge updates preserve your edits. Use **Show writing examples in
 Finder** in Settings → Double Tap to inspect or edit the snapshot anytime. It is not listed as an
-ordinary note in the Knowledge window's tree. Removing the file can trigger setup again.
+ordinary note in the Knowledge window's tree. Existing empty files are preserved too, because Sentient
+cannot infer whether the user intentionally emptied them. Removing the file allows setup again.
+
+Writing examples are optional: Double Tap can draft from the visible conversation, knowledge and
+custom instructions when the snapshot is absent or empty. The hotkey never collects new sources on
+demand. An existing unreadable or oversized snapshot still reports its own error rather than silently
+changing or shortening user-authored examples.
 
 The snapshot is included in Double Tap requests. It also belongs to the knowledge folder uploaded if
 you enable optional cloud MCP sharing. Explicit custom reply instructions take priority over inferred

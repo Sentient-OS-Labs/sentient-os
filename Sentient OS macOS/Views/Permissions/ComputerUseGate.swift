@@ -38,8 +38,12 @@ final class ComputerUseGate {
 
     /// The selected runtime's grants are separate from optional voice access.
     private(set) var backend = ComputerUseBackend.current
-    private(set) var helperAccessibility = false
-    private(set) var helperScreen = false
+    var helperAccessibility: Bool { helperPermissionState.accessibility == .verified }
+    var helperScreen: Bool { helperPermissionState.screenRecording == .verified }
+    var helperPermissionState: NativePermissionReadiness.Snapshot {
+        NativePermissionCheck.shared.snapshot
+    }
+    private(set) var showingVoiceRepair = false
     private(set) var automation: Permissions.AutomationState = .unavailable
     private(set) var requestingAutomation = false
     private(set) var checkingAutomation = false
@@ -49,11 +53,15 @@ final class ComputerUseGate {
     private(set) var nativeRestartRequired = false
     private(set) var restartingNative = false
     @ObservationIgnored private var automationProbe: Task<Void, Never>?
+    @ObservationIgnored private var permissionRequest: Task<Void, Never>?
     @ObservationIgnored private var lastAutomationProbe: Date?
     var setup: ComputerUseSetup { .instance(for: backend) }
 
     /// Synchronous grants and installation state. A service starting in the background is not
     /// evidence that these permissions need to be granted again.
+    private var nativeInstallationReady: Bool {
+        CodexSetup.shared.computerUseReady && setup.ready && backend.isInstalled
+    }
     private var localRequirementsReady: Bool {
         guard sentientScreen else { return false }
         switch backend {
@@ -62,8 +70,7 @@ final class ComputerUseGate {
             // installation before starting the daemon; the permission gate checks the grants.
             return sentientAccessibility
         case .openAI:
-            return CodexSetup.shared.computerUseReady && setup.ready && backend.isInstalled
-                && helperAccessibility && helperScreen
+            return nativeInstallationReady && helperAccessibility && helperScreen
         }
     }
 
@@ -85,8 +92,8 @@ final class ComputerUseGate {
         guard backend == .openAI, setup.ready, !requestingAutomation else { return }
         requestingAutomation = true
         nativePermissionError = nil
-        Task {
-            defer { requestingAutomation = false; lastAutomationProbe = Date() }
+        permissionRequest = Task {
+            defer { permissionRequest = nil; requestingAutomation = false; lastAutomationProbe = Date() }
             do {
                 let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
                 guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
@@ -107,11 +114,12 @@ final class ComputerUseGate {
         guard backend == .openAI, !requestingAutomation, !restartingNative else { return }
         requestingAutomation = true
         restartingNative = true
-        Task {
-            defer { requestingAutomation = false; restartingNative = false; lastAutomationProbe = Date() }
+        permissionRequest = Task {
+            defer { permissionRequest = nil; requestingAutomation = false; restartingNative = false; lastAutomationProbe = Date() }
             _ = await automationProbe?.value
             do {
                 let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+                await NativePermissionCheck.shared.close()
                 try await OpenAIComputerUseRuntime.shared.restart(configuration: configuration)
                 try await checkNativeAccess(ask: true, configuration: configuration)
             } catch { recordNativeFailure(error) }
@@ -119,18 +127,22 @@ final class ComputerUseGate {
     }
 
     private func checkNativeAccess(ask: Bool, configuration supplied: OpenAIComputerUse.Configuration? = nil,
-                                   stoppingConflictingHelpers: Bool = false) async throws {
+                                   stoppingConflictingHelpers: Bool = false, verifyCapabilities: Bool = false) async throws {
         let configuration: OpenAIComputerUse.Configuration
         if let supplied { configuration = supplied }
         else { configuration = try await OpenAIComputerUse.Configuration.resolveForSetup() }
-        _ = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration,
+        let helper = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration,
             stoppingConflictingHelpers: ask || stoppingConflictingHelpers)
+        await NativePermissionCheck.shared.refresh(configuration: configuration, helper: helper)
         nativeHelperConflict = false
         automation = await Permissions.nativeAutomationState(ask: ask)
+        try Task.checkCancellation()
         if automation == .granted {
-            // Only explicit setup/repair diagnoses the live service. Routine refresh is a
-            // local launch + macOS preflight; the real task will authenticate its own connection.
-            if ask { try await OpenAIComputerUseRuntime.shared.check(configuration: configuration) }
+            // Only a user-started task or explicit setup can show the synthetic read-only
+            // capability window. Passive refresh never captures anything or opens that window.
+            if ask || verifyCapabilities {
+                try await NativePermissionCheck.shared.check(configuration: configuration, helper: helper)
+            }
             nativePermissionError = nil
             nativeRestartRequired = false
         } else {
@@ -150,7 +162,9 @@ final class ComputerUseGate {
             return
         }
         nativeHelperConflict = false
-        nativePermissionError = error.localizedDescription
+        nativePermissionError = (error as? NativeComputerUseFailure)?.detail == .testWindowNotObserved
+            ? "The check window could not be read. Keep it visible on your current desktop and try again."
+            : error.localizedDescription
         nativeRestartRequired = failure == .restartRequired || failure == .backendUnavailable
         if !Diagnostics.isExpected(error) {
             Diagnostics.report(.readinessFailed, phase: .probe, error: error)
@@ -159,15 +173,8 @@ final class ComputerUseGate {
 
     // MARK: The gate
 
-    /// Persisted so Sentient's OPTIONAL grant (Microphone & Speech) is offered exactly once in the
-    /// app's lifetime. The gate blocks only on REQUIRED grants, so without this a user who granted
-    /// them and skipped voice would never be pitched it again. Cleared by FactoryReset so a rebuild
-    /// re-offers it.
+    /// Legacy key retained so Factory Reset can remove it. Typed computer use never offers voice.
     static let micSpeechOfferedKey = "computerUse.micSpeechOffered"
-    private static var micSpeechOffered: Bool {
-        get { UserDefaults.standard.bool(forKey: micSpeechOfferedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: micSpeechOfferedKey) }
-    }
 
     private struct PendingAction {
         let id: UUID
@@ -176,9 +183,9 @@ final class ComputerUseGate {
     }
     private var pending: PendingAction?
     @ObservationIgnored private var pendingCheck: Task<Void, Never>?
-    private var presentedBlocking = false   // window up because a REQUIRED grant is missing (vs. the optional offer)
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
+    var isPresenting: Bool { window != nil }
 
     /// Closing required setup is distinct from cancelling the owning task.
     nonisolated struct SetupCancelled: Error {}
@@ -210,15 +217,8 @@ final class ComputerUseGate {
         }
     }
 
-    /// Returns true when the gate holds the action, either for a quiet readiness check or a
-    /// setup window; false when the caller may proceed. Setup appears in two cases:
-    ///   • a REQUIRED grant is missing → BLOCKING: always re-shows (or re-focuses) and re-holds the
-    ///     action until every required grant is green — so a feature can never fire half-granted no
-    ///     matter how many times the window was dismissed (Continue is disabled, close drops it).
-    ///   • all required are green but Sentient's OPTIONAL grant (Microphone & Speech) is missing
-    ///     and hasn't been offered yet → NON-BLOCKING, once ever: Continue is enabled immediately
-    ///     and closing still FIRES the held command, so an optional nudge never eats what the user
-    ///     fired.
+    /// Holds the requested action only while required setup is incomplete. Voice consent is
+    /// independent and never opens this gate for a typed command.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
         intercept(PendingAction(id: UUID(), proceed: action, cancel: {}))
     }
@@ -233,7 +233,8 @@ final class ComputerUseGate {
             return false
         }
         pending = intent
-        if backend == .openAI, localRequirementsReady, !allRequiredGranted,
+        showingVoiceRepair = false
+        if backend == .openAI, nativeInstallationReady, sentientScreen, !allRequiredGranted,
            window == nil, !requestingAutomation {
             // Join a cold helper's local permission preflight before offering setup.
             refreshAutomation(force: true)
@@ -259,21 +260,18 @@ final class ComputerUseGate {
     private var canProceedWithoutSetup: Bool {
         guard allRequiredGranted else { return false }
         HealthCaution.latchComputerUse()
-        return micSpeech == .granted || Self.micSpeechOffered
+        return true
     }
 
     private func presentPendingAction() {
         let blocking = !allRequiredGranted
-        // The row is shown → it's now been offered.
-        if micSpeech != .granted { Self.micSpeechOffered = true }
-        presentedBlocking = blocking
         let wasVisible = window?.isVisible ?? false
         present()
         if wasVisible {
             Log("ComputerUseGate: re-intercepted — setup window already up, action re-held")
         } else {
             Analytics.signal("PermissionGate.shown", parameters: ["blocking": String(blocking)])
-            Log("ComputerUseGate: setup window up (\(blocking ? blockingReason : "optional voice offer"))")
+            Log("ComputerUseGate: setup window up (\(blocking ? blockingReason : "required setup ready"))")
         }
     }
 
@@ -304,7 +302,7 @@ final class ComputerUseGate {
         refresh()
         guard micSpeech == .denied else { return false }
         cancelPendingCheck()
-        presentedBlocking = !allRequiredGranted
+        showingVoiceRepair = true
         present()
         Log("ComputerUseGate: mic click hit a denied mic/speech — setup window up as the fix surface")
         return true
@@ -319,13 +317,7 @@ final class ComputerUseGate {
     private func refreshGrants() {
         backend = .current
         setup.refresh()
-        if backend == .openAI {
-            let oldHelperAccessibility = helperAccessibility
-            helperAccessibility = Permissions.isTCCGranted(service: "kTCCServiceAccessibility", clientBundleID: OpenAIComputerUse.bundleID)
-            let oldHelperScreen = helperScreen
-            helperScreen = Permissions.isTCCGranted(service: "kTCCServiceScreenCapture", clientBundleID: OpenAIComputerUse.bundleID)
-            if oldHelperScreen != helperScreen || oldHelperAccessibility != helperAccessibility { OpenAIComputerUseRuntime.shared.invalidate() }
-        }
+        if backend == .openAI { NativePermissionCheck.shared.refresh() }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         let speech = SFSpeechRecognizer.authorizationStatus()
         if mic == .authorized && speech == .authorized {
@@ -370,8 +362,9 @@ final class ComputerUseGate {
             // A held user action may take over a foreign helper that a passive refresh refused.
             // Resolve that conflict before turning it into a blocking permission window.
             if self.backend == .openAI, self.setup.ready,
-               self.nativeHelperConflict || self.nativePermissionError != nil {
-                do { try await self.checkNativeAccess(ask: false, stoppingConflictingHelpers: true) }
+               self.nativeHelperConflict || self.nativePermissionError != nil || !self.helperPermissionState.isReady {
+                do { try await self.checkNativeAccess(ask: false, stoppingConflictingHelpers: true,
+                                                     verifyCapabilities: self.sentientScreen) }
                 catch { self.recordNativeFailure(error) }
             }
             guard !Task.isCancelled else { return }
@@ -385,6 +378,7 @@ final class ComputerUseGate {
     /// required grant is green (the button is disabled until then); the re-probe + guard here make
     /// that a hard invariant, so a stale tap can never launch a feature that would just fail.
     func continueNow() {
+        if showingVoiceRepair { dismissWindow(); return }
         guard window != nil, pendingCheck == nil else { return }
         refresh()
         afterNativeRefresh { gate in
@@ -455,45 +449,17 @@ final class ComputerUseGate {
         window.close()                  // willClose → windowClosed(), which finds pending already nil on Continue
     }
 
-    /// The red button / X. A BLOCKING gate drops the held action (never fired blind — a required
-    /// grant is missing). The optional-grants offer is non-blocking, so dismissing it still fires
-    /// the command the user actually asked for.
+    /// Closing setup always drops the held action. Optional voice repair owns no typed action.
     private func windowClosed() {
-        cancelPendingCheck()
+        permissionRequest?.cancel()
+        cancelPendingAction()
         if let closeObserver {
             NotificationCenter.default.removeObserver(closeObserver)
             self.closeObserver = nil
         }
-        // AppKit retains a closed window when isReleasedWhenClosed is false. Detach its hosted
-        // view explicitly: otherwise SwiftUI's polling task continues while the window is shut.
         window?.contentViewController = nil
         window = nil
-        if let action = pending {
-            pending = nil
-            refreshGrants()
-            if presentedBlocking || !localRequirementsReady {
-                Log("ComputerUseGate: blocking setup dismissed; held action dropped")
-                action.cancel()
-            } else if allRequiredGranted {
-                Log("ComputerUseGate: optional-grants offer dismissed — firing the held command")
-                action.proceed()
-            } else {
-                // Closing the optional offer must not eat a command just because its native
-                // check is still running. A real failure drops it without reopening a window.
-                pending = action
-                refreshAutomation(force: true)
-                afterNativeRefresh { gate in
-                    let action = gate.pending
-                    gate.pending = nil
-                    guard gate.allRequiredGranted else {
-                        Log("ComputerUseGate: dismissed offer dropped held action (\(gate.blockingReason))")
-                        action?.cancel()
-                        return
-                    }
-                    action?.proceed()
-                }
-            }
-        }
+        showingVoiceRepair = false
         PermissionGuide.shared.close()
     }
 }

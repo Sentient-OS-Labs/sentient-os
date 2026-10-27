@@ -1,22 +1,23 @@
-// Main window navigation: onboarding becomes Home as soon as analysis timing is chosen.
+// Main window navigation: onboarding becomes Home once the frontier model is connected.
 // Analysis runs in the app-owned coordinator and presents progress in its own window.
 // Doc: Documentation - Views - Home, Processing & Shared UI.md
 
 import SwiftUI
+import Combine
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
     @State private var navigation = MainNavigation.shared
     @Environment(\.openWindow) private var openWindow
     @State private var showDevTools = false
-    @State private var startedWritingStyleSetup = false
+    @State private var attemptedWritingStyleSelection: WritingStyle.Selection?
+    @State private var writingStyleSelection = WritingStyle.selectionIdentity
     @State private var onboardingScale = OnboardingWindowLayout.scale(
         visibleSize: NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
     // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
     // watched here so Analyze Now and the Analysis popover react to edits from any window.
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
-    @State private var fdaGranted = Permissions.hasFullDiskAccess()
     // The 3-way card mode (Dev Tools → Proactive Cards…). DEFAULT: real cards + full-cycle
     // Analyze Now; .jesai/.launch swap in a hard-coded demo deck (pitch / launch-video mode).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
@@ -32,7 +33,7 @@ struct RootView: View {
 
     /// The sources Analyze Now will process — the shared selection (folders + DB sources).
     private var selectedSources: [RunSource] {
-        SourceSelection.current(fdaGranted: fdaGranted)
+        SourceSelection.current()
     }
 
     var body: some View {
@@ -40,12 +41,8 @@ struct RootView: View {
             Theme.bg.ignoresSafeArea()
             if !appState.hasCompletedOnboarding {
                 OnboardingCanvas(scale: onboardingScale) {
-                    OnboardingView { timing in
-                        appState.processing.choose(timing)
+                    OnboardingView {
                         withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
-                        if timing == .now {
-                            openWindow(id: ProcessingWindowView.windowID)
-                        }
                     }
                 }
                 .transition(.opacity)
@@ -126,6 +123,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)
+        .modifier(LifetimeUpgradePresentation())
         .overlay { UpdateGateView() }
         .background(MainWindowCloseGuard())
         .onChange(of: navigation.page) { _, page in
@@ -134,39 +132,50 @@ struct RootView: View {
         .onChange(of: appState.hasCompletedOnboarding) { _, completed in
             if !completed {
                 showDevTools = false
-                startedWritingStyleSetup = false
+                attemptedWritingStyleSelection = nil
             }
         }
         .sheet(isPresented: $showDevTools) {
             DevToolsView()
         }
-        // Existing knowledge bases get their Double Tap writing samples set up silently, once per
-        // session, the first time the home is idle. The introduction sheet (WritingStyleSetupView)
-        // is hidden for now. An independent Task, not this view task: generateIfNeeded marks the
-        // pipeline busy, which flips the id below and would cancel its own run.
-        .task(id: canStartWritingStyleSetup) {
-            guard canStartWritingStyleSetup, !startedWritingStyleSetup else { return }
-            startedWritingStyleSetup = true
+        // Source opt-ins and account generations may change in another window. Compare the
+        // complete consent identity before retrying; unrelated defaults changes do no work.
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)) { _ in
+                writingStyleSelection = WritingStyle.selectionIdentity
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            writingStyleSelection = WritingStyle.selectionIdentity
+        }
+        .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in
+            writingStyleSelection = WritingStyle.selectionIdentity
+        }
+        // Optional samples retry once per distinct source selection while Home is idle. Keep
+        // the work independent: collect marks the pipeline busy, which changes this task's id.
+        .task(id: eligibleWritingStyleSelection) {
+            guard let selection = eligibleWritingStyleSelection,
+                  attemptedWritingStyleSelection != selection else { return }
+            attemptedWritingStyleSelection = selection
             Task { @MainActor in
                 Log("WritingStyle: silent setup started for an existing knowledge base")
                 do { try await WritingStyle.generateIfNeeded() }
                 catch { Log("WritingStyle: silent setup failed (\(ErrorLabel(error)))") }
             }
         }
-        .onChange(of: showDevTools) { _, open in
-            if !open { fdaGranted = Permissions.hasFullDiskAccess() }   // may have changed in the sheet
-        }
     }
 
-    private var canStartWritingStyleSetup: Bool {
+    private var eligibleWritingStyleSelection: WritingStyle.Selection? {
         #if DEBUG
-        guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return false }
+        guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return nil }
         #endif
-        return appState.hasCompletedOnboarding && appState.processing.initialComplete && !appState.processing.isBusy
+        guard appState.hasCompletedOnboarding && appState.processing.initialComplete && !appState.processing.isBusy
             && !appState.processing.isSuspended
             && !PipelineActivity.shared.isRunning && !appState.commandCoordinator.run.isRunning
+            && writingStyleSelection.hasSources
             && !WritingStyle.exists()
             && FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.appendingPathComponent("README.md").path)
+        else { return nil }
+        return writingStyleSelection
     }
 
     private var home: some View {
@@ -183,11 +192,16 @@ struct RootView: View {
             customRoots: customRoots,
             deck: deck,
             onAnalyze: {
+                guard appState.hasCompletedPersonalSetup || appState.processing.initialComplete else {
+                    openWindow(id: PersonalSetupView.windowID)
+                    return
+                }
                 if !appState.processing.isBusy && appState.processing.record.status != .requested {
                     appState.processing.requestNow()
                 }
                 openWindow(id: ProcessingWindowView.windowID)
             },
-            onShowDevTools: { showDevTools = true })
+            onShowDevTools: { showDevTools = true },
+            onFinishSetup: { openWindow(id: PersonalSetupView.windowID) })
     }
 }

@@ -47,9 +47,12 @@ Dev Tools, and scheduled runs (`SourceSelection`, `CustomRoots`). Email & Calend
 Google Calendar, Apple Mail, Apple Calendar, and curated Outlook connections. Chats opens the shared WhatsApp
 and iMessage pickers; More of your world includes Apple Notes, SiYuan (when installed) and other curated connections. Folders
 provides standard-folder toggles and persistent custom roots through an `NSOpenPanel`. Hosted
-connection sheets follow the chosen frontier engine and its availability. A fix-it line appears when
-Full Disk Access is missing. The shared four-selection minimum guards direct toggle-offs in Settings
-and the onboarding ready step; enabled Apple Mail and Apple Calendar selections each count as one source.
+connection sheets follow the chosen frontier engine and its availability. New setups start with all
+folders off. Personal setup requires three usable selected sources; unavailable or disconnected
+sources do not count. Settings always allows removing a source, including below this minimum.
+Full Disk Access is explained only after choosing a protected local app. Cloud-only setup has no FDA
+gate. Permission grants never opt in other sources, and the source-specific relaunch action waits
+until active tasks have finished. Existing saved source choices and opt-outs survive setup resumption.
 
 Apple Mail opens `Views/AppleMailPicker.swift` to select accounts already synced in Mail. It needs
 Full Disk Access and processes downloaded bodies through the on-device model. It works with every
@@ -72,7 +75,10 @@ Browsing tabs starts no additional installation. See the BYOM and ClaudeCLI docs
 **Double Tap.** Independent drafting-provider selection: covered Sentient route, OpenAI, OpenRouter,
 Ollama, LM Studio, or another compatible endpoint. Custom endpoints expose API format and model
 controls; API keys are stored in Keychain. Custom reply instructions shape the draft.
-**Show writing examples in Finder** opens the editable one-time `writingstyle.md` snapshot.
+**Show writing examples in Finder** opens the editable one-time `writingstyle.md` snapshot. When no
+snapshot exists, **Collect examples** explicitly retries collection from eligible selected sources.
+No eligible examples leaves the file absent. Double Tap remains available with conversation, knowledge
+and custom instructions; existing files, including deliberately empty ones, are never replaced.
 The info explanation leads with fast, covered drafts and explains the default OpenAI API Zero Data
 Retention route, the screenshot/knowledge context and the unsent result. See the Double Tap guide.
 
@@ -122,6 +128,21 @@ PROACTIVE: Microphone & Speech, Sentient Screen Recording, and Notifications. A 
 group shows the native helper's Accessibility, Screen Recording, and Automation grants for every
 model backend. Automation denial links directly to its System Settings pane; first-time consent
 uses the macOS prompt.
+
+Readiness follows the features the user selected. Full Disk Access is not a global requirement:
+Health checks readability only for selected WhatsApp, iMessage, Apple Notes, or Apple Mail sources;
+with none selected, its row says it is not needed. Wake setup and launch at login affect readiness
+only when overnight processing is enabled or an analysis is scheduled. Opening Health or finishing
+a wake-helper check never enables scheduling. Microphone, speech, and notifications remain visibly
+optional and do not prevent the all-clear summary. Unknown native helper proof remains “not checked”
+in its existing permission rows, with an explicit Check computer use action; a passive health refresh
+does not run that proof or turn unknown evidence into a permission regression.
+
+Home's matching health ladder delays selected protected-source checks until personal setup is complete
+or that source has a previous successful read. Its copy names unavailable selected sources and preserves
+the availability of other sources. `Scripts/test_health_requirements.py` compiles the production ladder
+against in-memory fixtures for fresh Home, cloud-only setup, source drift, optional overnight setup,
+and unknown/confirmed native evidence, without accessing user data or requesting permissions.
 
 The engine group follows the frontier choice. ChatGPT shows Codex CLI, ChatGPT account and plan.
 Claude shows Claude Code CLI, the Claude account, and Codex CLI for computer use, with no ChatGPT

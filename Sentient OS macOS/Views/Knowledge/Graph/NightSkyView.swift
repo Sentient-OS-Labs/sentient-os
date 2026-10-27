@@ -23,6 +23,9 @@ struct NightSkyView: View {
     @ObservedObject var model: NightSkyModel
     var entranceReady = true
     var isActive = true
+    var animationsEnabled = true
+    var showsHUD = true
+    var takesKeyboardFocus = true
     var onOpen: (URL) -> Void
     var onExit: () -> Void
     private struct LoadKey: Equatable {
@@ -35,28 +38,28 @@ struct NightSkyView: View {
         GeometryReader { geo in
             ZStack {
                 if let graph = model.graph, !graph.nodes.isEmpty {
-                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isActive || !entranceReady)) { tl in
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isActive || !entranceReady || !animationsEnabled)) { tl in
                         ZStack {
                             Canvas { ctx, size in
-                                let t = tl.date.timeIntervalSinceReferenceDate
+                                let t = animationsEnabled ? tl.date.timeIntervalSinceReferenceDate : 0
                                 if isActive && entranceReady { model.tick(now: t, size: size) }
                                 SkyRenderer.draw(ctx, size: size, model: model, t: t)
                             }
                             // The sun IS the brand mark: the notch's SpinningLogo, slow, riding
                             // the root star's screen position (the canvas draws its light bed).
                             if let sun = model.sunOverlay(size: geo.size) {
-                                SpinningLogo(size: sun.diameter, fast: false, paused: !isActive || !entranceReady)
+                                SpinningLogo(size: sun.diameter, fast: false, paused: !isActive || !entranceReady || !animationsEnabled)
                                     .position(sun.center)
                                     .opacity(sun.opacity)
                             }
                         }
                     }
                     if isActive && entranceReady {
-                        SkyEventCatcher(model: model, onOpen: onOpen, onExit: onExit)
+                        SkyEventCatcher(model: model, takesKeyboardFocus: takesKeyboardFocus, onOpen: onOpen, onExit: onExit)
                     }
-                    hud(graph: graph)
+                    if showsHUD { hud(graph: graph) }
                     if model.hoverInfo != nil, let card = model.hoverCardRect(in: geo.size) {
-                        SkyHoverCard(info: model.hoverInfo!)
+                        SkyHoverCard(info: model.hoverInfo!, width: card.width)
                             .position(x: card.midX, y: card.midY)
                             .transition(.opacity.combined(with: .scale(scale: 0.97)))
                     }
@@ -69,6 +72,7 @@ struct NightSkyView: View {
             .animation(.easeOut(duration: 0.16), value: model.hoverInfo)
         }
         .background(Theme.bg)
+        .onChange(of: animationsEnabled, initial: true) { _, enabled in model.animates = enabled }
         // Reruns on every sky entry (silent refresh) AND when the vault first arrives — with the
         // Constellation View as the window's default, this view mounts before the async vault
         // scan finishes, so the graph must build the moment the vault lands.
@@ -188,6 +192,7 @@ struct SkyDoorToolbarItem: ToolbarContent {
 
 private struct SkyHoverCard: View {
     let info: SkyHoverInfo
+    var width: CGFloat = 250
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -207,7 +212,7 @@ private struct SkyHoverCard: View {
             }
         }
         .padding(12)
-        .frame(width: 250, alignment: .leading)
+        .frame(width: width, alignment: .leading)
         .background(Theme.Ink.cardBG.opacity(0.94), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
         .allowsHitTesting(false)
@@ -218,13 +223,19 @@ private struct SkyHoverCard: View {
 
 private struct SkyEventCatcher: NSViewRepresentable {
     let model: NightSkyModel
+    let takesKeyboardFocus: Bool
     let onOpen: (URL) -> Void
     let onExit: () -> Void
 
-    func makeNSView(context: Context) -> SkyEventNSView { SkyEventNSView() }
+    func makeNSView(context: Context) -> SkyEventNSView {
+        let view = SkyEventNSView()
+        view.takesKeyboardFocus = takesKeyboardFocus
+        return view
+    }
 
     func updateNSView(_ v: SkyEventNSView, context: Context) {
         v.model = model
+        v.takesKeyboardFocus = takesKeyboardFocus
         v.onOpen = onOpen
         v.onExit = onExit
     }
@@ -238,6 +249,7 @@ private struct SkyEventCatcher: NSViewRepresentable {
 
 private final class SkyEventNSView: NSView {
     weak var model: NightSkyModel?
+    var takesKeyboardFocus = true
     var onOpen: ((URL) -> Void)?
     var onExit: (() -> Void)?
 
@@ -247,14 +259,14 @@ private final class SkyEventNSView: NSView {
     private var lastDragPoint: CGPoint = .zero
     private var moved = false
 
-    override var acceptsFirstResponder: Bool { true }
+    override var acceptsFirstResponder: Bool { takesKeyboardFocus }
     override var isFlipped: Bool { true }           // match SwiftUI/Canvas coordinates
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.model != nil, let w = self.window else { return }
+            guard let self, self.takesKeyboardFocus, self.model != nil, let w = self.window else { return }
             w.makeFirstResponder(self)
         }
     }

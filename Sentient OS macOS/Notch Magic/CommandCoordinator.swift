@@ -697,7 +697,7 @@ final class CommandCoordinator {
     // MARK: The onboarding notch demo (the film step's invitation beat — click or hotkey)
 
     /// Arm the one-shot demo. `onFired` is the film step's cue to resume the webview ride the
-    /// moment the demo "presses ⏎" — the film's browser windows play the shopping run while the
+    /// moment the demo "presses ⏎" — the film's windows play the restaurant booking while the
     /// real notch narrates.
     func armOnboardingNotchDemo(onFired: @escaping () -> Void) {
         onboardingDemoArmed = true
@@ -706,8 +706,9 @@ final class CommandCoordinator {
     }
 
     /// Disarm + cancel any in-flight typing script (the film step left, or SKIP). A demo RUN
-    /// already in flight is left to finish on its own — it's pure theater and self-retracts.
+    /// already in flight also ends: the film no longer owns narration after step exit.
     func disarmOnboardingNotchDemo() {
+        if run.isDemo && run.isRunning { run.stop() }
         guard onboardingDemoArmed || demoTask != nil else { return }
         onboardingDemoArmed = false
         onboardingDemoFired = nil
@@ -727,7 +728,7 @@ final class CommandCoordinator {
         demoTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(0.7))          // the field's bloom + focus settle
-                let task = "order this stuff"
+                let task = OnboardingRestaurantStory.command
                 for i in 1...task.count {
                     guard let self, self.phase == .typing else { self?.demoDraft = nil; return }
                     self.demoDraft = String(task.prefix(i))

@@ -50,7 +50,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
         let env = ProcessInfo.processInfo.environment
         guard env["SENTIENT_SELFTEST"] == "sidekickapp", CommandLine.arguments.count == 1,
               let path = env["LAB_SIDEKICK_ROOT"], path.hasPrefix("/"),
-              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-discovery", "ui-invitation", "ui-small-onboarding", "ui-late-gift", "ui-stress", "live-workflows"].contains(stage),
+              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-discovery", "ui-invitation", "ui-small-onboarding", "ui-late-gift", "ui-personal-setup", "ui-personal-sources", "ui-stress", "live-workflows"].contains(stage),
               let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = ModelBackend(rawValue: selected), provider != .custom else { throw Failure.configuration }
         let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
@@ -127,6 +127,16 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "ui-polish":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickPolishLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-personal-setup":
+                // This runs after prepare() replaces standard defaults with the owned suite,
+                // before AppState/ProcessingCoordinator read their persisted milestones.
+                c.defaults.removeObject(forKey: ProcessingPlan.initialCompletedKey)
+                let state = AppState(); app = state
+                checks.merge(try await PersonalSetupHomeLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-personal-sources":
+                c.defaults.removeObject(forKey: ProcessingPlan.initialCompletedKey)
+                let state = AppState(); app = state
+                checks.merge(try await PersonalSetupSourcesLab.run(app: state, root: c.root)) { _, new in new }
             case "ui-late-gift":
                 checks.merge(try await SidekickPolishLab.runLateGift(root: c.root)) { _, new in new }
             case "ui-clear":

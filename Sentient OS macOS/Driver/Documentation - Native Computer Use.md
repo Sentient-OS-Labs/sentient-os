@@ -110,10 +110,18 @@ The native path needs Sentient's Apple Events entitlement plus user-granted Auto
 OpenAI's helper. The helper has its own Accessibility and Screen Recording grants; Sentient retains
 Screen Recording for Sidekick's screen context. This applies to Claude, ChatGPT and custom models.
 Sentient's old CUA Accessibility grant is not needed for native actions. Microphone and Speech remain optional.
+Full Disk Access is not needed for native setup or Sidekick. Effective helper readiness uses
+`NativePermissionCheck` and `NativePermissionReadiness`: an explicit, model-free `get_app_state`
+against a temporary Sentient-owned window must return its unique AX marker and a valid screenshot.
+A `list_apps` service check alone never grants admission. No probe response is stored or sent to a
+model; the read performs no actions. The tested helper's PID/configuration and a live model-free
+connection scope the in-memory proof. Helper exit/change, dead connection and native permission
+errors invalidate it. Background Health checks observe the proof without opening the window.
+Unknown readiness offers Check computer use, not a claim that permission was denied.
+
 
 Automation checks use Apple's asynchronous permission API after starting the helper through
-LaunchServices. A stopped target is not treated as denied permission. Visible setup surfaces request unasked Apple Events consent through the macOS dialog. There is no
-separate Automation row; the user still chooses Allow in the system prompt. Denial exposes a Settings
+LaunchServices. A stopped target is not treated as denied permission. Visible setup surfaces request unasked Apple Events consent through the macOS dialog. The Automation row reflects that state; the user still chooses Allow in the system prompt. Denial exposes a Settings
 action without another automatic prompt. Background checks never request consent and no TCC database is written. Normal startup and Factory Reset preserve
 the grant. Uninstall uses `tccutil` to reset only Sentient's Apple Events access.
 
@@ -240,8 +248,10 @@ Sentient processes too; a busy lease is reported without interrupting them. An i
 helper can use the existing pinned installer after stopping only the private helper. The install
 wait is cancellable, and reset/uninstall drain an active diagnostic before deleting its state.
 A confirmed connection/capture startup problem can restart the idle helper once and rerun all
-checks. No TCC edits or automatic grants. An explicit
-ScreenCaptureKit user-denied error is permission evidence; an unreadable TCC database is unknown.
+checks. No TCC edits or automatic grants. Stored helper TCC observations appear only as optional
+report evidence and cannot block the effective diagnostic, even if unavailable without Full Disk
+Access or stale for the current signing identity. An explicit ScreenCaptureKit user-denied error is
+permission evidence; an unreadable TCC database is unknown.
 `repairVerified` becomes true only after the complete real probe passes.
 
 The native broker additionally advertises `diagnose_computer_use` for every provider. This is a
@@ -294,4 +304,5 @@ broker's evidence gate, permission checks, no-side-effect refusal and single-use
 transport. `test_sidekick_tools.py` checks real question routing, fixed wording, actual answers and
 cancellation. Signed lab mode `doctor` exercises the real window and native helper; `doctor-chatgpt`
 and `doctor-claude` now verify that a healthy run's diagnostic request is suppressed without opening
-a window. No user-app actions or report uploads. The optional voice first-use offer is separate.
+a window. No user-app actions or report uploads. Voice permission is requested only from deliberate voice use;
+typed computer-use setup has no Microphone/Speech offer.

@@ -11,12 +11,12 @@
 //  The chrome is deliberately quiet: a wordmark, conversation search, Analysis, Knowledge
 //  and Settings. Optional AI connections live inside Knowledge. Status lives inside Analysis.
 //
-//  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
-//  help." — the orb appears ONLY here (its one home), turning the empty state into a launchpad
-//  that hands your eye straight to the command bar. (Retired ConstellationHome; harvested orb +
-//  sources + AIs + vault stats into this surface and its popovers.)
+//  BEFORE PERSONAL SETUP, Sidekick is the main workspace. A small reward panel offers optional
+//  setup beside it; its examples never execute tasks or alter conversation state. The existing
+//  composer/transcript stay mounted as personal context becomes ready. Completed users retain
+//  the real proactive spread and its empty state.
 //
-//  KNOWLEDGE-BASE-ONLY MODE (free/go plans, CodexAuth.knowledgeBaseOnly): cards never come and
+//  LEGACY KNOWLEDGE-BASE-ONLY DIAGNOSTIC (previewKBOnly): cards never come and
 //  the command bar hides — the preview note under the orb (upgrade CTA + Reset jump) is ALWAYS
 //  on this home. The gift envelope (the only card the free home can hold) perches top-center
 //  above the compact note; flinging the letter blooms the note into the full center. Once the
@@ -40,9 +40,10 @@ struct HomeView: View {
     var previewKBOnly = false          // preview-only: force the knowledge-base-only state
     var onAnalyze: () -> Void = {}
     var onShowDevTools: () -> Void = {}
+    var onFinishSetup: () -> Void = {}
 
-    /// Free/go knowledge-base-only mode: no cards ever come, the command bar hides (computer use
-    /// burns quota these plans don't have), and the empty state carries the preview message.
+    /// Retained diagnostic/legacy mode. Normal Free/Go users receive full Home; account labels
+    /// never imply that Sidekick is unavailable. Migration clears the historical mode flag.
     private var kbOnly: Bool { previewKBOnly || CodexAuth.knowledgeBaseOnly }
     var previewUpgraded: Bool? = nil   // preview-only: force the upgraded/not-upgraded note
     /// A kbOnly user whose claim now reads full — they upgraded (codex's own 8-day refresh, the
@@ -60,6 +61,15 @@ struct HomeView: View {
     private var model: ForYouModel { presentation.cards }
     private var conversation: SidekickConversation { appState.commandCoordinator.run.conversation }
     private var inConversation: Bool { !kbOnly && presentation.surface == .conversation }
+    private var personalSetupPending: Bool {
+        !appState.hasCompletedPersonalSetup && !appState.processing.initialComplete
+    }
+    private var needsPersonalSetup: Bool {
+        !kbOnly && deck == .real && personalSetupPending
+    }
+    @State private var selectedPersonalFeature: HomePersonalFeature?
+    @State private var personalPreviewHeight: CGFloat = 380
+    @State private var composerFocusRequest = 0
     @State private var overviewPage = 0
     @State private var overviewPull: Double = 0
     @State private var gatheringFromScroll = false
@@ -104,6 +114,7 @@ struct HomeView: View {
     private var homeCanvas: some View {
         GeometryReader { geo in
             let layout = overviewLayout(in: geo.size)
+            let workspaceWidth = needsPersonalSetup ? geo.size.width - (HomePersonalSetupPanel.width + 46) : geo.size.width
             ZStack {
                 SidekickAtmosphere(focused: presentation.composerFocused,
                                    sendPulse: presentation.sendPulse,
@@ -112,12 +123,15 @@ struct HomeView: View {
                 SidekickGlassGroup {
                     ZStack {
                         scatter(geo, layout: layout)
+                            .opacity(needsPersonalSetup ? 0 : 1)
+                            .allowsHitTesting(!needsPersonalSetup)
+                            .accessibilityHidden(needsPersonalSetup)
                         if kbOnly {
                             // The preview note is ALWAYS on the free home — the gift envelope (the
                             // only card this home can ever hold) perches above it, never in front:
                             // the pitch must not hide behind a fling.
                             previewState
-                        } else if model.entries.isEmpty {
+                        } else if model.entries.isEmpty && !needsPersonalSetup {
                             emptyState.opacity(inConversation ? 0 : 1)
                                 .blur(radius: inConversation && !reducedMotion ? 9 : 0)
                                 .scaleEffect(inConversation && !reducedMotion ? 0.94 : 1)
@@ -129,27 +143,43 @@ struct HomeView: View {
                             if !kbOnly {
                                 SidekickTranscript(conversation: conversation, coordinator: appState.commandCoordinator,
                                                    presentation: presentation,
-                                                   active: isPresented && presentation.windowActive && inConversation)
-                                    .opacity(inConversation ? 1 : 0)
+                                                   active: isPresented && presentation.windowActive && inConversation && selectedPersonalFeature == nil)
+                                    .opacity(inConversation && selectedPersonalFeature == nil ? 1 : 0)
                                     .blur(radius: !inConversation && !reducedMotion ? 10 : 0)
                                     .offset(y: !inConversation && !reducedMotion ? 30 : 0)
                                     .animation(reducedMotion ? .easeOut(duration: 0.14)
                                         : .smooth(duration: 0.35).delay(inConversation ? 0.16 : 0), value: inConversation)
-                                    .allowsHitTesting(inConversation)
-                                    .disabled(!inConversation)
-                                    .accessibilityElement(children: inConversation ? .contain : .ignore)
-                                    .accessibilityHidden(!inConversation)
+                                    .allowsHitTesting(inConversation && selectedPersonalFeature == nil)
+                                    .disabled(!inConversation || selectedPersonalFeature != nil)
+                                    .accessibilityElement(children: inConversation && selectedPersonalFeature == nil ? .contain : .ignore)
+                                    .accessibilityHidden(!inConversation || selectedPersonalFeature != nil)
                             } else { Spacer() }
                             VStack(spacing: 0) {
-                                if !kbOnly && !inConversation {
+                                if !kbOnly && !inConversation && selectedPersonalFeature == nil
+                                    && (!needsPersonalSetup || !conversation.messages.isEmpty) {
                                     conversationPeek.padding(.horizontal, 38).padding(.bottom, 13)
                                         .transition(SidekickStyle.entrance(reducedMotion))
                                 }
                                 bottomDock
                             }
                             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("sidekick-home")).minY } action: { value in
-                                if !inConversation { overviewDockTop = value }
+                                if !inConversation || needsPersonalSetup { overviewDockTop = value }
                             }
+                        }
+                        .frame(width: workspaceWidth)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if needsPersonalSetup {
+                            personalWorkspace(in: geo.size, width: workspaceWidth)
+                            HomePersonalSetupPanel(selectedFeature: selectedPersonalFeature,
+                                                   emphasizeSetup: appState.hasCompletedFirstSidekickTask && !inConversation
+                                                       && !appState.commandCoordinator.run.isRunning,
+                                                   active: isPresented && presentation.windowActive && !reducedMotion,
+                                                   previewEnabled: !appState.commandCoordinator.run.isRunning && !appState.commandCoordinator.run.recovery.isPending,
+                                                   onSelectFeature: selectPersonalFeature,
+                                                   onFinishSetup: finishPersonalSetup)
+                                .frame(width: HomePersonalSetupPanel.width)
+                                .padding(.trailing, 38).padding(.top, chromeHeight + 20).padding(.bottom, 28)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                         }
                         chrome(in: geo.size)       // on top → the nav stays clickable
                         #if DEBUG
@@ -164,7 +194,7 @@ struct HomeView: View {
             }
             .background {
                 SidekickOverviewScroll(
-                    enabled: isPresented && !kbOnly && !inConversation
+                    enabled: isPresented && !kbOnly && !inConversation && !needsPersonalSetup
                         && !letterShown && !showAnalysis && !showDoubleTap,
                     activeRect: layout.region, onProgress: followOverviewScroll,
                     onSettle: settleOverviewScroll, onCollapse: dockOverviewFromScroll)
@@ -205,6 +235,10 @@ struct HomeView: View {
             if surface == .suggestions { overviewPull = 0; gatheringFromScroll = false }
             updateConversationVisibility()
         }
+        .onChange(of: selectedPersonalFeature) { _, _ in updateConversationVisibility() }
+        .onChange(of: needsPersonalSetup) { _, needed in
+            if !needed { selectedPersonalFeature = nil }
+        }
         .onChange(of: model.entries.map(\.id)) { _, ids in
             cardSizes = cardSizes.filter { ids.contains($0.key) }
         }
@@ -232,6 +266,7 @@ struct HomeView: View {
                 showAnalysis = false
                 showDoubleTap = false
                 showCodexSignIn = false
+                selectedPersonalFeature = nil
             }
         }
     }
@@ -316,19 +351,23 @@ struct HomeView: View {
     private func chrome(in size: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             topBar(compact: inConversation && size.width < 980).zIndex(1)
-            HStack(alignment: .top, spacing: 24) {
-                header
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    // Clear the cards' path as a direct pull approaches the greeting.
-                    // Opacity follows the same gesture and restores on a partial reversal.
-                    .opacity(inConversation ? 0 : (reducedMotion ? 1 : max(0, 1 - overviewPull / 60)))
-                    .blur(radius: inConversation && !reducedMotion ? 6 : 0)
-                    .offset(y: reducedMotion ? 0 : (inConversation ? -8 : -min(8, overviewPull * 0.15)))
-                    .allowsHitTesting(false).accessibilityHidden(inConversation)
-                if !inConversation || hasCriticalCaution {
-                    cautionBanner.frame(maxWidth: min(480, size.width * 0.48))
-                }
-            }.padding(.horizontal, 30).padding(.top, 25)
+            if !needsPersonalSetup || hasCriticalCaution {
+                HStack(alignment: .top, spacing: 24) {
+                    if !needsPersonalSetup {
+                        header
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            // Clear the cards' path as a direct pull approaches the greeting.
+                            // Opacity follows the same gesture and restores on a partial reversal.
+                            .opacity(inConversation ? 0 : (reducedMotion ? 1 : max(0, 1 - overviewPull / 60)))
+                            .blur(radius: inConversation && !reducedMotion ? 6 : 0)
+                            .offset(y: reducedMotion ? 0 : (inConversation ? -8 : -min(8, overviewPull * 0.15)))
+                            .allowsHitTesting(false).accessibilityHidden(inConversation)
+                    } else { Spacer(minLength: 0) }
+                    if !inConversation || hasCriticalCaution {
+                        cautionBanner.frame(maxWidth: min(480, size.width * 0.48))
+                    }
+                }.padding(.horizontal, 30).padding(.top, 25)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { value in
             chromeHeight = value
@@ -362,14 +401,16 @@ struct HomeView: View {
                 SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
             }
             if !kbOnly {
-                HomeDoubleTapButton(active: discoveryActive, presented: $showDoubleTap) {
+                HomeDoubleTapButton(active: discoveryActive, presented: $showDoubleTap,
+                                    needsPersonalSetup: needsPersonalSetup,
+                                    onFinishSetup: finishPersonalSetup) {
                     openWindow(id: ProcessingWindowView.windowID)
                 }.zIndex(1)
             }
             NavItem(title: compact ? nil : (appState.processing.isBusy ? "Analyzing" : "Analysis"), icon: "waveform.path",
                     dot: appState.processing.needsAttention ? Theme.Ink.amber
                         : (appState.processing.initialComplete ? Theme.Ink.green : GlowHalo.stops[4]),
-                    emphasized: !appState.processing.initialComplete,
+                    emphasized: !needsPersonalSetup && !appState.processing.initialComplete,
                     animateEmphasis: isPresented && presentation.windowActive && !inConversation
                         && !showAnalysis && !showDoubleTap && !letterShown && !reducedMotion) { showAnalysis = true }
                 .accessibilityIdentifier("navigation.analysis")
@@ -563,7 +604,7 @@ struct HomeView: View {
     /// very next foreground). Quiet on pitch decks (demo cards must never share the stage with a
     /// red capsule) and on the free home (HealthCaution guards kbOnly too — defense in depth).
     private func probeHealth(forceCodexRecheck: Bool = false) {
-        guard deck == .real, !kbOnly else { return }
+        guard deck == .real, !kbOnly, ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
         Task {
             let issue = await HealthCaution.probe(forceCodexRecheck: forceCodexRecheck || liveIssue?.kindKey == "codex")
             withAnimation(.easeInOut(duration: 0.25)) { liveIssue = issue }
@@ -625,20 +666,38 @@ struct HomeView: View {
         return login.isEmpty ? "" : login.capitalized
     }()
 
-    private var analysisPopover: some View {
-        AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
-                        lastRun: lastRunLabel,
-                        nextWakeAt: appState.scheduler.nextWakeAt,
-                        schedulerEnabled: appState.scheduler.isEnabled,
-                        schedulerNeedsSetup: appState.scheduler.needsSchedulerSetup,
-                        onAnalyze: { showAnalysis = false; onAnalyze() },
-                        onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
-                        onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
-                        onPickGmail: { showAnalysis = false; showGmailConnect = true },
-                        onPickAppleMail: { showAnalysis = false; showAppleMailPicker = true },
-                        onPickCalendar: { showAnalysis = false; showCalendarConnect = true },
-                        customRoots: customRoots)
-            .preferredColorScheme(.dark)
+    @ViewBuilder private var analysisPopover: some View {
+        if personalSetupPending && deck == .real {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Your personal context starts here.")
+                    .font(.system(size: 18, weight: .medium)).foregroundStyle(SidekickStyle.ink)
+                Text(kbOnly
+                     ? "Connect three sources, then choose when Sentient builds your knowledge."
+                     : "Connect three sources, then choose when Sentient builds your knowledge. Sidekick is ready to use now.")
+                    .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary).lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { showAnalysis = false; finishPersonalSetup() } label: {
+                    Label("Finish setup", systemImage: "arrow.right")
+                        .font(.system(size: 12.5, weight: .medium))
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("analysis.home.finishSetup")
+            }
+            .padding(22).frame(width: 320).background(Theme.Ink.cardBG).preferredColorScheme(.dark)
+        } else {
+            AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
+                            lastRun: lastRunLabel,
+                            nextWakeAt: appState.scheduler.nextWakeAt,
+                            schedulerEnabled: appState.scheduler.isEnabled,
+                            schedulerNeedsSetup: appState.scheduler.needsSchedulerSetup,
+                            onAnalyze: { showAnalysis = false; onAnalyze() },
+                            onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
+                            onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
+                            onPickGmail: { showAnalysis = false; showGmailConnect = true },
+                            onPickAppleMail: { showAnalysis = false; showAppleMailPicker = true },
+                            onPickCalendar: { showAnalysis = false; showCalendarConnect = true },
+                            customRoots: customRoots)
+                .preferredColorScheme(.dark)
+        }
     }
 
     /// The Analysis popover's "Last run:" value — the real last-cycle stamp (day spelled out once
@@ -729,6 +788,48 @@ struct HomeView: View {
 
     // MARK: The empty state — the orb's one home
 
+    @ViewBuilder private func personalWorkspace(in size: CGSize, width: CGFloat) -> some View {
+        let top = max(110, chromeHeight + 20)
+        let bottom = overviewDockTop > top ? overviewDockTop - 24 : size.height - 224
+        let height = max(180, bottom - top)
+        if let selectedPersonalFeature {
+            HomePersonalFeaturePreview(feature: selectedPersonalFeature, onClose: closePersonalFeature,
+                                       isActive: isPresented && presentation.windowActive, availableHeight: height) { naturalHeight in
+                guard self.selectedPersonalFeature == selectedPersonalFeature else { return }
+                let fitted = min(520, max(180, naturalHeight))
+                guard abs(personalPreviewHeight - fitted) > 1 else { return }
+                withAnimation(reducedMotion ? nil : .easeInOut(duration: 0.22)) { personalPreviewHeight = fitted }
+            }
+                .id(selectedPersonalFeature)
+                .frame(width: min(760, width - 76), height: min(personalPreviewHeight, height))
+                .position(x: width / 2, y: top + height / 2)
+                .transition(reducedMotion ? .opacity : .asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity), removal: .opacity))
+        } else if !inConversation {
+            HomeSidekickInvitation(compact: width < 650)
+                .frame(width: width - 108, alignment: .leading)
+                .position(x: width / 2, y: top + height / 2)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func selectPersonalFeature(_ feature: HomePersonalFeature) {
+        guard !appState.commandCoordinator.run.isRunning, !appState.commandCoordinator.run.recovery.isPending else { return }
+        withAnimation(reducedMotion ? .easeOut(duration: 0.12) : .spring(response: 0.42, dampingFraction: 0.9)) {
+            if selectedPersonalFeature != feature { personalPreviewHeight = 380 }
+            selectedPersonalFeature = selectedPersonalFeature == feature ? nil : feature
+        }
+    }
+
+    private func closePersonalFeature() {
+        withAnimation(.easeOut(duration: 0.16)) { selectedPersonalFeature = nil }
+    }
+
+    private func finishPersonalSetup() {
+        selectedPersonalFeature = nil
+        onFinishSetup()
+    }
+
     private var emptyState: some View {
         VStack(spacing: 14) {
             SidekickMark(size: 48, illuminated: true).padding(.bottom, 20)
@@ -741,7 +842,7 @@ struct HomeView: View {
                     .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
             } else {
                 VStack(spacing: 9) {
-                    Text("Sidekick will get your personal context soon.\nDouble Tap will be ready after your first analysis.")
+                    Text(personalContextStatus)
                         .font(.system(size: 13)).foregroundStyle(SidekickStyle.secondary)
                         .multilineTextAlignment(.center).lineSpacing(4)
                     analysisStatusLink
@@ -750,6 +851,16 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .offset(y: -35)
+    }
+
+    private var personalContextStatus: String {
+        if appState.processing.paused {
+            return "Your personal setup is saved. Analysis is paused.\nSidekick is ready; personal context and Double Tap follow your first analysis."
+        }
+        if appState.processing.needsAttention {
+            return "Your personal setup is saved. Analysis needs attention.\nSidekick is ready; check analysis to finish building your context."
+        }
+        return "Your personal setup is saved.\nPersonal context and Double Tap will be ready after your first analysis."
     }
 
     private var analysisStatusLink: some View {
@@ -797,7 +908,16 @@ struct HomeView: View {
             .multilineTextAlignment(.center)
             .lineSpacing(4)
             .padding(.top, 10)
-        if !appState.processing.initialComplete { analysisStatusLink.padding(.top, 4) }
+        if personalSetupPending {
+            Button(action: finishPersonalSetup) {
+                Label("Finish personal setup", systemImage: "arrow.right")
+                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Ink.bright)
+                    .padding(.horizontal, 8).frame(minHeight: 32)
+            }
+            .buttonStyle(SidekickPressStyle())
+            .padding(.top, 4)
+            .accessibilityIdentifier("personalSetup.knowledgeOnly.finish")
+        } else if !appState.processing.initialComplete { analysisStatusLink.padding(.top, 4) }
         if !compact {   // the feature rows return once the envelope is gone
             VStack(alignment: .leading, spacing: 11) {
                 previewRow("sunrise", "Mornings where things worth doing arrive already done")
@@ -881,8 +1001,17 @@ struct HomeView: View {
     private var bottomDock: some View {
         VStack(spacing: 10) {
             if !kbOnly {
+                if needsPersonalSetup && !inConversation {
+                    HomeSidekickSuggestions { prompt in
+                        guard !appState.commandCoordinator.run.isRunning, !appState.commandCoordinator.run.recovery.isPending else { return }
+                        conversation.draft = prompt
+                        composerFocusRequest &+= 1
+                    }
+                    .frame(maxWidth: 744)
+                }
                 SidekickComposer(coordinator: appState.commandCoordinator, presentation: presentation,
-                                 isPresented: isPresented, onAccepted: showConversation)
+                                 isPresented: isPresented, onAccepted: showConversation,
+                                 focusRequest: composerFocusRequest)
                     .frame(maxWidth: 744)
             }
             HStack(spacing: 5) {
@@ -935,6 +1064,7 @@ struct HomeView: View {
 
     private func showConversation() {
         withAnimation(SidekickStyle.motion(reducedMotion)) {
+            selectedPersonalFeature = nil
             gatheringFromScroll = false
             presentation.surface = .conversation
             overviewPull = 0
@@ -964,7 +1094,7 @@ struct HomeView: View {
         }
     }
     private func updateConversationVisibility() {
-        let visible = isPresented && presentation.windowActive && inConversation
+        let visible = isPresented && presentation.windowActive && inConversation && selectedPersonalFeature == nil
         if conversation.isVisible != visible { conversation.isVisible = visible }
         if visible && appState.commandCoordinator.run.recovery.isVisible { appState.commandCoordinator.run.recovery.dismiss() }
     }

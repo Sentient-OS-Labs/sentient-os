@@ -267,6 +267,10 @@ nonisolated func queryPlan(_ url: URL, _ query: String) throws -> String {
         try store.markRead(messageIDs: ["assistant-34", "assistant-34"], expectedGeneration: generation)
         try check(try store.unreadCount == unreadBefore - 1, "duplicate exact receipts changed unread count")
         let beforeInvalid = try store.unreadCount
+        do {
+            try store.markRead(messageIDs: ["missing"], expectedGeneration: generation)
+            fatalError("missing read target was accepted")
+        } catch Store.Failure.invalidReadReceipt { checks += 1 }
         rejects("unknown ID was accepted alongside a valid receipt") {
             try store.markRead(messageIDs: ["assistant-0", "missing"], expectedGeneration: generation)
         }

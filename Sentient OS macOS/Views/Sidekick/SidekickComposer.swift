@@ -6,6 +6,7 @@ struct SidekickComposer: View {
     let presentation: SidekickPresentation
     var isPresented: Bool
     var onAccepted: () -> Void
+    var focusRequest = 0
     @Environment(\.accessibilityReduceMotion) private var systemReduced
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride
     private var reduced: Bool { motionOverride ?? systemReduced }
@@ -135,6 +136,7 @@ struct SidekickComposer: View {
         .onChange(of: coordinator.run.isClearingChat) { _, clearing in
             if clearing { focused = false; presentation.composerFocused = false; submissionError = nil }
         }
+        .onChange(of: conversation.generation) { _, _ in submissionError = nil }
         .animation(SidekickStyle.motion(reduced), value: recovery.content?.id)
         .animation(.easeInOut(duration: 0.35), value: focused)
         .defaultFocus($focused, isPresented && !answering && !notchHasKeyboard)
@@ -146,6 +148,9 @@ struct SidekickComposer: View {
             if !visible { focused = false; presentation.composerFocused = false }
         }
         .onChange(of: conversation.replyReference) { _, value in if value != nil && isPresented { focused = true } }
+        .onChange(of: focusRequest) { _, _ in
+            if isPresented && !notchHasKeyboard && !coordinator.run.isClearingChat { focused = true }
+        }
         .onDisappear { presentation.composerFocused = false }
     }
 
@@ -153,11 +158,14 @@ struct SidekickComposer: View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(spacing: 7) {
                 Image(systemName: content.question == nil ? "arrow.clockwise" : "bubble.left.and.text.bubble.right")
-                Text(content.question == nil ? "A little guidance?" : "A quick question")
+                Text(content.upgradeOffer != nil ? "ChatGPT needs your attention" : (content.question == nil ? "A little guidance?" : "A quick question"))
                     .fontWeight(.semibold)
             }.font(.system(size: 11)).foregroundStyle(SidekickStyle.accent)
             Text(content.question?.question ?? content.error ?? "")
                 .font(.system(size: 13)).foregroundStyle(SidekickStyle.ink).lineLimit(4)
+            if content.upgradeOffer != nil {
+                SidekickUpgradeActions(recovery: recovery, content: content)
+            }
             if let question = content.question {
                 HStack(spacing: 8) {
                     ForEach(Array(question.answers.enumerated()), id: \.offset) { index, answer in

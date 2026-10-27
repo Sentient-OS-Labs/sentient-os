@@ -44,9 +44,9 @@ struct AnalysisPopover: View {
 
     // Live source selection — the SAME keys SourceSelection / DevTools use. @AppStorage so a tap toggles
     // the real selection AND the chip updates instantly. FDA is still enforced at run time (Analyze Now).
-    @AppStorage("dbg.run.downloads")      private var runDownloads = true
-    @AppStorage("dbg.run.desktop")        private var runDesktop = true
-    @AppStorage("dbg.run.documents")      private var runDocuments = true
+    @AppStorage("dbg.run.downloads")      private var runDownloads = false
+    @AppStorage("dbg.run.desktop")        private var runDesktop = false
+    @AppStorage("dbg.run.documents")      private var runDocuments = false
     @AppStorage("dbg.run.notes")          private var runNotes = false
     @AppStorage(SiYuanSource.enabledKey)  private var runSiYuan = false
     @AppStorage(AppleMailSelection.key)    private var appleMailAccounts = ""

@@ -68,6 +68,16 @@ struct SentientOSApp: App {
             }
         }
 
+        Window("Make Sentient personal", id: PersonalSetupView.windowID) {
+            PersonalSetupView()
+                .environment(appState)
+                .modifier(ComputerUseWindowGuard())
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 840, height: 760)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+
         Window("Analysis", id: ProcessingWindowView.windowID) {
             ProcessingWindowView()
                 .environment(appState)
@@ -150,12 +160,27 @@ final class SentientAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var isResolvingTermination = false
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isResolvingTermination else { return .terminateLater }
+        isResolvingTermination = true
         let navigation = MainNavigation.shared
-        guard navigation.page == .knowledge, navigation.leaveKnowledge != nil else { return .terminateNow }
         navigation.confirmLeavingKnowledge { approved in
-            // Defer the reply until AppKit has received terminateLater, even for a clean note.
-            Task { @MainActor in sender.reply(toApplicationShouldTerminate: approved) }
+            // Always reply after AppKit receives terminateLater. Only the owned permission
+            // probe is drained here; standard Quit never issues new task/analysis cancellation.
+            Task { @MainActor in
+                guard approved else {
+                    SafeAppRelaunch.shared.cancelPendingRelaunch()
+                    self.isResolvingTermination = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                await NativePermissionCheck.shared.close()
+                let mayQuit = SafeAppRelaunch.shared.approveTermination()
+                self.isResolvingTermination = false
+                sender.reply(toApplicationShouldTerminate: mayQuit)
+            }
         }
         return .terminateLater
     }
@@ -177,6 +202,9 @@ private struct NotificationRouting: ViewModifier {
             Notify.setKnowledgeSourcesHandler {
                 HomeWindowOpening.open(.settings, settingsPane: .sources)
                 NSApp.activate(ignoringOtherApps: true)
+            }
+            Notify.setLifetimeUpgradeHandler {
+                HomeWindowOpening.open()
             }
         }
     }

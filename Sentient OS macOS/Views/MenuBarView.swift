@@ -17,7 +17,11 @@ struct MenuBarView: View {
         Button("Open Sentient OS") { openHome() }
 
         Divider()
-        if appState.hasCompletedOnboarding {
+        if appState.hasCompletedOnboarding && !appState.hasCompletedPersonalSetup && !appState.processing.initialComplete {
+            Text(CodexAuth.knowledgeBaseOnly ? "Personal setup is ready" : "Sidekick is ready")
+            Button("Finish personal setup…") { openWindow(id: PersonalSetupView.windowID) }
+                .disabled(ComputerUseUpgrade.shared.isBlockingInterface)
+        } else if appState.hasCompletedOnboarding {
             Text(appState.processing.statusLine)
             Button("View analysis progress") { openWindow(id: ProcessingWindowView.windowID) }
                 .disabled(ComputerUseUpgrade.shared.isBlockingInterface)
@@ -58,6 +62,11 @@ struct MenuBarIcon: View {
                 }
                 ComputerUseUpgrade.shared.registerHomeOpener {
                     openWindow(id: SentientOSApp.homeWindowID)
+                }
+                if UserDefaults.standard.bool(forKey: AppState.onboardingKey),
+                   PersonalSetupProgress.consumeRelaunchResume() {
+                    openWindow(id: SentientOSApp.homeWindowID)
+                    openWindow(id: PersonalSetupView.windowID)
                 }
             }
     }

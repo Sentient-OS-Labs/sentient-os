@@ -57,14 +57,13 @@ command with a read-back; a quick tap instead → `.typing`, a focused text fiel
 Esc / click-away / empty ⏎ / a hotkey tap dismisses. Every press first checks, in order: a running real
 task → **the universal STOP** (one key, one task; the onboarding demo is exempt); the armed onboarding
 demo; a stuck transcription → cancel; the onboarding policy (before the home screen a press does nothing,
-or shows "finish onboarding to use Sidekick" once the film's notch beat has played); the free-plan aside
-("get ChatGPT Plus to wake Sidekick", 2 s, never opens); the first-use permission gate
+or shows "finish onboarding to use Sidekick" once the film's notch beat has played); the first-use permission gate
 (`ComputerUseGate.interceptBeforeStart`, so the notch never opens to listen when a required grant is
 missing). A 15 s watchdog bounds the transcription finalize (the speech-model download can park it), so
 the notch can never wedge; it cancels the capture and shows an honest notice.
 
 **`submit(text, mode, source)`** is the one entry point for every command: it refuses while a run is
-live, applies the onboarding and free-plan backstops (the command bar has no press), passes the
+live, applies the Home-admission backstop (the command bar has no press), passes the
 permission gate (`ComputerUseGate.intercept` holds the command and fires it on Continue), then
 `launch`: a `Command.submitted` core analytics signal, `run.start`, and `.running`.
 
@@ -97,6 +96,18 @@ Substantive tools, new provider legs and questions invalidate earlier structured
 Failed/cancelled providers and connector action-evidence checks still control the actual outcome.
 Visible final answers omit a standalone terminal STATUS protocol line. Quoted and code examples
 remain intact, and this display cleanup does not create or alter a completion claim.
+
+**Provider-plan recovery.** Free and Go users can use Sidekick until their provider declines a
+request. A Plus offer is attached to recovery only for the original ChatGPT task backend, a positively
+known Free/Go account, and an actual Codex provider usage-limit or explicit plan-denial error. Model
+reports, unknown/premium plans, other backends, connector quotas, network/permission failures and
+missing-model errors never produce the offer. The typed policy lives beside `SidekickTaskEnd`; the
+recovery presentation carries only its fixed-vocabulary result, never reparses model wording.
+
+Home and the notch share **Upgrade to Plus**, **Change AI**, **Try again** and **Stop** actions. Pricing
+opens only after a click and does not change billing. Changing AI opens the existing provider settings.
+The pending recovery and editable retry guidance survive hiding the panel while the user visits
+pricing/settings. Retry keeps the existing task-recovery path; no model or provider is changed for them.
 
 `setPhase` bumps a token that every delayed transition checks, so a stale timer can never clobber a
 newer phase.
@@ -162,8 +173,10 @@ or newer message cannot replace the preview mid-reply. Closing keeps the draft/r
 `test_sidekick_notch_reply.py` exercises native editing/Return and renders the real view in an inert
 nonactivating panel; attention and layout fixtures cover timing, coalescing and bounded reading space.
 
-`startOnboardingDemo()` performs the film step's scripted shopping story through the real cleaner with
-nothing real underneath (no codex, no screenshots, no scoreboard).
+`startOnboardingDemo()` starts the presentation-only restaurant story. Known, versioned webpage
+progress beats drive `advanceOnboardingDemo`, including the real Remembering bloom for Weekend plan.
+There is no provider, vault read, screenshot, booking, send, conversation record or first-task milestone.
+Stopping or leaving the film ends the demo immediately; backward and late beats cannot restart it.
 
 ## The prompt (`CommandRunModel.commandPrompt`)
 

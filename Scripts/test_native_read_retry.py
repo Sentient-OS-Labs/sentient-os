@@ -171,6 +171,17 @@ nonisolated enum Permissions {
     }
 }
 '''
+SUPPORT += r'''
+@MainActor final class NativePermissionCheck {
+    static let shared = NativePermissionCheck()
+    var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
+    var invalidations = 0
+    func refresh() {}
+    func invalidate(failure: NativeComputerUseFailure? = nil) {
+        invalidations += 1; snapshot = NativePermissionReadiness.afterFailure(failure)
+    }
+}
+'''
 TESTS = r'''
 import Foundation
 import AppKit
@@ -531,6 +542,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-read-retry-") as direct
         str(APP / "Diagnostics/ComputerUseDiagnosticConsent.swift"),
         str(APP / "Diagnostics/ComputerUseDiagnosticPolicy.swift"),
         str(APP / "Driver/OpenAIComputerUseProbe.swift"),
+        str(APP / "Driver/NativePermissionReadiness.swift"),
         str(APP / "Driver/NativeAppStateRetry.swift"),
         str(APP / "Driver/NativeComputerUseServer.swift"),
         str(APP / "Cloud/ComputerUseStream.swift"), "-o", str(binary),

@@ -225,6 +225,7 @@ final class ClaudeSetup {
         guard installed else { loginStatusLine = "✗ Install Claude Code first"; return }
         if !force, loggedIn { loginStatusLine = "✓ Already signed in"; return }
         cancelLogin()
+        ClaudeAuth.beginAccountChange()
         let generation = loginGeneration
         do {
             loginProcess = try ClaudeCLI.startLogin(onURL: { [weak self] url in
