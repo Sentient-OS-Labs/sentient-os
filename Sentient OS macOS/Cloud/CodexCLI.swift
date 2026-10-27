@@ -47,18 +47,21 @@ actor CodexCLI {
         case xhigh
     }
 
-    /// The model id passed to `codex exec -m`. Astra powers the upper computer-use tiers;
-    /// Sol handles the fastest tier and background work, Terra the free/go fallback, Luna reads.
+    /// The model id passed to `codex exec -m`. Computer-use tiers are defined in
+    /// ComputerUseSpeed; Sol handles background work, Terra the free/go fallback, Luna reads.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
-        case gpt6astra = "gpt-6-astra"  // computer use: Medium / Smarter
+        case gpt61terra = "gpt-6.1-terra" // computer use: Faster
+        case gpt61sol = "gpt-6.1-sol"     // computer use: Medium
+        case gpt6astra = "gpt-6-astra"  // computer use: Smarter
         case gpt6sol = "gpt-6-sol"    // knowledge-base work + everything else (paid plans)
         case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
         case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing
     }
 
-    /// The ONE model-resolution choke point: every run's `-m` value comes from here.
+    /// Model resolution for structured runs and custom-provider computer use. ChatGPT computer
+    /// use sends the user's selected tier directly, without a plan-based substitution.
     ///  - Custom backend (Settings → Frontier Model Choice): the user's endpoint model rides
     ///    EVERY call — the tier enums collapse to one model, and the caller's effort is
     ///    replaced by the pane's ONE per-endpoint reasoning level (per-call effort tuning is
@@ -755,7 +758,12 @@ actor CodexCLI {
         var nativeLease: CodexRuntime.FileLock?
         defer { nativeLease?.unlock() }
         let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
-        let (modelID, effortArg) = backend == .claude ? ClaudeCLI.agentTuned() : Self.backendTuned(model: model, effort: effort)
+        let (modelID, effortArg): (String, String)
+        switch backend {
+        case .claude: (modelID, effortArg) = ClaudeCLI.agentTuned()
+        case .chatgpt: (modelID, effortArg) = (model.rawValue, effort.rawValue)
+        case .custom: (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
+        }
         var bridge: ClaudeSubscriptionBridge?
         do {
             if prompt.utf8.count > Self.promptByteCap { throw CLIError.inputTooLarge(chars: prompt.utf8.count) }

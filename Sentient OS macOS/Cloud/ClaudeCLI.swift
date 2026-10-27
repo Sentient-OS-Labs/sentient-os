@@ -55,7 +55,7 @@ actor ClaudeCLI {
     static func tuned(for inv: CodexCLI.Invocation) -> (modelID: String, effortArg: String) {
         var model: Model = inv.claudeModel ?? {
             switch inv.model {
-            case .gpt6astra, .gpt6sol, .gpt56terra: return .sonnet
+            case .gpt61terra, .gpt61sol, .gpt6astra, .gpt6sol, .gpt56terra: return .sonnet
             case .gpt6luna: return .haiku
             }
         }()
@@ -63,11 +63,9 @@ actor ClaudeCLI {
         return (model.rawValue, inv.effort.rawValue)
     }
 
-    /// The computer-use pair: the Speed slider's Claude mapping, plus the same Pro downshift.
+    /// The computer-use pair selected by the Speed slider.
     static func agentTuned() -> (modelID: String, effortArg: String) {
-        let (m, effort) = ComputerUseSpeed.current.claudeModelAndEffort
-        var model = m
-        if model == .opus, ClaudeAuth.isPro { model = .sonnet }
+        let (model, effort) = ComputerUseSpeed.current.claudeModelAndEffort
         return (model.rawValue, effort.rawValue)
     }
 
