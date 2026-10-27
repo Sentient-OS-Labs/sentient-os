@@ -1,8 +1,19 @@
 // Read-only delivery of the exact archives approved by the signed macOS app.
 // No account tokens, uploads, directory listings or inference requests enter this service.
 import approved from '../../Sentient OS macOS/Cloud/BundledCodexRelease.json' with { type: 'json' };
+import previous from '../previous-artifacts.json' with { type: 'json' };
 
-const artifacts = new Map([approved.cli, approved.helper].map(a => [`/releases/${a.filename}`, a]));
+// Old signed app builds keep requesting their pinned URLs, including for repair and
+// resumed downloads. Retain those exact bytes when the current release advances.
+const artifacts = new Map();
+for (const artifact of [...previous, approved.cli, approved.helper]) {
+  const path = `/releases/${artifact.filename}`;
+  const existing = artifacts.get(path);
+  if (existing && (existing.sha256 !== artifact.sha256 || existing.bytes !== artifact.bytes)) {
+    throw new Error(`Immutable release filename reused: ${artifact.filename}`);
+  }
+  artifacts.set(path, artifact);
+}
 export const release = approved;
 
 export function byteRange(value, size) {

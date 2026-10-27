@@ -1,34 +1,34 @@
 {
   "target": "aarch64-apple-darwin",
-  "helperBuild": 1001365,
+  "helperBuild": 1001631,
   "cli": {
-    "version": "0.160.0",
-    "filename": "codex-package-0.160.0-aarch64-apple-darwin.tar.gz",
-    "bytes": 129976298,
-    "sha256": "007df41b607dbbc8d204b9746ce7fed2d4ce6c813f44c32ceee54175ca796525",
+    "version": "0.164.0",
+    "filename": "codex-package-0.164.0-aarch64-apple-darwin.tar.gz",
+    "bytes": 136007998,
+    "sha256": "dd99e9092270691a67bdde7be04ac283dea9da8e86cbde356c2cc851a79205fa",
     "files": [
       {
         "path": "bin/codex",
-        "bytes": 241555024,
-        "sha256": "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+        "bytes": 260293200,
+        "sha256": "d8990e3ee7acfbc26f91265b12a1a83f0fee40d0e0f8f1f40a37d4ec21f499cf",
         "executable": true
       },
       {
         "path": "bin/codex-code-mode-host",
-        "bytes": 65391216,
-        "sha256": "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a",
+        "bytes": 68543072,
+        "sha256": "416721e33af8822041dc650793512b3e58d43e0be4f3a5c6187eb4dfaad3148a",
         "executable": true
       },
       {
         "path": "codex-package.json",
         "bytes": 200,
-        "sha256": "404c4c935bf9b7a57fc02b6f0d09ba6b7bbbf15cf14286fc017de2a6c01cab47",
+        "sha256": "c77eb3abe21da837655153670c53ccbb89c26995ba3ccad2b72204b4670e1ad8",
         "executable": false
       },
       {
         "path": "codex-path/rg",
         "bytes": 4030432,
-        "sha256": "7c7d5b09c3a57de864500c65dc2e9c4d2a5e96a3fc7b7d5318480c19887a739b",
+        "sha256": "fd819df955fce19b2ee89c89c94e19a16127481de1ab0e5099add82cdfdc96a0",
         "executable": true
       },
       {
@@ -39,116 +39,116 @@
       },
       {
         "path": "codex-resources/voice/bin/codex-voice-host",
-        "bytes": 9900112,
-        "sha256": "e408413b79d76e518966046ce1d7758523c606844269fe4dd56446bed80c1062",
+        "bytes": 9992368,
+        "sha256": "ecfcf05fe021c5ad2e1c1e3975cf884eecbb90ad1a32e25fa7f216d6f178e437",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libffi.8.dylib",
         "bytes": 136768,
-        "sha256": "3dfe23b471423eb61bf38785c21ddb7054c5be1f87f87fbed7aa8a8c91e3bde0",
+        "sha256": "76a199d09fc77a42b59317185f1e42b1ec0f5f288e8ff367d68a893318d5f036",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgio-2.0.0.dylib",
-        "bytes": 1866272,
-        "sha256": "b0c1b06de1deef21fde623c38a604cf413b1d607dda85644e296fb6d97067c39",
+        "bytes": 1902992,
+        "sha256": "e48f50ccb00d78ec1f8b422e0fff69ec1751ed34a147662a70bd638ed617fb1a",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libglib-2.0.0.dylib",
-        "bytes": 1310992,
-        "sha256": "65a0785497ed134d79284c08118d8bba560f7f60e20682debe4ee12e848a5f8c",
+        "bytes": 1353984,
+        "sha256": "47d1519d17e11f220d79d29a4926008433286a98ef92c6503902917d370f3bbd",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgmodule-2.0.0.dylib",
-        "bytes": 68912,
-        "sha256": "3b4b70cdd569c088c28d6618b330d1acdc0fe456cf34267525c594f89e5dae84",
+        "bytes": 68720,
+        "sha256": "7b63fe175daa2aaafe131cae60851c5a8c71b209617ced0d2d4f273b73c8860b",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgobject-2.0.0.dylib",
-        "bytes": 403088,
-        "sha256": "ae78667a1a328528169ade0b18aa4ef547ce6b5f70db891781db8dab95ac46a1",
+        "bytes": 416896,
+        "sha256": "444d41be63bb6593914ad2e73a127cc4dc8ad4907bd5c1c5e6e9657a02b4ed38",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstapp-1.0.0.dylib",
-        "bytes": 152608,
-        "sha256": "04d8b371136a375f1efe0af61d18a7605a8556b80599b2cfa0c91a5a235a43e4",
+        "bytes": 151984,
+        "sha256": "1fb42be568a30d07d4f54cbfdb9f64b3b906b68f5e7e536edd159ad7a1ed2541",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstaudio-1.0.0.dylib",
-        "bytes": 530400,
-        "sha256": "3fa362d9b53ef65993108a7fdc88471086e95012f5de4cb35ab37991490cfb60",
+        "bytes": 560336,
+        "sha256": "d4a48c604ac793f6dbc3afdc68c61d1c1144b9c35720f440669cc7be39758792",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstbase-1.0.0.dylib",
-        "bytes": 505968,
-        "sha256": "437beaf6d2f2b1204a58d987d0698fd8c1c796a6c341f25c8a7a797b0e045540",
+        "bytes": 520240,
+        "sha256": "50715fac0c1ee1168a58b8191867977001831a8cd1b2ffc4d40064e92d7ec357",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstnet-1.0.0.dylib",
-        "bytes": 117008,
-        "sha256": "5173345f4b6ab9fa75ca731c8fe94ae187d6ac395eb213844312a04218924e3e",
+        "bytes": 115920,
+        "sha256": "efb57393d18a236202b3e2a4f4326f0761c4e9da678d1fb2cefb62a953efd5db",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstpbutils-1.0.0.dylib",
-        "bytes": 309856,
-        "sha256": "e3f9bb0e56280e1572267f2cf482cd26b5341cecae4cc279e2d1dd2b6d80920c",
+        "bytes": 323552,
+        "sha256": "adb620bdc2190a157e2e5f765a703640a73c498fb081d83629acc76f840d2011",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstreamer-1.0.0.dylib",
-        "bytes": 1304704,
-        "sha256": "0e6826b74f874848e8a0e37fdcb7f5061abc711edfb802587771c5dc1c399f1b",
+        "bytes": 1341328,
+        "sha256": "a1b30c536ced0265b3a8da01c6e79366c4f81f84367497ee03fd09a9efb711ad",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstrtp-1.0.0.dylib",
-        "bytes": 205696,
-        "sha256": "fd50798327e0f20605c02ff133a3ca4583ebb8cf13f082205360da8b07389209",
+        "bytes": 222176,
+        "sha256": "04e3e4ae32e9f31112de4e0f0be4a7562aef7b9a8447e8c2ac0c40f2f4833d27",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgsttag-1.0.0.dylib",
-        "bytes": 283696,
-        "sha256": "3b40bd0003b56507d701d3c4111ee5b8c58be3a2dcaf6da9e0a30498611222bc",
+        "bytes": 283280,
+        "sha256": "c451148da91f64d149d9993e98f7ca8a1a338ed0545fa80a559201aede82ca3d",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libgstvideo-1.0.0.dylib",
-        "bytes": 903664,
-        "sha256": "ae8adbb687f26decf3c685265e595f1649769e49202e38b6854f1debdc06d363",
+        "bytes": 932496,
+        "sha256": "597ee1f7cd55013b2d42d8d049d09fdffe64d85ee5e0907596fe1752d0f08122",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libintl.8.dylib",
-        "bytes": 50112,
-        "sha256": "d9ee5a31754b382365628fad50df33b6111ad84e133d6f141e73822611c9f727",
+        "bytes": 50080,
+        "sha256": "cdbc95ae3e8350047bc8b7510761b4a70285afe2a6924aa912109f93a9a12629",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libopus.0.dylib",
         "bytes": 504080,
-        "sha256": "c51f552406b80e7026659f77902488eea4ddad101af84f244cfe4912e90bccb2",
+        "sha256": "951c20cc9df5e242bd386e1145dbc755d61fc23619848166c63c1ec1e03a91b5",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libpcre2-8.0.dylib",
         "bytes": 456816,
-        "sha256": "ce76aa5a13b32e8d8d8ddfd723f519e025e028b53250f3e11a90df39ec473e53",
+        "sha256": "944fa068df87698d23452b6a590de741012897b54419cd785bcbd2c1bf3d5409",
         "executable": true
       },
       {
         "path": "codex-resources/voice/lib/libz.1.dylib",
         "bytes": 123312,
-        "sha256": "d80d2b42ec19b265c361d5bba2070c29c38a6ef389ffecd87822e248fc700993",
+        "sha256": "73a57393eaea45753dcc60a130122dfdd10b981be65e98b216af1d0a7eb652a4",
         "executable": true
       },
       {
@@ -196,55 +196,55 @@
       {
         "path": "codex-resources/voice/manifest.json",
         "bytes": 4637,
-        "sha256": "dcf75f68cd3d1e94e557f80998dd1a707283dc2a9799c9c14c5d46aa6e158909",
+        "sha256": "d6663e9c89b260f2936501e5822495081fb66c9eb629386a9fed0aef17b977fb",
         "executable": false
       },
       {
         "path": "codex-resources/voice/plugins/libgstapp.dylib",
         "bytes": 49872,
-        "sha256": "86a4f96e8ecc4802777eec36391105226976dce1a80ce68e561989aa83314e9d",
+        "sha256": "681e43dbe55976e63ee4931e532e45be48215ff7bcacf4b1f50cffae4c9954b4",
         "executable": true
       },
       {
         "path": "codex-resources/voice/plugins/libgstaudioconvert.dylib",
-        "bytes": 93824,
-        "sha256": "4c85c9ea1568cf778f8f1365979cc8383376bb2a4630768de24eb66a1b254c52",
+        "bytes": 93344,
+        "sha256": "ac1060be8fab2d9859fd06f960463ffdefc0b4a0e0e5a4ad288704d9fc447816",
         "executable": true
       },
       {
         "path": "codex-resources/voice/plugins/libgstaudioresample.dylib",
-        "bytes": 91840,
-        "sha256": "757a61f900ed50c0a51ec9928c4ca0b27798ff6b0a3a235329d240faedd438c1",
+        "bytes": 91696,
+        "sha256": "af908e7efbb6bc41ccd0b1f79285321436a09ea856b63dcea361f577b8efaf5f",
         "executable": true
       },
       {
         "path": "codex-resources/voice/plugins/libgstcoreelements.dylib",
-        "bytes": 446608,
-        "sha256": "a2e96bac9f9a88712a94320d9017077346f212e77c4fc4b20f02f23c3ee6ff49",
+        "bytes": 458768,
+        "sha256": "9c95059f3fcc08ea94f11aa6dfdd9feaa839e1d7e324413b36f58e57c2689be0",
         "executable": true
       },
       {
         "path": "codex-resources/voice/plugins/libgstopus.dylib",
-        "bytes": 131680,
-        "sha256": "42eac3b57ef0ec6de84c9aed32453b07482294738345062f4699ec9e0454c867",
+        "bytes": 131120,
+        "sha256": "0bbd4c12369394322edbfec44bcc6e6b3c6833699b98f40bbfa614dad11e66a7",
         "executable": true
       },
       {
         "path": "codex-resources/voice/plugins/libgstrtp.dylib",
-        "bytes": 673888,
-        "sha256": "591b36944f84d8740b2813ff7bee74b15fdd364b5ac3351bd40c91a498d7f54b",
+        "bytes": 674896,
+        "sha256": "79a6612d349973ee87cd33e278db37d85ca7355d1dc8b8248c3c7fd591f0fbd7",
         "executable": true
       },
       {
         "path": "codex-resources/voice/plugins/libgstrtpmanager.dylib",
-        "bytes": 527568,
-        "sha256": "5109cff21697ce04c93ea822577aac3bcb0fb659a53ea32f332f10ca44c0496e",
+        "bytes": 538368,
+        "sha256": "828a6ab627e1cb4ea4a87ba1c9b8d2a5872d8d3990672df8523e4d946b69cf8a",
         "executable": true
       },
       {
         "path": "codex-resources/voice/runtime.json",
         "bytes": 14915,
-        "sha256": "2a2e60d93e82a335039dc5a08a26963ca853f2238e927c2498d76dc2466f7d74",
+        "sha256": "8ed3dddbd77cc253897240234a756823d94e936921424eb098c9e1b549da9d95",
         "executable": true
       },
       {
@@ -252,31 +252,25 @@
         "bytes": 4911,
         "sha256": "e2f6b124f6277e7c3c4f5c7cc8830c66190f671ad65e972bb2cc9507dbfcb937",
         "executable": false
-      },
-      {
-        "path": "codex-resources/zsh/bin/zsh",
-        "bytes": 754208,
-        "sha256": "d715e06edcf1661edb2e7767d65fbd1b44af505edfb217281b701f0a6ae93b15",
-        "executable": true
       }
     ]
   },
   "helper": {
-    "version": "26.929.1001365",
-    "filename": "computer-use-26.929.1001365-arm64.zip",
-    "bytes": 35881436,
-    "sha256": "553b6fa2f54074ea5f44a85347d4ee7438e7c5ee06e01a21b5405c430cab9195",
+    "version": "26.1021.1001631",
+    "filename": "computer-use-26.1021.1001631-arm64.zip",
+    "bytes": 36413273,
+    "sha256": "fa3a070819c374fa4dd32c8d9811e6fc73a0057723e5792ac99f72c53a1e0e92",
     "files": [
       {
         "path": "Contents/Info.plist",
-        "bytes": 2474,
-        "sha256": "95039f1a805fa7b87966c713fe4ae762c4098b9bc07813d5036ea76253de8c46",
+        "bytes": 2475,
+        "sha256": "0e425f0c98afa3da6672115cfae418e8f424a97b2d8a8eb61489318ba243f666",
         "executable": false
       },
       {
         "path": "Contents/MacOS/SkyComputerUseService",
-        "bytes": 24509440,
-        "sha256": "fa5b5d685f550af82902cff1a345db558a1da3eb526cf78cd4659fa0dcde01a5",
+        "bytes": 25100528,
+        "sha256": "47ad8bdd901e4e55de649c319e8590eda3308f5f69c11d75486e13bd90bedeb7",
         "executable": true
       },
       {
@@ -288,7 +282,7 @@
       {
         "path": "Contents/Resources/Assets.car",
         "bytes": 3281976,
-        "sha256": "1355abc14dc95e88073a8fc75f686590c14bd51ea263b7a3e45508b511b6e2a7",
+        "sha256": "98eaebd9cf4a25012854aabb920e750cb2642cbb43ff4f2f832c9465895addf1",
         "executable": false
       },
       {
@@ -305,8 +299,8 @@
       },
       {
         "path": "Contents/Resources/Package_Appshot.bundle/Contents/Info.plist",
-        "bytes": 1250,
-        "sha256": "ecf4ee720319f71a810ab73441530e842b1ac20094a6075a191b3e375e01bba5",
+        "bytes": 1251,
+        "sha256": "721f2382961388b7ec5e8750574ba47dabe3c2c83ac0642e6bce221c16751136",
         "executable": false
       },
       {
@@ -323,8 +317,8 @@
       },
       {
         "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Info.plist",
-        "bytes": 1258,
-        "sha256": "353fec505227884bd9b3aa9cfa03626f5b4e28d37cff3d66dea5dd010cfe4929",
+        "bytes": 1259,
+        "sha256": "8e2bf6da3e78a7a0270a9efb348c4561b2b60a672279b5f36d05e169aafeef78",
         "executable": false
       },
       {
@@ -665,8 +659,8 @@
       },
       {
         "path": "Contents/Resources/Package_SlimCore.bundle/Contents/Info.plist",
-        "bytes": 1252,
-        "sha256": "7e1ea00414a67f7f6b37b61dc21c26a99e4b3a572351f5ca5e9a61d1bb5513af",
+        "bytes": 1253,
+        "sha256": "95ef363eaccbea00f1303ed844c2af6c17da914b98b8b81b78e0e016f66f365e",
         "executable": false
       },
       {
@@ -683,8 +677,8 @@
       },
       {
         "path": "Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Info.plist",
-        "bytes": 1276,
-        "sha256": "793cfe86af43fc0e119fc554172543d4cbf0551c67254205f50762ab7875269a",
+        "bytes": 1277,
+        "sha256": "e9dfae3dca7b77bcf9e5d2121f1a011f7e80413811046123bb7bb0b9fe5c7696",
         "executable": false
       },
       {
@@ -701,14 +695,14 @@
       },
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Info.plist",
-        "bytes": 1615,
-        "sha256": "9c5d6af89a53af446efea8d7377b0f9634e6515b76ab1aaedcd983085e0eb6d8",
+        "bytes": 1616,
+        "sha256": "0051ac1419fa9e6095b4b0a29215f269c8ef5ca2f6ecd150948f50b34ddd3afe",
         "executable": false
       },
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/MacOS/CUALockScreenGuardian",
-        "bytes": 24156016,
-        "sha256": "ed36d499f1d39c65a5846ddf9eb0ab564e2eacceb68022e9674a6233f96b9247",
+        "bytes": 24730768,
+        "sha256": "0bba9155e5dee025979ac95ca3df1373478bb5b3f2f7a79106e2ed86e8924208",
         "executable": true
       },
       {
@@ -720,7 +714,7 @@
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Assets.car",
         "bytes": 3011144,
-        "sha256": "0247a4c221eceb45d80c996e5b796b78221090b7d072eaaf94d329f1d67359af",
+        "sha256": "a9f7878b42cf88195d42c5840d0b1a84d23a6157d8bf3c8a44db466ff2a5f10f",
         "executable": false
       },
       {
@@ -737,8 +731,8 @@
       },
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_Appshot.bundle/Contents/Info.plist",
-        "bytes": 1250,
-        "sha256": "ecf4ee720319f71a810ab73441530e842b1ac20094a6075a191b3e375e01bba5",
+        "bytes": 1251,
+        "sha256": "721f2382961388b7ec5e8750574ba47dabe3c2c83ac0642e6bce221c16751136",
         "executable": false
       },
       {
@@ -755,8 +749,8 @@
       },
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Info.plist",
-        "bytes": 1258,
-        "sha256": "353fec505227884bd9b3aa9cfa03626f5b4e28d37cff3d66dea5dd010cfe4929",
+        "bytes": 1259,
+        "sha256": "8e2bf6da3e78a7a0270a9efb348c4561b2b60a672279b5f36d05e169aafeef78",
         "executable": false
       },
       {
@@ -1097,8 +1091,8 @@
       },
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_SlimCore.bundle/Contents/Info.plist",
-        "bytes": 1252,
-        "sha256": "7e1ea00414a67f7f6b37b61dc21c26a99e4b3a572351f5ca5e9a61d1bb5513af",
+        "bytes": 1253,
+        "sha256": "95ef363eaccbea00f1303ed844c2af6c17da914b98b8b81b78e0e016f66f365e",
         "executable": false
       },
       {
@@ -1115,8 +1109,8 @@
       },
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Info.plist",
-        "bytes": 1276,
-        "sha256": "793cfe86af43fc0e119fc554172543d4cbf0551c67254205f50762ab7875269a",
+        "bytes": 1277,
+        "sha256": "e9dfae3dca7b77bcf9e5d2121f1a011f7e80413811046123bb7bb0b9fe5c7696",
         "executable": false
       },
       {
@@ -1134,19 +1128,19 @@
       {
         "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/_CodeSignature/CodeResources",
         "bytes": 26072,
-        "sha256": "54a2c01e95480365f052ffc28717b522e39681432caca7a7e29cb990d748e0a0",
+        "sha256": "6b68263a68aed3be5690af25afccd4e6a4ef41fb424d7100f365020f771295ec",
         "executable": false
       },
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Info.plist",
-        "bytes": 1667,
-        "sha256": "51e4b7b4c4e226496d05fd9c44a5a9d6125bc4a0b884292e226aafe241906bc3",
+        "bytes": 1668,
+        "sha256": "739ac73e192106d34ff143354f36a130cd92e48bef909adaf7a0359c0c4bdec2",
         "executable": false
       },
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/MacOS/Codex Computer Use Installer",
         "bytes": 90480,
-        "sha256": "a58d398138dd7da4548b1f5ca4254f0a91a5d10873aa43bd4b424c26c3653f36",
+        "sha256": "aa1dc72db69b0643ab980ef2b5ab6c998444886c4fa896d5fa9bf4688618a5bb",
         "executable": true
       },
       {
@@ -1158,7 +1152,7 @@
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/Assets.car",
         "bytes": 3011144,
-        "sha256": "35ee157c7832438cda66af3f64963caaedaf03d7cb3d7790a75eeb6ea1de9021",
+        "sha256": "e5bcae09e3e7aa06095e3b233354c27c4dd6d7f6ffbfd7e1a93d68fbf690448a",
         "executable": false
       },
       {
@@ -1169,14 +1163,14 @@
       },
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPlugin.bundle/Contents/Info.plist",
-        "bytes": 1488,
-        "sha256": "cac329ff291c2bc42210339acd8a73e134c4556deea8ce4d94c16466e63299fb",
+        "bytes": 1489,
+        "sha256": "19d0e2cc728d7dd06e7d350fce85b6355b214b01432d5faeb360ea4103d5ba1b",
         "executable": false
       },
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPlugin.bundle/Contents/MacOS/CodexComputerUseAuthorizationPlugin",
         "bytes": 67872,
-        "sha256": "659f8103fb992f2b8b7e455f3db56605b0aefdf22c0cc722a1343612b6609241",
+        "sha256": "7ef6f63d8642bb6ba2d4a8ea074167eb0af82bca5959f5d32e15d6bee9f18bca",
         "executable": true
       },
       {
@@ -1188,25 +1182,25 @@
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPluginInstallerTool",
         "bytes": 109776,
-        "sha256": "c076c8fafee77dfdcf144dcca864e54ca769d757f41acf304c6a70ae5743c2db",
+        "sha256": "ac3b694f54cac91dc205afba63231917f36346b34c1c955f109b93bff7e5fcbc",
         "executable": true
       },
       {
         "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/_CodeSignature/CodeResources",
         "bytes": 4068,
-        "sha256": "1772e3f2982eeb9eadbb34f22549e7bad2329ab1f4a378259425156aa44c5e3b",
+        "sha256": "e1690d29797b67dc545c05bf866ab1c5a4d5bd5f9e7502403085ad488f6e5fd0",
         "executable": false
       },
       {
         "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Info.plist",
-        "bytes": 1492,
-        "sha256": "520dc5262c07303f405e1347067b2c8114fa081ce6cf299139969e1eaa62ef60",
+        "bytes": 1493,
+        "sha256": "dbc34cec17bae9818716f790bbb255370615c137ffd13b13bbf58acc8d1246e1",
         "executable": false
       },
       {
         "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
-        "bytes": 15128240,
-        "sha256": "1092710656ed437747359ffa32a87447220055f6d11f2a9c3b2f7810f1841f4c",
+        "bytes": 15684960,
+        "sha256": "5ea13da3b4854e36b8c2a110d4c66175e06eb3cb7037433369b6c6b4bd683703",
         "executable": true
       },
       {
@@ -1229,8 +1223,8 @@
       },
       {
         "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Info.plist",
-        "bytes": 1276,
-        "sha256": "793cfe86af43fc0e119fc554172543d4cbf0551c67254205f50762ab7875269a",
+        "bytes": 1277,
+        "sha256": "e9dfae3dca7b77bcf9e5d2121f1a011f7e80413811046123bb7bb0b9fe5c7696",
         "executable": false
       },
       {
@@ -1248,7 +1242,7 @@
       {
         "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/_CodeSignature/CodeResources",
         "bytes": 3903,
-        "sha256": "4eb059d111a8ab23f1412d7b64aab7dd3fadf29c3dab0eeeb709af33554796e3",
+        "sha256": "6aedf6036cc17ddbb20f0f2832f26eba8c97f3e82f38acb7f1237d842ed1ebd4",
         "executable": false
       },
       {
@@ -1260,7 +1254,7 @@
       {
         "path": "Contents/_CodeSignature/CodeResources",
         "bytes": 48547,
-        "sha256": "0214c1996c145c4816ca03579723f106680ed99cd79562ad7532409142fc1c90",
+        "sha256": "a38553cbe896e2c0dec4d31aee33880ebcbd9a7b0f80d3eec2b2503894379b7c",
         "executable": false
       },
       {
