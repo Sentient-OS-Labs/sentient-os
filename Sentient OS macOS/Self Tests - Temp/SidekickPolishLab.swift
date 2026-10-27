@@ -614,6 +614,56 @@ import WebKit
                 && placement.minY + 8 == button.maxY + 12
         }
 
+        // Wrong-side feedback uses actual local NSEvents in this owned window.
+        // The events never enter the global keyboard stream or any other application.
+        func hintProbe(_ view: NSView) -> OnboardingWrongCommandMonitor.Probe? {
+            if let found = view as? OnboardingWrongCommandMonitor.Probe { return found }
+            return view.subviews.lazy.compactMap { hintProbe($0) }.first
+        }
+        func modifier(_ down: Bool) throws {
+            let flags = down ? NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.command.rawValue
+                | UInt(ShortcutKey.leftCommand.deviceBit)) : []
+            guard let event = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+                keyCode: ShortcutKey.leftCommand.keyCode) else { throw Failure.accessibility }
+            NSApp.postEvent(event, atStart: false)
+        }
+        func leftCommandTap() async throws {
+            try modifier(true); try await settle(45); try modifier(false); try await settle(45)
+        }
+        guard let sidekickHint = hintProbe(host) else { throw Failure.unavailable }
+        try await leftCommandTap()
+        checks["wrong_command_lights_sidekick_instruction"] = sidekickHint.hint.isActive
+            && sidekickHint.hint.pulseCount == 1 && coordinator.onboardingDemoArmed && !coordinator.run.isRunning
+        try await settle(350)
+        captures.append(try await capture(host, name: "shortcut-sidekick-glow", directory: directory))
+        try await settle(900)
+        checks["sidekick_correction_expires"] = !sidekickHint.hint.isActive
+        let beforeChord = sidekickHint.hint.pulseCount
+        try modifier(true); try await settle(30)
+        guard let chord = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 8) else { throw Failure.accessibility }
+        NSApp.postEvent(chord, atStart: false); try await settle(30); try modifier(false); try await settle(80)
+        checks["modified_key_does_not_flash_correction"] = sidekickHint.hint.pulseCount == beforeChord
+        ShortcutPreferences.setRecording(true)
+        try await leftCommandTap()
+        checks["recording_does_not_flash_correction"] = sidekickHint.hint.pulseCount == beforeChord
+        ShortcutPreferences.setRecording(false)
+        try await leftCommandTap()
+        let beforeFocusChange = sidekickHint.hint.pulseCount
+        try modifier(true); try await settle(30)
+        let other = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 120, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        other.title = "Owned focus check"
+        other.makeKeyAndOrderFront(nil); try await settle(80)
+        checks["focus_loss_clears_correction"] = !sidekickHint.hint.isActive
+        try modifier(false); try await settle(50)
+        checks["another_window_cannot_trigger_correction"] = sidekickHint.hint.pulseCount == beforeFocusChange
+        other.close(); try await reveal()
+
         // Exercise the keyboard fallback in the same native film, including compact layout.
         defaults.set(false, forKey: NotchPreferences.clickEnabledKey)
         NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
@@ -683,6 +733,68 @@ import WebKit
         coordinator.run.advanceOnboardingDemo(.remember)
         coordinator.disarmOnboardingNotchDemo()
         checks["leaving_film_cancels_demo_and_memory"] = !coordinator.run.isRunning && coordinator.run.remembering == nil
+        checks["sidekick_hint_monitor_detaches"] = !sidekickHint.isMonitoring && !sidekickHint.hint.acceptsInput
+
+        func waitButton(_ label: String) async throws -> Element {
+            for _ in 0..<100 {
+                if let button = elements(host, maximumDepth: 80).first(where: {
+                    $0.label == label && $0.role == NSAccessibility.Role.button.rawValue && $0.frame.width > 0
+                }) { return button }
+                _ = await activateOwnAccessibility()
+                try await settle(80)
+            }
+            throw Failure.accessibility
+        }
+        func click(_ label: String) async throws {
+            let button = try await waitButton(label)
+            try postClick(window: window, screenPoint: CGPoint(x: button.frame.midX, y: button.frame.midY))
+            try await settle(100)
+        }
+        window.setContentSize(CGSize(width: 1180, height: 880)); window.center()
+        try await click("Continue")
+        // Both real Double Tap samples use the same correction. Wrong taps cannot
+        // draft or advance either sample; ordinary clicks still complete the lesson.
+        for (index, name) in ["shortcut-double-tap-email-glow", "shortcut-double-tap-messages-glow"].enumerated() {
+            _ = try await waitButton("right Command key")
+            var currentHint: OnboardingWrongCommandMonitor.Probe?
+            for _ in 0..<60 {
+                if let found = hintProbe(host), found.isMonitoring, found.hint.acceptsInput { currentHint = found; break }
+                try await settle(60)
+            }
+            guard let currentHint else {
+                func logHints(_ view: NSView) {
+                    if let probe = view as? OnboardingWrongCommandMonitor.Probe {
+                        Log("Hint probe: monitoring=\(probe.isMonitoring), accepts=\(probe.hint.acceptsInput), active=\(probe.hint.isActive), window=\(String(describing: probe.window?.title))")
+                    }
+                    view.subviews.forEach(logHints)
+                }
+                logHints(host)
+                Log("Double Tap hint AX: \(elements(host, maximumDepth: 80).map(\.label))")
+                _ = try? await capture(host, name: "shortcut-hint-failure", directory: directory)
+                throw Failure.unavailable
+            }
+            let before = currentHint.hint.pulseCount
+            try await leftCommandTap(); try await leftCommandTap()
+            checks["wrong_double_tap_only_hints_\(index)"] = currentHint.hint.isActive
+                && currentHint.hint.pulseCount == before + 1
+            try await settle(280)
+            captures.append(try await capture(host, name: name, directory: directory))
+            try await settle(900)
+            checks["double_tap_hint_expires_\(index)"] = !currentHint.hint.isActive
+            let button = try await waitButton("right Command key")
+            let point = CGPoint(x: button.frame.midX, y: button.frame.midY)
+            try postClick(window: window, screenPoint: point)
+            try await settle(80)
+            try postClick(window: window, screenPoint: point)
+            try await settle(120)
+            checks["correction_stops_during_drafting_\(index)"] = !currentHint.isMonitoring
+            let count = currentHint.hint.pulseCount
+            try await leftCommandTap()
+            checks["drafting_ignores_wrong_key_\(index)"] = currentHint.hint.pulseCount == count
+            if index == 0 { try await click("Next: iMessage demo") }
+        }
+        _ = try await waitButton("Continue")
+        checks["double_tap_completes_after_correct_input"] = true
         completed = true
         return checks
     }

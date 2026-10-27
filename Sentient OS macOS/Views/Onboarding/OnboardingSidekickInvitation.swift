@@ -10,22 +10,30 @@ struct OnboardingSidekickInvitation: View {
     @State private var pointsToNotch = OnboardingNotchPointer.hasPhysicalTarget
     @State private var horizontalOffset: CGFloat = 0
     @State private var topInset: CGFloat = 12
+    @State var shortcutHint = OnboardingShortcutHint()
 
     private var key: ShortcutKey { ShortcutKey(rawValue: shortcut) ?? .rightCommand }
+    // A mistaken key press expresses a preference for the keyboard door. Keep
+    // that instruction visible afterward, while the color itself lasts one second.
+    private var showsKeyboard: Bool { !pointsToNotch || shortcutHint.pulseCount > 0 }
 
     var body: some View {
         VStack(spacing: 0) {
             Button(action: onOpen) {
                 HStack(spacing: 12) {
-                    if !pointsToNotch {
+                    if showsKeyboard {
                         Text(String(key.label.suffix(1)))
                             .font(.system(size: 19, weight: .medium))
                             .frame(width: 30, height: 28)
                             .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.14)))
                     }
-                    Text(pointsToNotch ? "Click your notch" : "Press \(key.spokenLabel)")
-                        .font(.system(size: 20, weight: .semibold))
+                    if showsKeyboard {
+                        OnboardingShortcutInstruction(prefix: "Press ", key: key, hint: shortcutHint, onLight: true)
+                            .font(.system(size: 20, weight: .semibold))
+                    } else {
+                        Text("Click your notch").font(.system(size: 20, weight: .semibold))
+                    }
                 }
                 .foregroundStyle(Color(white: 0.08))
                 .padding(.horizontal, 22).padding(.vertical, 12)
@@ -34,18 +42,22 @@ struct OnboardingSidekickInvitation: View {
                 .contentShape(Capsule())
             }
             .buttonStyle(PressScaleStyle())
-            .background(OnboardingNotchPointer(scale: canvasScale) { target, offset, inset in
+            .background(OnboardingNotchPointer(scale: canvasScale, prefersKeyboard: shortcutHint.pulseCount > 0) { target, offset, inset in
                 pointsToNotch = target; horizontalOffset = offset; topInset = inset
             })
             .offset(x: horizontalOffset)
-            .accessibilityLabel(pointsToNotch ? "Click your notch" : "Press \(key.spokenLabel)")
-            .accessibilityHint(pointsToNotch ? "Open Sidekick from the top of your screen."
-                               : "Press the \(key.spokenLabel) key once, or click this button.")
+            .accessibilityLabel(showsKeyboard ? "Press \(key.spokenLabel)" : "Click your notch")
+            .accessibilityHint(showsKeyboard ? "Press the \(key.spokenLabel) key once, or click this button."
+                               : "Open Sidekick from the top of your screen.")
             .accessibilityIdentifier("onboarding.sidekick.instruction")
             Spacer(minLength: 0)
         }
         .padding(.top, topInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(OnboardingWrongCommandMonitor(hint: shortcutHint, enabled: key == .rightCommand))
+        .onAppear { shortcutHint.activate() }
+        .onChange(of: shortcut) { shortcutHint.clear() }
+        .onDisappear { shortcutHint.deactivate() }
     }
 }
 
@@ -53,6 +65,7 @@ struct OnboardingSidekickInvitation: View {
 /// It ignores every mouse event and cannot become key, so the actual notch owns the click.
 struct OnboardingNotchPointer: NSViewRepresentable {
     var scale: CGFloat = 1
+    var prefersKeyboard = false
     let onLayout: (Bool, CGFloat, CGFloat) -> Void
 
     static var hasPhysicalTarget: Bool {
@@ -75,6 +88,7 @@ struct OnboardingNotchPointer: NSViewRepresentable {
     func updateNSView(_ nsView: Probe, context: Context) {
         nsView.onLayout = onLayout
         nsView.renderScale = scale
+        nsView.prefersKeyboard = prefersKeyboard
         nsView.scheduleRefresh()
     }
     static func dismantleNSView(_ nsView: Probe, coordinator: ()) { nsView.stop() }
@@ -82,6 +96,7 @@ struct OnboardingNotchPointer: NSViewRepresentable {
     final class Probe: NSView {
         var onLayout: ((Bool, CGFloat, CGFloat) -> Void)?
         var renderScale: CGFloat = 1
+        var prefersKeyboard = false
         override var isFlipped: Bool { true }
         private(set) var pointer: NSPanel?
         private var observers: [NSObjectProtocol] = []
@@ -138,7 +153,7 @@ struct OnboardingNotchPointer: NSViewRepresentable {
             let button = window.convertToScreen(convert(bounds, to: nil))
             let offset = (screen?.frame.midX ?? root.midX) - root.midX
             let fits = abs(offset) + button.width / 2 + 24 <= root.width / 2
-            let target = OnboardingNotchPointer.hasPhysicalTarget && window.screen == screen && fits
+            let target = !prefersKeyboard && OnboardingNotchPointer.hasPhysicalTarget && window.screen == screen && fits
             let tip = (screen?.frame.maxY ?? 0) - (screen?.notchSize?.height ?? 0) - OnboardingNotchPointer.tipGap
             let inset = target ? max(12, (root.maxY - tip + OnboardingNotchPointer.minimumStem + OnboardingNotchPointer.buttonGap) / renderScale) : 12
             let proposedOffset = target ? offset / renderScale : 0

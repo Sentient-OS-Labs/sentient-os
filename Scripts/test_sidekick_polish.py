@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five focused, own-window UI captures using the existing signed-app isolation fixture.
+"""Focused, own-window UI captures using the existing signed-app isolation fixture.
 No providers, computer-use helper, real preference changes, or other-app screenshots.
 """
 import argparse
@@ -49,7 +49,7 @@ def main() -> int:
         receipt = app.run_stage(executable, root, fixture, runtime, stage, 90)
         manifest = app.read_json(root / ("late-gift-manifest.json" if args.late_gift else "small-onboarding-manifest.json" if args.small_onboarding else "invitation-manifest.json" if args.invitation else "discovery-manifest.json" if args.discovery else "polish-manifest.json"))
         captures = manifest.get("captures", [])
-        app.require(len(captures) == (2 if args.late_gift else 4 if args.small_onboarding else 8 if args.invitation else 6 if args.discovery else 5) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
+        app.require(len(captures) == (2 if args.late_gift else 4 if args.small_onboarding else 11 if args.invitation else 6 if args.discovery else 5) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
         for capture in captures:
             path = (root / capture["file"]).resolve()
             app.require(path.parent == root / "polish-snapshots", "Capture escaped owned fixture")

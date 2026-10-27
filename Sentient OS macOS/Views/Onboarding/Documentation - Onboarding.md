@@ -187,3 +187,24 @@ policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `
 ## Related docs
 
 `Cloud/Documentation - Cloud - Codex Setup.md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Engine/Documentation - On-Device Engine & Triage.md` (the download), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`ProcessingView`, the finale), `Notch Magic/Documentation - Sidekick - General.md` (the notch demo).
+
+
+## Wrong-side Command correction
+
+Both the Sidekick invitation and the waiting phases of the native Double Tap lesson use
+`OnboardingShortcutHint`. A standalone left-Command tap, while the configured shortcut is
+right Command, sweeps the Sentient spectrum across only “right” for one second. Repeated wrong
+taps coalesce into one sweep. Reduce Motion uses a still color highlight for the same duration.
+On a notch-equipped Mac, a mistaken keyboard tap switches the invitation to the keyboard cue.
+
+The monitor is local to the owning key window and exists only while its instruction can accept
+input. It returns every NSEvent unchanged. It never reads typed characters, adds a global key
+listener, requests permission, launches Sidekick, or counts a wrong tap toward a Double Tap reply.
+Intervening keyboard/mouse input, recording shortcuts, focus loss, custom bindings and teardown
+cancel or suppress the correction. The gesture uses the existing `ShortcutTap` validator.
+The Double Tap phase, rather than its animated opacity, is the authoritative input boundary.
+
+Checks: `Scripts/test_onboarding_shortcut_hint.swift` covers gesture and pulse lifecycle logic;
+`Scripts/test_sidekick_polish.py --invitation` exercises local NSEvents and captures the white
+Sidekick button and both real Double Tap samples. It also verifies normal clicks still finish
+the lesson and that hint listeners detach when their instruction leaves.

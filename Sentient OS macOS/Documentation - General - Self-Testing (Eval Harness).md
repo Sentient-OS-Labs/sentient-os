@@ -86,7 +86,7 @@ completion and verify, a flipped hash must refuse and wipe).
 
 `Scripts/test_sidekick_polish.py --invitation --film-origin http://localhost:3001` exercises
 the restaurant story through the actual WKWebView and native notch, including Weekend plan,
-booking, confirmation, reply, completion and cancellation. Its eight captures contain only
+booking, confirmation, reply, completion and cancellation. Its eleven captures contain only
 owned windows; it never invokes a provider, reads a real vault, books or sends anything.
 The origin override is allowlisted and read only from the existing marked fixture root.
 
@@ -95,3 +95,12 @@ On a headless desktop whose WindowServer marks automated windows fully occluded,
 visible render surface while it is ordered in and not minimized. The receipt records
 `render_mode: controlled-occlusion`. This verifies rendering and the native bridge, not physical
 onscreen occlusion behavior. Ordinary tests and all production windows retain real visibility.
+
+
+The invitation fixture also verifies the wrong-side Command hint on the Sidekick invitation
+and both Double Tap samples. Local modifier/key events are posted only to its owned window;
+no global keyboard synthesis or other-app input is used. The standalone logic check compiles
+`Scripts/test_onboarding_shortcut_hint.swift` with `OnboardingShortcutHint.swift`,
+`ShortcutKey.swift`, `ShortcutGesture.swift`, and `ShortcutPreferences.swift`, using
+`-parse-as-library -default-isolation MainActor`. Its palette stub is only for this logic test;
+native screenshots use the real app palette.
