@@ -155,45 +155,86 @@ struct HomeSidekickSuggestions: View {
         let prompt: String
     }
     static let suggestions = [
-        Suggestion(id: "summarize", title: "Summarize a page", symbol: "doc.text",
-                   prompt: "Summarize the page I’m looking at. Highlight the key takeaways and any next steps."),
-        Suggestion(id: "compare", title: "Compare tools", symbol: "rectangle.split.2x1",
-                   prompt: "Help me compare [tool A] and [tool B] for [use case]. Find pricing and the key trade-offs."),
-        Suggestion(id: "research", title: "Research a company", symbol: "magnifyingglass",
-                   prompt: "Research [company] and give me a concise brief on its product, customers, and competitors."),
-        Suggestion(id: "tasks", title: "Turn notes into tasks", symbol: "checklist",
-                   prompt: "Turn these notes into a clear task list with priorities: [paste notes]")
+        Suggestion(id: "subscriptions", title: "Find subscriptions to cancel", symbol: "creditcard",
+                   prompt: "Find my recurring subscriptions using billing emails and account pages I can access. Show prices and renewal dates, and ask which I want to cancel. Don't assume a subscription is unused or cancel anything without my approval."),
+        Suggestion(id: "followups", title: "Catch missed follow-ups", symbol: "arrowshape.turn.up.left",
+                   prompt: "Check my recent email conversations for up to three follow-ups I owe, including unanswered requests and commitments I made. Explain what needs attention and prepare a draft for each, leaving everything unsent. Ask which inbox to use if needed."),
+        Suggestion(id: "purchase", title: "Research a purchase", symbol: "magnifyingglass",
+                   prompt: "Help me research a purchase. First ask what I'm buying, my budget, and what matters most. Then compare suitable options using current prices, specifications, and owner reviews. Give me a short recommendation with sources and total delivered prices where available."),
+        Suggestion(id: "meeting", title: "Prep my next meeting", symbol: "calendar.badge.clock",
+                   prompt: "Get me ready for my next meeting. Find it in my calendar, check the relevant recent conversation and linked documents, and open the materials I'll need. Prepare a private brief with key decisions, outstanding commitments, and questions to ask. Ask for any missing access or meeting details."),
+        Suggestion(id: "trip", title: "Plan my trip", symbol: "airplane",
+                   prompt: "Help me plan a trip. First ask where and when I'm going, my departure city, budget, and preferences. Compare travel and accommodation options with current prices and build a practical itinerary with booking links. Don't book or pay for anything without my approval."),
+        Suggestion(id: "catchup", title: "Catch me up", symbol: "text.bubble",
+                   prompt: "Catch me up on what needs my attention. First ask which inbox or project to check and how far back to look. Then review the available recent conversations and calendar items, summarize important changes and deadlines with links, and suggest the next actions. Leave messages and calendar events unchanged.")
     ]
-    let onSelect: (String) -> Void
+    static let initialSuggestions = Array(suggestions.prefix(4))
+    // These are draft starters, not tasks. Rotate only after Home accepts the draft.
+    let onSelect: (String) -> Bool
+    @State private var visible = initialSuggestions
+    @State private var queued = Array(suggestions.dropFirst(4))
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reducedMotion: Bool { motionOverride ?? systemReducedMotion }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 7) {
-                ForEach(Self.suggestions) { suggestion in suggestionButton(suggestion).fixedSize(horizontal: true, vertical: false) }
+                ForEach(0..<4) { slot in
+                    // Reserve each initial slot's width, so a replacement cannot
+                    // move its neighbors or switch between the row and grid.
+                    ZStack {
+                        suggestionLabel(Self.initialSuggestions[slot])
+                            .fixedSize(horizontal: true, vertical: false)
+                            .hidden().accessibilityHidden(true)
+                    }
+                    .overlay { suggestionButton(at: slot) }
+                }
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 7), GridItem(.flexible(), spacing: 7)], spacing: 7) {
-                ForEach(Self.suggestions) { suggestion in suggestionButton(suggestion) }
+                ForEach(0..<4) { slot in suggestionButton(at: slot) }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Try Sidekick")
     }
 
-    private func suggestionButton(_ suggestion: Suggestion) -> some View {
-        Button { onSelect(suggestion.prompt) } label: {
-            HStack(spacing: 7) {
-                Image(systemName: suggestion.symbol).font(.system(size: 12))
-                Text(suggestion.title).font(.system(size: 11)).lineLimit(1)
-            }
-            .foregroundStyle(SidekickStyle.secondary)
-            .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 43)
-            .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 11))
-            .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.07), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 11))
+    private func suggestionLabel(_ suggestion: Suggestion) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: suggestion.symbol).font(.system(size: 12))
+            Text(suggestion.title).font(.system(size: 11)).lineLimit(2)
         }
-        .buttonStyle(SidekickPressStyle())
-        .accessibilityIdentifier("sidekick.suggestion." + suggestion.id)
-        .accessibilityHint("Fill the message box; review before sending")
+        .foregroundStyle(SidekickStyle.secondary)
+        .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 43, maxHeight: 43)
+    }
+
+    private func suggestionButton(at slot: Int) -> some View {
+        let suggestion = visible[slot]
+        return ZStack {
+            Button {
+                // An outgoing button can briefly coexist with its replacement during
+                // the transition. Ignore a stale click instead of rotating twice.
+                guard visible[slot].id == suggestion.id, onSelect(suggestion.prompt) else { return }
+                withAnimation(reducedMotion ? nil : .easeInOut(duration: 0.22)) {
+                    visible[slot] = queued.removeFirst()
+                    queued.append(suggestion)
+                }
+            } label: {
+                suggestionLabel(suggestion)
+                    .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 11))
+                    .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.07), lineWidth: 1))
+                    .contentShape(RoundedRectangle(cornerRadius: 11))
+            }
+            .buttonStyle(SidekickPressStyle())
+            .accessibilityIdentifier("sidekick.suggestion." + suggestion.id)
+            .accessibilityHint("Fill the message box; review before sending")
+            .id(suggestion.id)
+            .transition(reducedMotion ? .identity : .asymmetric(
+                insertion: .opacity.combined(with: .offset(y: 5)),
+                removal: .opacity.combined(with: .offset(y: -5))))
+        }
+        .frame(height: 43)
+        .clipped()
     }
 }
 

@@ -81,7 +81,16 @@ Local detail navigation resets the preview's scroll position; compact layouts pr
 over supplementary labels. All examples retain the top-left close button and Escape dismissal.
 
 Four suggestions above the composer fill its real draft and request keyboard focus; they do not
-submit. The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses plain text
+submit. Initially these are Find subscriptions to cancel, Catch missed follow-ups, Research a
+purchase, and Prep my next meeting. Selecting one replaces only that slot with the next queued
+suggestion (Plan my trip, then Catch me up); the selected entry joins the back of the queue, so all
+six rotate without visible duplicates. Slot widths stay fixed to the initial layout, preventing a short
+replacement from rearranging neighbors or switching the row/grid layout. The replacement uses a
+short fade/vertical transition, or an immediate swap with Reduce Motion. Active tasks and recovery
+disable selection; a rejected draft never rotates. Rotation is local to the mounted suggestion view
+and a fresh Home starts with the original four. Prompts use live apps/browser information, ask for
+missing details/access, and preserve approval for cancellations, bookings and sending messages.
+The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses plain text
 without a colored glow. The durable successful-task milestone
 shifts emphasis to Finish setup without resetting chat or automatically opening setup. During pending
 setup, Analysis and the Double Tap lesson route to Finish setup; after setup they show the actual
@@ -92,12 +101,13 @@ Focused `#Preview`s in `HomePersonalSetup.swift` render the reward panel and fea
 AppState or external calls. Native integration checks should use isolated defaults and test the
 `personalSetup.*` and `sidekick.suggestion.*` accessibility identifiers at 1040×800 and 840×680.
 `Scripts/test_personal_setup_home.py --app <signed-debug-app>` runs the isolated `ui-personal-setup`
-lab: it checks both sizes, all four X/Escape dismissal paths, draft-only suggestions, continued work,
+lab: it checks both sizes, all four X/Escape dismissal paths, all six draft-only suggestions,
+same-slot rotation, stable neighbors, unique entries and reduced-motion rotation, continued work,
 the successful-task emphasis state, completed users' real-card path, and empty first Home. It also
 checks local card/detail navigation, knowledge-node selection, Double Tap replay/cancellation and
-Reduce Motion, and verifies that the real composer and task state remain untouched. Its ten
+Reduce Motion, and verifies that the real composer and task state remain untouched. Its eleven
 screenshots include only fixture-owned windows; the runner never starts a provider or analysis.
-`--presentation-capture` adds wide Home and showcase captures, for nineteen screenshots in total.
+`--presentation-capture` adds wide Home and showcase captures, for twenty screenshots in total.
 `--manual-review` offers a bounded 90-second hold for a native accessibility inspection, followed by
 the same assertions. It does not bypass failures or authorize real work.
 `Scripts/test_personal_setup_sources.py --app <signed-debug-app>` runs the actual source picker and
