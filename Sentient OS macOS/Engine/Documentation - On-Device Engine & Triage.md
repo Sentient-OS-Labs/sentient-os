@@ -121,8 +121,10 @@ download lands) → in DEBUG, walking up from the source file to the repo root (
 
 `ModelDownload.shared.kickIfNeeded()` is safe to call any time: it no-ops when `ModelLocator` already
 finds a model or a download is in flight, and restarts from `.failed` (Try Again). `AppState` kicks it
-2 s after the post-FDA relaunch during onboarding; `OnboardingModelDownloadView` and the home's
-`ModelDownloadWhisper` render its `phase` / `bytesDone`.
+2 seconds into a normal launch while setup or first analysis is incomplete, including during the
+intro. Its app-owned Application Support destination does not require FDA. Home and Sidekick are
+independent of the transfer; cloud-only analysis does not wait for the local model. The download and
+processing surfaces render its `phase` / `bytesDone`, with retry after network/disk failures.
 
 How the transfer works:
 

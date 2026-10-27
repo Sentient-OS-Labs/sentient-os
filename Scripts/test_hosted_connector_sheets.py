@@ -33,8 +33,8 @@ for name, source in (("dedicated", dedicated), ("generic", generic)):
     assert "MailAccountCollection.collect" not in source, name
     assert '"Open connector settings"' in source, name
 for action in (dedicated_done, generic_done):
-    assert "Task" not in action and "await " not in action
-    assert "HostedConnectorSetup.confirm" in action
+    assert "Task" in action and "await " in action
+    assert "HostedConnectorSetup.verifyAndConfirm" in action
 for action in (dedicated_open, generic_open):
     assert "Task" not in action and "await " not in action
     assert "HostedConnectorSetup.settingsOpened" in action
@@ -57,6 +57,7 @@ import Foundation
     static func kbEligible(_ slug: String, backend: ModelBackend = .current) -> Bool { eligible }
     static func kbKey(_ slug: String) -> String { "mcp." + slug + ".kb" }
     static func setKBEnabled(_ slug: String, _ enabled: Bool) { UserDefaults.standard.values[kbKey(slug)] = enabled }
+    static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] { ConnectorCensus.records }
 }
 @MainActor enum ConnectorCensus {
     struct DetectedConnector {
@@ -76,7 +77,9 @@ import Foundation
     static var settingsCalls: [(String, ModelBackend)] = []
     static var accepted = true
     static var onConfirm: () -> Void = {}
-    static func confirm(slug: String, backend: ModelBackend, reconnected: Bool) -> Bool {
+    static var onStop: () -> Void = {}
+    static var stopCalls: [(String, ModelBackend)] = []
+    static func verifyAndConfirm(slug: String, backend: ModelBackend, reconnected: Bool) async -> Bool {
         calls.append((slug, backend, reconnected))
         guard accepted, backend == ModelBackend.current, backend != .custom else { return false }
         onConfirm()
@@ -84,6 +87,9 @@ import Foundation
     }
     static func settingsOpened(slug: String, backend: ModelBackend) {
         settingsCalls.append((slug, backend))
+    }
+    static func stopReading(slug: String, backend: ModelBackend) {
+        stopCalls.append((slug, backend)); onStop()
     }
 }
 @MainActor final class NSWorkspace {
@@ -105,17 +111,23 @@ import Foundation
     @MainActor struct Service {
         let slug: String
         var analyticsName: String { slug }
+        var title: String { slug }
         var connectorURL: URL { ConnectorLinks.page(for: slug) }
     }
     let service: Service
     var backend: ModelBackend = .chatgpt
     var connected = false
+    var selected = false
+    var checkingConnection = false
+    var connectionProblem: String?
+    var verification: Task<Void, Never>?
     var openedConnectorPage = false
     var dismissals = 0
     init(_ slug: String) { service = Service(slug: slug) }
     func dismiss() { dismissals += 1 }
-    func tapDone() { done() }
+    func tapDone() async { done(); let pending = verification; await pending?.value }
     func openSettings() { openConnectorPage() }
+    func tapStopReading() { stopReading() }
 __DEDICATED__
 }
 @MainActor final class GenericFixture {
@@ -126,12 +138,17 @@ __DEDICATED__
     var hostedSelected = false
     var usesDirect = false
     var busy = false
+    var verifyingHosted = false
+    var message: String?
+    var operation: Task<Void, Never>?
+    var connectors: [ConnectorCensus.DetectedConnector] = []
+    var name: String { source.serviceSlug }
     var dismissals = 0
     var selectionSlug: String { source.serviceSlug }
     var connected: Bool { hostedConnected }
     init(_ slug: String) { source = Source(serviceSlug: slug) }
     func dismiss() { dismissals += 1 }
-    func tapDone() { done() }
+    func tapDone() async { done(); let pending = operation; await pending?.value }
     func stopReading() { stopHostedReading() }
     func openSettings() { openConnectorPage() }
 __GENERIC__
@@ -145,12 +162,13 @@ __GENERIC__
     @MainActor static func reset() {
         HostedConnectorSetup.calls = []; HostedConnectorSetup.accepted = true
         HostedConnectorSetup.settingsCalls = []
+        HostedConnectorSetup.stopCalls = []; HostedConnectorSetup.onStop = {}
         HostedConnectorSetup.onConfirm = {}; Analytics.signals = 0
         NSWorkspace.shared.succeeds = true; NSWorkspace.shared.urls = []
         ModelBackend.current = .chatgpt; ConnectorRegistry.eligible = true
         ConnectorCensus.records = []; UserDefaults.standard.values = [:]
     }
-    @MainActor static func main() {
+    @MainActor static func main() async {
         for backend in [ModelBackend.chatgpt, .claude] {
             for opens in [true, false] {
                 reset(); ModelBackend.current = backend; NSWorkspace.shared.succeeds = opens
@@ -192,16 +210,25 @@ __GENERIC__
             let sheet = DedicatedFixture(slug)
             HostedConnectorSetup.onConfirm = { sheet.connected = true }
             sheet.openedConnectorPage = true
-            sheet.tapDone()
-            check(sheet.connected && sheet.dismissals == 1, "Dedicated Done did not confirm/dismiss synchronously")
+            await sheet.tapDone()
+            check(sheet.connected && sheet.dismissals == 1, "Dedicated Done did not confirm/dismiss after verification")
             check(HostedConnectorSetup.calls.first?.0 == slug && HostedConnectorSetup.calls.first?.2 == true, "Dedicated confirmation lost its source/reconnect")
             check(Analytics.signals == 1, "First confirmation telemetry missing")
-            sheet.tapDone()
+            await sheet.tapDone()
             check(Analytics.signals == 1, "Existing connection counted again")
+            sheet.selected = true
+            HostedConnectorSetup.onStop = { sheet.selected = false }
+            sheet.tapStopReading()
+            check(!sheet.selected && HostedConnectorSetup.stopCalls.first?.0 == slug,
+                  "Dedicated Stop reading bypassed shared consent cancellation")
+            sheet.selected = true; ModelBackend.current = .claude
+            sheet.tapStopReading()
+            check(sheet.selected && HostedConnectorSetup.stopCalls.count == 1,
+                  "Stale dedicated sheet revoked the current provider selection")
             reset()
             let stale = DedicatedFixture(slug); ModelBackend.current = .claude
-            stale.tapDone()
-            check(!stale.connected && stale.dismissals == 1 && Analytics.signals == 0, "Stale provider confirmed or signaled")
+            await stale.tapDone()
+            check(!stale.connected && stale.dismissals == 0 && stale.connectionProblem != nil && Analytics.signals == 0, "Stale provider confirmed or signaled")
         }
         for slug in ["google-drive", "outlook-mail", "outlook-calendar", "slack"] {
             reset()
@@ -211,14 +238,17 @@ __GENERIC__
             ConnectorCensus.records = [.init(slug: slug)]
             check(!sheet.connected, "Cached discovery overrode false reading preference")
             sheet.openedConnectorPage = true
-            sheet.tapDone()
-            check(sheet.hostedSelected && sheet.dismissals == 1, "Hosted Done did not immediately delegate and dismiss")
+            await sheet.tapDone()
+            check(sheet.hostedSelected && sheet.dismissals == 1, "Hosted Done did not verify then dismiss")
             check(HostedConnectorSetup.calls.first?.0 == slug && HostedConnectorSetup.calls.first?.2 == true, "Hosted confirmation lost its source/reconnect")
             ConnectorCensus.records = []
             check(sheet.connected, "Missing cache undid explicit source selection")
+            HostedConnectorSetup.onStop = { sheet.hostedSelected = false }
             sheet.stopReading()
-            check(!sheet.hostedSelected && HostedConnectorSetup.calls.count == 1, "Stop reading re-confirmed the source")
-            sheet.tapDone()
+            check(!sheet.hostedSelected && HostedConnectorSetup.calls.count == 1
+                  && HostedConnectorSetup.stopCalls.first?.0 == slug,
+                  "Hosted Stop reading bypassed shared consent cancellation")
+            await sheet.tapDone()
             check(sheet.hostedSelected, "Done did not delegate re-enabling a stored false selection")
             ModelBackend.current = .claude
             sheet.stopReading()
@@ -226,8 +256,8 @@ __GENERIC__
         }
         reset()
         let stale = GenericFixture("slack"); ModelBackend.current = .claude
-        stale.tapDone()
-        check(!stale.hostedSelected && stale.dismissals == 1, "Stale generic sheet confirmed")
+        await stale.tapDone()
+        check(!stale.hostedSelected && stale.dismissals == 0 && stale.message != nil, "Stale generic sheet confirmed")
         reset()
         ConnectorRegistry.eligible = false
         let taskOnly = GenericFixture("task-only")
@@ -236,18 +266,19 @@ __GENERIC__
         check(taskOnly.connected && !taskOnly.hostedSelected, "Task-only declaration invented reading state")
         reset()
         let direct = GenericFixture("direct-fixture"); direct.usesDirect = true
-        direct.busy = true; direct.tapDone()
+        direct.busy = true; await direct.tapDone()
         check(direct.dismissals == 0 && HostedConnectorSetup.calls.isEmpty, "Direct OAuth lost its busy guard")
-        direct.busy = false; direct.tapDone()
+        direct.busy = false; await direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == true, "Direct initial selection changed")
         check(HostedConnectorSetup.calls.isEmpty, "Direct OAuth was routed through hosted trust")
         UserDefaults.standard.values["mcp.direct-fixture.kb"] = false
-        direct.tapDone()
+        await direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == false, "Direct Settings opt-out was overwritten")
         print("PASS: \(checks) hosted sheet confirmation, state, provider and direct-route checks")
     }
 }
-'''.replace("__DEDICATED__", dedicated_done + "\n" + dedicated_open).replace("__GENERIC__", "\n".join([
+'''.replace("__DEDICATED__", dedicated_done + "\n" + dedicated_open + "\n" +
+    declaration(dedicated, "private func stopReading()")).replace("__GENERIC__", "\n".join([
     generic_done,
     generic_open,
     declaration(generic, "private func stopHostedReading()"),

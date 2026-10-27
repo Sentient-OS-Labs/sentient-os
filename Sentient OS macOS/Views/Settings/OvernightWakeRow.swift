@@ -18,7 +18,47 @@ final class OvernightWakeSetup {
     private var revision = 0
     var ready: Bool { health == .ready }
 
+    #if DEBUG
+    private static var sourceFixtureRoot: URL?
+    private(set) static var sourceFixtureRefreshes = 0
+    private(set) static var sourceFixtureSetups = 0
+
+    /// Only the owned, nonce-validated source UI lab may replace wake-helper I/O. Invalid
+    /// source-lab invocations also fail closed below; they cannot fall through to a real helper.
+    static func enableSourceFixture(root: URL) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        let owned = root.standardizedFileURL
+        guard env["SENTIENT_SELFTEST"] == "sidekickapp", env["LAB_SIDEKICK_STAGE"] == "ui-personal-sources",
+              let configured = env["LAB_SIDEKICK_ROOT"], owned == URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL,
+              owned == owned.resolvingSymlinksInPath(), owned.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
+              let marker = try? String(contentsOf: owned.appendingPathComponent(".sidekick-app-fixture"), encoding: .utf8), marker == "1\n",
+              let owner = try? FileManager.default.attributesOfItem(atPath: owned.path)[.ownerAccountID] as? NSNumber,
+              owner.uint32Value == getuid(),
+              let data = try? Data(contentsOf: owned.appendingPathComponent("fixture.json")),
+              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              manifest["schema"] as? Int == 1, let nonce = manifest["nonce"] as? String,
+              UUID(uuidString: nonce)?.uuidString.lowercased() == nonce,
+              manifest["suite"] as? String == "ai.sentient.sidekick-app." + nonce,
+              UserDefaults.standard.string(forKey: "lab.fixture.nonce") == nonce else { return false }
+        sourceFixtureRoot = owned
+        sourceFixtureRefreshes = 0; sourceFixtureSetups = 0
+        return true
+    }
+    private static var isSourceFixtureProcess: Bool {
+        ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickapp"
+            && ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-personal-sources"
+    }
+    #endif
+
     func refresh() async {
+        #if DEBUG
+        if Self.isSourceFixtureProcess {
+            guard Self.sourceFixtureRoot != nil else { return }
+            Self.sourceFixtureRefreshes += 1
+            health = .notSetUp
+            return
+        }
+        #endif
         guard !busy, !checking else { return }
         checking = true
         let startedAt = revision
@@ -28,6 +68,14 @@ final class OvernightWakeSetup {
     }
 
     func setUp() async {
+        #if DEBUG
+        if Self.isSourceFixtureProcess {
+            guard Self.sourceFixtureRoot != nil else { return }
+            Self.sourceFixtureSetups += 1
+            health = .notSetUp
+            return
+        }
+        #endif
         guard !busy else { return }
         revision += 1
         busy = true

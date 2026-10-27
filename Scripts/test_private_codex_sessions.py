@@ -46,7 +46,9 @@ production = 'actor VaultGenerator {\n' + '\n'.join(declaration(generator, name)
     static func census(of directory: URL) -> (notes: Int, folders: Int) { (1, 0) }
     static func vaultFingerprint(_ directory: URL) -> String { "fixture-fingerprint" }
     static func diagnosticShape(_ directory: URL) -> (files: Int, bytes: Int, indexPresent: Bool)? { nil }
-    static func swapStagingIntoVault(_ directory: URL) throws { fatalError("Fixture never publishes") }
+    static func swapStagingIntoVault(_ directory: URL, expectedFingerprint: String? = nil) throws {
+        fatalError("Fixture never publishes")
+    }
     private let vaultPromptCore = "BUILD"
     private let agenticOutputInstructions = ""
     static func corpusMessage(_ notes: [CloudNote], partial: Bool, closing: String) -> String {
@@ -64,7 +66,7 @@ actor VaultCloud {
     private func markDirty() async { fatalError("Fixture never publishes") }
 ''' + '\n'.join(declaration(cloud, name) for name in [
     'init()', 'private static func loadResume(', 'private func setCreateResume(',
-    'private func setUpdateResume(', 'private static func mailHashes(',
+    'private func setUpdateResume(', 'private static func mailHashes(', 'private static func acceptedHashes(',
     'private func validatedResume(', 'private static func persistResume(',
     'enum CloudError:', 'func create(', 'private func createPinned(',
     'func update(', 'private func updatePinned(',
@@ -74,6 +76,7 @@ production += 'enum ConnectorRegistry {\n' + '\n'.join(declaration(registry, nam
 
 FIXTURE = r'''
 import Foundation
+enum ClaudeAuth { nonisolated(unsafe) static var cachedAccountIdentity: String? = "claude-account-a" }
 enum Fixture {
     static let root = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[1], isDirectory: true)
 }
@@ -130,7 +133,7 @@ enum CodexCLI {
         var resumeSessionID: String? = nil; var diag: [String: String] = [:]
     }
     struct Envelope: Sendable { var inputTokens: Int? = nil; var outputTokens: Int? = nil }
-    enum CLIError: Error { case usageLimit(message: String, sessionID: String?) }
+    enum CLIError: Error { case usageLimit(message: String, sessionID: String?), timedOut }
 }
 actor FrontierRun {
     static let shared = FrontierRun()
@@ -145,7 +148,13 @@ actor FrontierRun {
 }
 enum CorpusSlicer {
     static let budget = 1
-    static func slice(_ notes: [CloudNote]) -> [[CloudNote]] { notes.map { [$0] } }
+    static let mergeBudget = 1
+    static let maximumItems = 1
+    static func slice(_ notes: [CloudNote], budget: Int = CorpusSlicer.budget,
+                      maximumItems: Int = CorpusSlicer.maximumItems) -> [[CloudNote]] {
+        precondition(budget > 0 && maximumItems > 0)
+        return notes.map { [$0] }
+    }
     static func saveCorpus(_ notes: [CloudNote], in directory: URL) throws {
         try JSONEncoder().encode(notes).write(to: directory.appendingPathComponent("corpus.json"))
     }
@@ -154,6 +163,13 @@ enum CorpusSlicer {
         return try? JSONDecoder().decode([CloudNote].self, from: data)
     }
     static func deleteCorpus(in directory: URL) { fatalError("Fixture never publishes") }
+}
+struct VaultSliceCheckpoint {
+    // This harness always throws usageLimit. Timeout recovery is exercised separately;
+    // an accidental timeout/publication path here must fail rather than pass silently.
+    init(staging: URL) throws { }
+    func restore() throws { fatalError("Fixture never reaches timeout recovery") }
+    func discard() { }
 }
 @MainActor final class VaultActivity { static let shared = VaultActivity(); let editorBusy = false }
 enum Analytics { static func signal(_ name: String) {} }
@@ -250,7 +266,10 @@ func ErrorLabel(_ error: Error) -> String { "fixture" }
         check(originA.contains(CodexRuntime.sessionScope) && originA != "v1:chatgpt:0", "new runtime invalidates former Google and identity cache origin")
         defaults.set(4, forKey: ConnectorRegistry.readGenerationKey("gmail", "chatgpt"))
         check(ConnectorRegistry.readOrigin(slug: "gmail", backend: .chatgpt).hasSuffix(":4"), "reconnect generation remains effective")
-        check(ConnectorRegistry.readOrigin(slug: "gmail", backend: .claude) == "v1:claude:0", "Claude read origin preserved")
+        let claudeOrigin = ConnectorRegistry.readOrigin(slug: "gmail", backend: .claude)
+        check(claudeOrigin == "v2:claude:claude-account-a:0", "Claude read origin includes its verified account scope")
+        ClaudeAuth.cachedAccountIdentity = "claude-account-b"
+        check(ConnectorRegistry.readOrigin(slug: "gmail", backend: .claude) != claudeOrigin, "Claude account changes invalidate source and writing-style origins")
         check(ConnectorRegistry.readOrigin(slug: "direct-fixture", backend: .chatgpt) == "direct:fixture-direct:3", "direct connector origin preserved")
         print("Checked \(checks) private runtime session/cache cases; failures=0")
     }

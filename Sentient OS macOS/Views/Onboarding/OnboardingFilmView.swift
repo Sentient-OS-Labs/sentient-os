@@ -27,7 +27,7 @@ struct OnboardingFilmView: View {
     /// Publishes the active web intro to the shared dev footer; nil during native screens.
     var onWebIntroChange: (FilmDriver?) -> Void = { _ in }
 
-    /// Preview the real recipe film at its invitation park using isolated test preferences.
+    /// Preview the restaurant film at its invitation park using isolated test preferences.
     static func invitationForTesting() -> Self {
         precondition(ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-invitation")
         var view = Self(onContinue: {})
@@ -105,13 +105,9 @@ struct OnboardingFilmView: View {
             ? "real" : "key"
     }
 
-    /// The Sidekick ride's pinned duration, in seconds. The native notch's scripted
-    /// story (CommandRunModel.startOnboardingDemo) reaches its ✓ at ~10.3s of wall
-    /// clock, and the film's ✓-beat (stage 9, pDay 0.97) sits ~90% into this leg —
-    /// 11.5s lands the two together. Absolute on purpose: the site's pace-share math
-    /// shortens every leg as the page's tail grows (field-found 2026-07-17: the new
-    /// Close scenes silently sped this leg up and desynced the notch narration).
-    private static let sidekickRideSeconds = 11.5
+    /// The restaurant film owns its narration beats. This is its visual pacing;
+    /// actual progress messages keep the native notch in sync through pause and resize.
+    private static let sidekickRideSeconds = OnboardingRestaurantStory.duration
 
     private static var filmURL: URL {
         var base = productionURL
@@ -126,6 +122,8 @@ struct OnboardingFilmView: View {
         }
         items.removeAll { $0.name == "invitation" }
         items.append(URLQueryItem(name: "invitation", value: "native"))
+        items.removeAll { $0.name == "story" }
+        items.append(URLQueryItem(name: "story", value: OnboardingRestaurantStory.version))
         comps.queryItems = items
         return comps.url ?? base
     }
@@ -143,6 +141,10 @@ struct OnboardingFilmView: View {
                                 onLoaded: { finishedLoad = true },
                                 onReady: { fadeIn() },
                                 onParked: { legParked() },
+                                onDemoBeat: { beat in
+                                    guard phase == .ridingSidekick else { return }
+                                    appState.commandCoordinator.run.advanceOnboardingDemo(beat)
+                                },
                                 onFailed: { if phase == .loading { setPhase(.unavailable) } })
                         .ignoresSafeArea()
                         .opacity(phase == .loading || phase == .doubleTap ? 0 : 1)
@@ -188,7 +190,7 @@ struct OnboardingFilmView: View {
                     .transition(.opacity)
                 }
 
-                // Keep the recipe visible. One native CTA sits above the film while a
+                // Keep the Messages request visible. One native CTA sits above the film while a
                 // separate, click-through arrow points outside the window at the real notch.
                 if inviting {
                     OnboardingSidekickInvitation(onOpen: { appState.commandCoordinator.openNotchFromHome() })
@@ -207,12 +209,14 @@ struct OnboardingFilmView: View {
         // Load watchdog: a first launch with no internet lands on the fallback, never a void.
         .task {
             try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled else { return }
             if phase == .loading { setPhase(.unavailable) }
         }
         // The "ready"-less fallback: didFinish + a grace beat, for a page that never posts.
         .task(id: finishedLoad) {
             guard finishedLoad else { return }
             try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
             fadeIn()
         }
         // Park watchdogs, one per leg: if the park signal never arrives (older deploy,
@@ -221,12 +225,17 @@ struct OnboardingFilmView: View {
         .task(id: phase == .playing) {
             guard phase == .playing else { return }
             try? await Task.sleep(for: .seconds(40))
+            guard !Task.isCancelled else { return }
             if phase == .playing { setPhase(.parked) }
         }
         .task(id: phase == .ridingSidekick) {
             guard phase == .ridingSidekick else { return }
             try? await Task.sleep(for: .seconds(45))
-            if phase == .ridingSidekick { setPhase(.sidekickDone) }
+            guard !Task.isCancelled else { return }
+            if phase == .ridingSidekick {
+                appState.commandCoordinator.disarmOnboardingNotchDemo()
+                setPhase(.sidekickDone)
+            }
         }
         // The notch invitation was the one wait without a watchdog — the corner SKIP
         // used to be its manual exit (removed 2026-07-17). If the invitation is never
@@ -234,15 +243,17 @@ struct OnboardingFilmView: View {
         .task(id: phase == .awaitingNotch) {
             guard phase == .awaitingNotch else { return }
             try? await Task.sleep(for: .seconds(60))
+            guard !Task.isCancelled else { return }
             if phase == .awaitingNotch {
                 appState.commandCoordinator.disarmOnboardingNotchDemo()
                 setPhase(.ridingSidekick)
-                driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
+                driver.continueTo(Self.sidekickEndP, delay: 0, seconds: Self.sidekickRideSeconds)
             }
         }
         .task(id: phase == .ridingToInvitation) {
             guard phase == .ridingToInvitation else { return }
             try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
             if phase == .ridingToInvitation { armNotchBeat() }
         }
         #if DEBUG
@@ -270,7 +281,10 @@ struct OnboardingFilmView: View {
         switch phase {
         case .loading, .playing:    setPhase(.parked)
         case .ridingToInvitation:   armNotchBeat()
-        case .ridingSidekick:       setPhase(.sidekickDone)
+        case .ridingSidekick:
+            // A missed narration event cannot leave a demo running over Double Tap.
+            if appState.commandCoordinator.run.isDemo && appState.commandCoordinator.run.isRunning { appState.commandCoordinator.run.stop() }
+            setPhase(.sidekickDone)
         default: break
         }
     }
@@ -304,13 +318,13 @@ struct OnboardingFilmView: View {
 
     /// Parked on the invitation: arm the coordinator's one-shot demo. The user's answer — a
     /// bezel click or a hotkey press — opens the real type field, the task types itself, and
-    /// the moment the demo fires, the film rides on — the webview's windows play the shopping
+    /// the moment the demo fires, the film rides on — the webview's windows play the restaurant
     /// run while the real notch narrates. Disarmed on step-exit via onDisappear.
     private func armNotchBeat() {
         driver.hideLogo()
         setPhase(.awaitingNotch)
         appState.commandCoordinator.armOnboardingNotchDemo { [self] in
-            driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
+            driver.continueTo(Self.sidekickEndP, delay: 0, seconds: Self.sidekickRideSeconds)
             setPhase(.ridingSidekick)
         }
     }
@@ -392,7 +406,7 @@ struct OnboardingFilmView: View {
     /// profile makes the turn + dive transition brisk while the Sidekick scene rides
     /// base speed — the app doesn't second-guess the film's timing. The one exception
     /// is `seconds`, an absolute leg duration: the Sidekick ride pins itself to the
-    /// notch story's wall clock (an older deploy ignores the extra argument and keeps
+    /// visual story (an older deploy ignores the extra argument and keeps
     /// the site's pace).
     func continueTo(_ end: Double, delay: Double = 0.1, seconds: Double? = nil) {
         Log("Onboarding film: continueTo(\(end), delay: \(delay), seconds: \(seconds.map { "\($0)" } ?? "site pace"))")
@@ -481,6 +495,7 @@ private struct FilmWebView: NSViewRepresentable {
     let onLoaded: () -> Void
     let onReady: () -> Void
     let onParked: () -> Void
+    let onDemoBeat: (OnboardingRestaurantStory.Beat) -> Void
     let onFailed: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -529,7 +544,12 @@ private struct FilmWebView: NSViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
-            guard message.name == "autopilot" else { return }
+            guard message.name == "autopilot", message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.host == parent.url.host else { return }
+            if let beat = OnboardingRestaurantStory.beat(from: message.body) {
+                parent.onDemoBeat(beat)
+                return
+            }
             Log("Onboarding film: page says '\(message.body as? String ?? "?")'")
             switch message.body as? String {
             case "ready":  parent.onReady()

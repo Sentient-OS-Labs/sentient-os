@@ -1,23 +1,47 @@
-// Trusts an explicit hosted-connector confirmation, then wakes its provider in the background.
-// Defers disclosed contact collection until mailbox processing; neither job gates source selection.
+// Verifies native hosted-connection metadata on explicit Done, without a model turn.
+// Defers disclosed contact collection until actual mailbox processing.
 // Doc: ../Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 
 import Foundation
 
 @MainActor
 enum HostedConnectorSetup {
-    private static var jobs: [String: Task<Void, Never>] = [:]
     private static var collectionJobs: [String: Task<Void, Never>] = [:]
-    private static var reconnects: Set<String> = []
     private static var teardownDepth = 0
+    private static var generation = 0
+    private struct VerificationJob {
+        let slug: String
+        let task: Task<Bool, Never>
+    }
+    private static var verificationJobs: [UUID: VerificationJob] = [:]
+    // Source selections are shared by every window and backend. A later Stop reading or
+    // reconnect therefore retires every older confirmation for that same canonical source.
+    private static var sourceRevisions: [String: UInt64] = [:]
 
-    /// Done is the user's declaration. Provider discovery and optional contact collection must
-    /// never gate it, and a sheet opened under another backend cannot select the wrong account.
+    /// Explicit Done checks only native connection metadata. A cancellation/backend change
+    /// cannot save a late selection, and no model turn or content read is used for readiness.
+    static func verifyAndConfirm(slug: String, backend: ModelBackend = .current, reconnected: Bool = false) async -> Bool {
+        guard teardownDepth == 0, !Task.isCancelled, ModelBackend.current == backend else { return false }
+        let slug = ConnectorRegistry.canonicalSlug(slug)
+        let startedGeneration = generation, id = UUID()
+        let revision = advanceSourceRevision(slug)
+        let verification = Task { await ConnectorCensus.verifyConnection(slug: slug, backend: backend) }
+        verificationJobs[id] = VerificationJob(slug: slug, task: verification)
+        defer { verificationJobs.removeValue(forKey: id) }
+        let ready = await withTaskCancellationHandler { await verification.value } onCancel: { verification.cancel() }
+        guard ready, !Task.isCancelled, teardownDepth == 0, generation == startedGeneration,
+              sourceRevisions[slug] == revision,
+              ModelBackend.current == backend else { return false }
+        return confirm(slug: slug, backend: backend, reconnected: reconnected)
+    }
+
+    /// This synchronous persistence seam also requires native readiness. Callers cannot turn
+    /// an unverified browser declaration into a connected source by skipping the async check.
     @discardableResult
     static func confirm(slug: String, backend: ModelBackend = .current, reconnected: Bool = false) -> Bool {
         guard teardownDepth == 0, backend != .custom, ModelBackend.current == backend else { return false }
         let slug = ConnectorRegistry.canonicalSlug(slug)
-        guard !slug.hasPrefix("direct-") else { return false }
+        guard !slug.hasPrefix("direct-"), ConnectorCensus.isReady(slug: slug, backend: backend) else { return false }
         ConnectorCensus.confirmSelection(slug: slug, reconnected: reconnected)
         let defaults = UserDefaults.standard
         switch slug {
@@ -37,7 +61,6 @@ enum HostedConnectorSetup {
             // does not lose the disclosed request. Existing selections never imply consent.
             defaults.set(UUID().uuidString, forKey: request.key)
         }
-        schedule(slug: slug, backend: backend, reconnected: reconnected)
         return true
     }
 
@@ -49,6 +72,8 @@ enum HostedConnectorSetup {
         guard teardownDepth == 0, backend != .custom, ModelBackend.current == backend else { return }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return }
+        advanceSourceRevision(slug)
+        ConnectorCensus.invalidateReadiness(slug: slug, backend: backend)
         let defaults = UserDefaults.standard
         let selected: Bool
         switch slug {
@@ -63,6 +88,34 @@ enum HostedConnectorSetup {
         defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
     }
 
+    /// A source-level opt-out wins over Done in any other open window. It keeps the linked
+    /// provider and existing knowledge, but retires pending verification and contact consent.
+    static func stopReading(slug: String, backend: ModelBackend = .current) {
+        guard teardownDepth == 0, ModelBackend.current == backend else { return }
+        let slug = ConnectorRegistry.canonicalSlug(slug)
+        guard !slug.hasPrefix("direct-") else { return }
+        advanceSourceRevision(slug)
+        let defaults = UserDefaults.standard
+        switch slug {
+        case "gmail": defaults.set(false, forKey: "dbg.run.gmail")
+        case "google-calendar": defaults.set(false, forKey: "dbg.run.calendar")
+        default: ConnectorRegistry.setKBEnabled(slug, false)
+        }
+        for provider in [ModelBackend.chatgpt, .claude] {
+            guard let request = mailCollectionRequest(slug: slug, backend: provider) else { continue }
+            defaults.removeObject(forKey: request.key)
+            collectionJobs[request.key]?.cancel()
+        }
+    }
+
+    @discardableResult
+    private static func advanceSourceRevision(_ slug: String) -> UInt64 {
+        let revision = (sourceRevisions[slug] ?? 0) &+ 1
+        sourceRevisions[slug] = revision
+        for job in verificationJobs.values where job.slug == slug { job.task.cancel() }
+        return revision
+    }
+
     /// Start alongside the first ensuing mailbox read, never from the connector screen.
     /// A missing address remains pending for the next read, including iterative runs. Once
     /// queued by MailAccountCloud, that actor owns upload retries and discovery need not repeat.
@@ -72,12 +125,8 @@ enum HostedConnectorSetup {
         guard let request = mailCollectionRequest(slug: slug, backend: backend),
               let requestID = UserDefaults.standard.string(forKey: request.key),
               collectionJobs[request.key] == nil else { return }
-        let warmup = jobs[backend.rawValue + ":" + slug]
         collectionJobs[request.key] = Task {
             defer { collectionJobs[request.key] = nil }
-            // Fast onboarding may reach processing before its wake prompt finishes. Wait
-            // here in the background, keeping the mailbox's actual read independent.
-            await warmup?.value
             guard !Task.isCancelled, teardownDepth == 0,
                   UserDefaults.standard.string(forKey: request.key) == requestID else { return }
             do {
@@ -111,65 +160,15 @@ enum HostedConnectorSetup {
         return ("connectedEmail.pendingCollection.\(engine.rawValue).\(provider.rawValue)", engine, provider)
     }
 
-    private static func schedule(slug: String, backend: ModelBackend, reconnected: Bool) {
-        let key = backend.rawValue + ":" + slug
-        if jobs[key] != nil {
-            // Coalesce duplicate Done clicks. A later browser reconnect deserves another wake
-            // after any already-running work, since its newly linked state may not exist yet.
-            if reconnected { reconnects.insert(key) }
-            return
-        }
-        jobs[key] = Task {
-            defer { jobs[key] = nil; reconnects.remove(key) }
-            repeat {
-                reconnects.remove(key)
-                await ModelBackend.$runOverride.withValue(backend) {
-                    await warm(slug: slug, backend: backend)
-                }
-            } while !Task.isCancelled && reconnects.contains(key)
-        }
-    }
-
-    private static func warm(slug: String, backend: ModelBackend) async {
-        guard !Task.isCancelled else { return }
-        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("sentient-connector-warm-\(UUID().uuidString)")
-        do {
-            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false,
-                                                    attributes: [.posixPermissions: 0o700])
-            defer { try? FileManager.default.removeItem(at: workspace) }
-            var invocation = CodexCLI.Invocation(prompt: "Hi. Reply with exactly OK. Do not call tools or access any files, messages, calendars or other content.")
-            invocation.feature = "census"
-            invocation.model = .gpt6luna
-            invocation.effort = .low
-            invocation.sandbox = .readOnly
-            invocation.webSearch = false
-            invocation.timeout = 60
-            invocation.cwd = workspace.path
-            if backend == .claude, ConnectorRegistry.server(for: slug)?.claudeServerURL != nil {
-                // Allow the hosted connector to attach, with no connector-tool approval grants.
-                // toolsDisabled would prevent that attachment and defeat this best-effort wake.
-                invocation.mcpAttachServer = slug
-                invocation.connectorOnlyRead = true
-            } else {
-                invocation.includeUserConfig = false
-                // Unknown Claude connectors still get a harmless provider wake. ChatGPT's
-                // hosted apps survive ignore-user-config, as in the existing census warmup.
-                if backend == .claude { invocation.toolsDisabled = true }
-            }
-            _ = try await CodexTrigger.$current.withValue(.probe) {
-                try await FrontierRun.run(invocation)
-            }
-        } catch {
-            if !Task.isCancelled { Log("Hosted connector warmup deferred (\(ErrorLabel(error)))") }
-        }
-    }
-
     /// Stop and drain before reset/uninstall changes connector or contact state. New Done
     /// actions remain suspended through the whole teardown, including its asynchronous steps.
     static func beginTeardown() async {
         teardownDepth += 1
-        reconnects.removeAll()
-        let pending = Array(jobs.values) + Array(collectionJobs.values)
+        generation &+= 1
+        let verifications = verificationJobs.values.map(\.task)
+        for job in verifications { job.cancel() }
+        for job in verifications { _ = await job.value }
+        let pending = Array(collectionJobs.values)
         for job in pending { job.cancel() }
         for job in pending { await job.value }
     }

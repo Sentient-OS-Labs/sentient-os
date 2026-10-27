@@ -34,6 +34,23 @@ nonisolated enum ModelBackend: String, Sendable {
 }
 @MainActor enum ConnectorCensus {
     static var declarations: [(String, ModelBackend, Bool)] = []
+    static var ready: Set<String> = []
+    static var holdVerifications = false
+    static var startedVerifications = 0
+    static var pendingVerifications: [Int: CheckedContinuation<Bool, Never>] = [:]
+    static func isReady(slug: String, backend: ModelBackend) -> Bool { ready.contains(slug) }
+    static func verifyConnection(slug: String, backend: ModelBackend) async -> Bool {
+        startedVerifications += 1
+        guard holdVerifications else { return ready.contains(slug) }
+        let id = startedVerifications
+        // Deliberately return late success even after cancellation. The real coordinator's
+        // consent revision must independently reject this stale network result.
+        return await withCheckedContinuation { pendingVerifications[id] = $0 }
+    }
+    static func finishVerification(_ id: Int, ready: Bool = true) {
+        pendingVerifications.removeValue(forKey: id)!.resume(returning: ready)
+    }
+    static func invalidateReadiness(slug: String, backend: ModelBackend) { ready.remove(slug) }
     static func confirmSelection(slug: String, reconnected: Bool) {
         declarations.append((slug, ModelBackend.current, reconnected))
     }
@@ -100,6 +117,8 @@ enum FixtureFailure: Error { case expected, assertion(String) }
         collectionOutcome = .saved; contactCompletions = 0
         calls = []; contacts = []; ConnectorCensus.declarations = []; UserDefaults.standard.values = [:]
         ModelBackend.selected = .claude
+        ConnectorCensus.ready = []
+        ConnectorCensus.holdVerifications = false; ConnectorCensus.startedVerifications = 0
     }
     static func pending(_ backend: ModelBackend = .claude, _ provider: MailAccount.Provider = .gmail) -> String? {
         UserDefaults.standard.string(forKey: "connectedEmail.pendingCollection.\(backend.rawValue).\(provider.rawValue)")
@@ -128,246 +147,112 @@ enum FixtureFailure: Error { case expected, assertion(String) }
 func ErrorLabel(_ error: Error) -> String { "fixture_error" }
 
 @main struct Main {
-    @MainActor static func main() async {
-        do {
+    @MainActor static func main() async throws {
+        await Fixture.reset()
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "unverified declaration cannot select a source")
+        ConnectorCensus.ready = ["gmail", "google-calendar", "google-drive", "outlook-mail"]
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "verified source can save explicit selection")
+        try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail") && Fixture.pending() != nil,
+                          "verified Done saves source and deferred contact consent")
+        try Fixture.check(Fixture.calls.isEmpty && Fixture.contacts.isEmpty, "Done starts no model warmup or contact read")
+        Fixture.contactBlocked = true
+        HostedConnectorSetup.processingStarted(slug: "gmail")
+        HostedConnectorSetup.processingStarted(slug: "gmail")
+        try await Fixture.wait { Fixture.contacts.count == 1 }
+        try Fixture.check(Fixture.pending() != nil, "actual processing owns one in-flight contact collection")
+        let original = Fixture.pending()
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "new explicit consent remains possible while old contact work drains")
+        let newer = Fixture.pending()
+        Fixture.contactBlocked = false
+        try await Fixture.wait { Fixture.contactCompletions == 1 }
+        try Fixture.check(original != newer && Fixture.pending() == newer, "old collection cannot consume a newer consent token")
+        HostedConnectorSetup.processingStarted(slug: "gmail")
+        try await Fixture.wait { Fixture.pending() == nil }
+        try Fixture.check(Fixture.contacts.count == 2, "next processing run completes deferred newer contact consent")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "google-drive") && UserDefaults.standard.bool(forKey: "mcp.google-drive.kb"), "verified explicit Done enables reviewed source")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "google-calendar") && UserDefaults.standard.bool(forKey: "dbg.calendar.connected"), "verified Calendar preserves production connected key")
+        HostedConnectorSetup.settingsOpened(slug: "gmail")
+        try Fixture.check(!ConnectorCensus.ready.contains("gmail") && UserDefaults.standard.bool(forKey: "dbg.run.gmail"), "reconnect invalidates proof while preserving selected intent")
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "stale readiness cannot be reconfirmed without a native check")
+        ConnectorCensus.ready.insert("gmail")
+        ModelBackend.selected = .chatgpt
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail", backend: .claude), "wrong backend cannot save selection")
+        ModelBackend.selected = .custom
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "custom backend cannot declare a hosted source")
+        ModelBackend.selected = .claude
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "verified declaration remains available after returning to correct backend")
+        Fixture.contactBlocked = true
+        HostedConnectorSetup.processingStarted(slug: "gmail")
+        try await Fixture.wait { Fixture.contacts.count == 3 }
+        await HostedConnectorSetup.beginTeardown()
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "teardown prevents new source or consent writes")
+        HostedConnectorSetup.endTeardown()
+        try Fixture.check(Fixture.pending() != nil && Fixture.contactCompletions == 3, "teardown cancels and drains contact work without losing pending consent")
+        Fixture.contactBlocked = false
+        await Fixture.reset()
+        ConnectorCensus.ready = ["gmail"]
+        _ = HostedConnectorSetup.confirm(slug: "gmail")
+        Fixture.contactBlocked = true
+        HostedConnectorSetup.processingStarted(slug: "gmail")
+        try await Fixture.wait { Fixture.contacts.count == 1 }
+        HostedConnectorSetup.stopReading(slug: "gmail")
+        try await Fixture.wait { Fixture.contactCompletions == 1 }
+        try Fixture.check(Fixture.pending() == nil && !UserDefaults.standard.bool(forKey: "dbg.run.gmail"),
+                          "Stop reading cancels an active deferred contact job and retires its consent")
+        for (slug, key) in [("gmail", "dbg.run.gmail"), ("google-calendar", "dbg.run.calendar"),
+                            ("google-drive", "mcp.google-drive.kb"), ("outlook-mail", "mcp.outlook-mail.kb")] {
             await Fixture.reset()
-            Fixture.blocked = true
-            try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail", backend: .claude), "Done accepted synchronously")
-            try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.gmail.connected") && UserDefaults.standard.bool(forKey: "dbg.run.gmail"), "Gmail connected and selected before warmup")
-            try Fixture.check(Fixture.calls.isEmpty && Fixture.contacts.isEmpty && Fixture.pending() != nil, "Done records durable intent without probing")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail", backend: .claude), "duplicate Done still records declaration")
-            try await Fixture.settle()
-            try Fixture.check(Fixture.calls.count == 1, "duplicate warm jobs coalesce")
-            HostedConnectorSetup.processingStarted(slug: "gmail", backend: .claude)
-            HostedConnectorSetup.processingStarted(slug: "gmail", backend: .claude)
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty && Fixture.pending() != nil, "processing returns immediately while collection waits for warmup")
-            ModelBackend.selected = .chatgpt
-            Fixture.blocked = false
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-            try Fixture.check(Fixture.calls[0].0 == .claude && Fixture.contacts[0].0 == .claude && Fixture.contacts[0].2 == .claude, "warmup and collection retain processing backend after settings switch")
-            try Fixture.check(Fixture.contacts.count == 1 && Fixture.pending() == nil, "coalesced successful collection consumes matching intent")
-            let call = Fixture.calls[0].1
-            try Fixture.check(call.mcpAttachServer == "gmail" && call.connectorOnlyRead && !call.webSearch && call.timeout == 60 && call.prompt.contains("Do not call tools"), "Claude wake uses attachment-only low-cost invocation")
-            try Fixture.check(!FileManager.default.fileExists(atPath: call.cwd!), "warmup workspace removed")
-            let count = ConnectorCensus.declarations.count
-            try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail", backend: .claude) && ConnectorCensus.declarations.count == count, "stale backend cannot confirm")
-            ModelBackend.selected = .custom
-            try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail") && ConnectorCensus.declarations.count == count, "custom backend cannot confirm hosted source")
-
-            await Fixture.reset()
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty && Fixture.pending() != nil, "completed wake alone never collects")
-            // Model quitting after Done: tear down jobs but retain the in-memory disk fixture.
-            await HostedConnectorSetup.beginTeardown(); HostedConnectorSetup.endTeardown()
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-            try Fixture.check(Fixture.pending() == nil && Fixture.contacts.count == 1, "durable intent survives coordinator restart until next processing")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.count == 1, "subsequent reads do not rediscover an already queued address")
-
-            await Fixture.reset()
-            ModelBackend.selected = .chatgpt
-            UserDefaults.standard.set(false, forKey: "mcp.google-drive.kb")
-            try Fixture.check(HostedConnectorSetup.confirm(slug: "google-drive") && UserDefaults.standard.bool(forKey: "mcp.google-drive.kb"), "explicit Done overrides disabled eligible source")
-            try Fixture.check(HostedConnectorSetup.confirm(slug: "google-calendar") && UserDefaults.standard.bool(forKey: "dbg.calendar.connected") && UserDefaults.standard.bool(forKey: "dbg.run.calendar"), "calendar uses production connected and run keys")
-            for slug in ["google-drive", "google-calendar", "outlook-calendar", "direct-synthetic", "unknown", "gmail"] { HostedConnectorSetup.processingStarted(slug: slug) }
-            try await Fixture.wait { Fixture.calls.count == 2 }
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty && !UserDefaults.standard.values.keys.contains(where: { $0.hasPrefix("connectedEmail.") }), "only supported mail sources with disclosed intent can collect")
-            try Fixture.check(Fixture.calls.allSatisfy { $0.0 == .chatgpt && !$0.1.includeUserConfig && !$0.1.toolsDisabled }, "ChatGPT wake keeps hosted apps available without user config")
-
-            await Fixture.reset()
-            try Fixture.check(HostedConnectorSetup.confirm(slug: "outlook-email") && UserDefaults.standard.bool(forKey: "mcp.outlook-mail.kb") && !UserDefaults.standard.bool(forKey: "mcp.outlook-email.kb"), "Outlook Email alias confirms canonical mail source")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty && Fixture.pending(.claude, .outlook) != nil, "Outlook Done only records intent and warms")
-            HostedConnectorSetup.processingStarted(slug: "outlook-email")
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-            try Fixture.check(ConnectorCensus.declarations.first?.0 == "outlook-mail" && Fixture.calls.first?.1.mcpAttachServer == "outlook-mail" && Fixture.contacts.first?.1 == .outlook, "Outlook alias declaration, wake and processing collection share canonical slug")
-
-            for backend in [ModelBackend.chatgpt, .claude] {
-                for (slug, provider) in [("gmail", MailAccount.Provider.gmail), ("outlook-mail", .outlook)] {
-                    await Fixture.reset()
-                    ModelBackend.selected = backend
-                    _ = HostedConnectorSetup.confirm(slug: slug)
-                    HostedConnectorSetup.processingStarted(slug: slug)
-                    try await Fixture.wait { Fixture.contactCompletions == 1 }
-                    let contact = Fixture.contacts[0]
-                    try Fixture.check(contact.0.rawValue == backend.rawValue && contact.1 == provider && contact.2 == backend && Fixture.pending(backend, provider) == nil, "\(backend.rawValue) \(slug) processing collects only its confirmed account provider")
-                }
-            }
-            await Fixture.reset()
-            UserDefaults.standard.set(true, forKey: "dbg.gmail.connected")
-            UserDefaults.standard.set(true, forKey: "dbg.run.gmail")
-            UserDefaults.standard.set(true, forKey: "mcp.outlook-mail.kb")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            HostedConnectorSetup.processingStarted(slug: "outlook-mail")
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty, "pre-existing selected mail sources never imply new contact consent")
-
-            for outcome in [MailAccountCollection.Outcome.noConnection, .noAddress, .pending, .saved] {
-                await Fixture.reset()
-                Fixture.collectionOutcome = outcome
-                _ = HostedConnectorSetup.confirm(slug: "gmail")
-                let request = Fixture.pending()
-                HostedConnectorSetup.processingStarted(slug: "gmail")
-                try await Fixture.wait { Fixture.contactCompletions == 1 }
-                let shouldRetry: Bool
-                switch outcome { case .noConnection, .noAddress: shouldRetry = true; case .pending, .saved: shouldRetry = false }
-                try Fixture.check(shouldRetry ? Fixture.pending() == request : Fixture.pending() == nil, "collection outcome \(outcome) preserves or consumes intent correctly")
-                try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail") && UserDefaults.standard.bool(forKey: "dbg.gmail.connected"), "collection outcome \(outcome) preserves declared source state")
-                Fixture.collectionOutcome = .saved
-                HostedConnectorSetup.processingStarted(slug: "gmail")
-                try await Fixture.settle()
-                try Fixture.check(Fixture.contacts.count == (shouldRetry ? 2 : 1), "collection outcome \(outcome) retries only on next processing when needed")
-            }
-
-            await Fixture.reset()
-            Fixture.failWarm = true; Fixture.failCollect = true
-            try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "Done accepted with downstream failures")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-            try Fixture.check(Fixture.pending() != nil && UserDefaults.standard.bool(forKey: "dbg.run.gmail") && UserDefaults.standard.bool(forKey: "dbg.gmail.connected"), "failed warmup/probe leaves intent and selection for future processing")
-
-            await Fixture.reset()
-            Fixture.blocked = true
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            _ = HostedConnectorSetup.confirm(slug: "gmail", reconnected: true)
-            _ = HostedConnectorSetup.confirm(slug: "gmail", reconnected: true)
-            Fixture.blocked = false
-            try await Fixture.wait { Fixture.calls.count == 2 }
-            try await Fixture.settle()
-            try Fixture.check(Fixture.calls.count == 2 && Fixture.contacts.isEmpty, "reconnect schedules one coalesced wake without collection")
-
-            await Fixture.reset()
-            Fixture.blocked = true
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            let oldRequest = Fixture.pending()
-            _ = HostedConnectorSetup.confirm(slug: "gmail", reconnected: true)
-            let newerRequest = Fixture.pending()
-            Fixture.blocked = false
-            try await Fixture.wait { Fixture.calls.count == 2 }
-            try await Fixture.settle()
-            try Fixture.check(oldRequest != newerRequest && Fixture.pending() == newerRequest && Fixture.contacts.isEmpty, "superseded intent waiting on warmup cannot probe or consume newer request")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-            try Fixture.check(Fixture.pending() == nil, "new intent runs on next processing opportunity")
-
-            await Fixture.reset()
-            Fixture.contactBlocked = true
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contacts.count == 1 }
-            let inFlightRequest = Fixture.pending()
-            _ = HostedConnectorSetup.confirm(slug: "gmail", reconnected: true)
-            let replacementRequest = Fixture.pending()
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            Fixture.contactBlocked = false
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-            try Fixture.check(inFlightRequest != replacementRequest && Fixture.pending() == replacementRequest && Fixture.contacts.count == 1, "in-flight old result cannot consume reconnect intent and duplicate collectors coalesce")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contactCompletions == 2 }
-            try Fixture.check(Fixture.pending() == nil, "replacement intent consumed only by matching new collector")
-
-            await Fixture.reset()
-            Fixture.blocked = true
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            await HostedConnectorSetup.beginTeardown()
-            try Fixture.check(Fixture.contacts.isEmpty && Fixture.pending() != nil, "teardown drains waiting collection without losing unfulfilled intent")
-            try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "teardown refuses new declarations")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            Fixture.blocked = false
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty, "teardown refuses processing-triggered collection")
-            HostedConnectorSetup.endTeardown()
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contactCompletions == 1 }
-
-            await Fixture.reset()
-            Fixture.contactBlocked = true
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.wait { Fixture.contacts.count == 1 }
-            try Fixture.check(Fixture.contactCompletions == 0 && Fixture.pending() != nil, "processing returns while actual address probe is blocked")
-            await HostedConnectorSetup.beginTeardown()
-            try Fixture.check(Fixture.contactCompletions == 1 && Fixture.pending() != nil, "teardown cancels and drains active collector while retaining intent")
-            let contacts = Fixture.contacts.count
-            Fixture.contactBlocked = false
-            HostedConnectorSetup.endTeardown()
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.count == contacts, "drained collector cannot reappear after teardown")
-
-            await Fixture.reset()
-            _ = HostedConnectorSetup.confirm(slug: "gmail")
-            let cancelled = Task { @MainActor in
-                withUnsafeCurrentTask { $0?.cancel() }
-                HostedConnectorSetup.processingStarted(slug: "gmail")
-            }
-            await cancelled.value
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty && Fixture.pending() != nil, "cancelled processing never starts address collection")
-            ModelBackend.selected = .chatgpt
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            ModelBackend.selected = .custom
-            HostedConnectorSetup.processingStarted(slug: "gmail")
-            try await Fixture.settle()
-            try Fixture.check(Fixture.contacts.isEmpty && Fixture.pending() != nil, "another backend and custom models cannot consume provider-specific intent")
-
-            await Fixture.reset()
-            _ = HostedConnectorSetup.confirm(slug: "unknown")
-            try await Fixture.wait { Fixture.calls.count == 1 }
-            try Fixture.check(Fixture.calls[0].1.toolsDisabled && !Fixture.calls[0].1.includeUserConfig, "unknown Claude server uses safe provider wake fallback")
-            try Fixture.check(!HostedConnectorSetup.confirm(slug: "direct-synthetic"), "direct accounts excluded from hosted setup")
-            await Fixture.reset()
-            let defaults = UserDefaults.standard
-            func generation(_ slug: String, _ backend: ModelBackend = .claude) -> Int {
-                defaults.integer(forKey: ConnectorRegistry.readGenerationKey(slug, backend.rawValue))
-            }
-            HostedConnectorSetup.settingsOpened(slug: "gmail")
-            try Fixture.check(generation("gmail") == 0 && defaults.values.isEmpty, "unselected settings opening changes no state")
-            defaults.set(true, forKey: "dbg.run.gmail")
-            HostedConnectorSetup.settingsOpened(slug: "gmail")
-            try Fixture.check(generation("gmail") == 1 && ConnectorCensus.declarations.isEmpty, "selected Gmail requests backfill without needing cached declaration")
-            try Fixture.check(defaults.bool(forKey: "dbg.run.gmail") && !defaults.bool(forKey: "dbg.gmail.connected"), "settings opening preserves selection and connection state")
-            defaults.set(true, forKey: "dbg.run.calendar")
-            HostedConnectorSetup.settingsOpened(slug: "google-calendar")
-            try Fixture.check(generation("google-calendar") == 1, "selected calendar settings uses production generation key")
-            defaults.set(true, forKey: "mcp.google-drive.kb")
-            HostedConnectorSetup.settingsOpened(slug: "google-drive")
-            try Fixture.check(generation("google-drive") == 1, "selected curated hosted source requests backfill")
-            defaults.set(true, forKey: "mcp.outlook-mail.kb")
-            HostedConnectorSetup.settingsOpened(slug: "outlook-email")
-            try Fixture.check(generation("outlook-mail") == 1 && generation("outlook-email") == 0, "Outlook Email settings alias invalidates canonical selected source")
-            defaults.set(true, forKey: "mcp.unknown.kb")
-            HostedConnectorSetup.settingsOpened(slug: "unknown")
-            HostedConnectorSetup.settingsOpened(slug: "direct-synthetic")
-            try Fixture.check(generation("unknown") == 0 && generation("direct-synthetic") == 0, "task-only and direct sources do not invalidate hosted progress")
-            ModelBackend.selected = .chatgpt
-            HostedConnectorSetup.settingsOpened(slug: "gmail", backend: .claude)
-            try Fixture.check(generation("gmail") == 1 && generation("gmail", .chatgpt) == 0, "stale settings provider cannot invalidate progress")
-            ModelBackend.selected = .custom
-            HostedConnectorSetup.settingsOpened(slug: "gmail")
-            try Fixture.check(generation("gmail", .custom) == 0, "custom provider cannot invalidate hosted progress")
-            ModelBackend.selected = .claude
-            await HostedConnectorSetup.beginTeardown()
-            HostedConnectorSetup.settingsOpened(slug: "gmail")
-            HostedConnectorSetup.endTeardown()
-            try Fixture.check(generation("gmail") == 1, "teardown refuses settings invalidation")
-            try await Task.sleep(for: .milliseconds(25))
-            try Fixture.check(Fixture.calls.isEmpty && Fixture.contacts.isEmpty && ConnectorCensus.declarations.isEmpty, "settings opening never starts provider work or records a new declaration")
-            await Fixture.reset()
-            print("RESULT: \(Fixture.passed) checks passed")
-        } catch { print("FAIL: \(error)"); exit(1) }
+            ConnectorCensus.ready = [slug]
+            try Fixture.check(HostedConnectorSetup.confirm(slug: slug), "fixture starts with selected " + slug)
+            ConnectorCensus.holdVerifications = true
+            let pending = Task { await HostedConnectorSetup.verifyAndConfirm(slug: slug) }
+            try await Fixture.wait { ConnectorCensus.pendingVerifications[1] != nil }
+            HostedConnectorSetup.stopReading(slug: slug)
+            try Fixture.check(!UserDefaults.standard.bool(forKey: key), "Stop reading immediately opts out " + slug)
+            ConnectorCensus.finishVerification(1)
+            let accepted = await pending.value
+            try Fixture.check(!accepted && !UserDefaults.standard.bool(forKey: key)
+                              && ConnectorCensus.declarations.count == 1,
+                              "late verification from another window cannot reverse opt-out for " + slug)
+            try Fixture.check(Fixture.pending() == nil && Fixture.pending(.claude, .outlook) == nil,
+                              "opt-out retires pending contact consent for " + slug)
+        }
+        await Fixture.reset()
+        ConnectorCensus.ready = ["gmail", "google-drive"]
+        ConnectorCensus.holdVerifications = true
+        let old = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "gmail") }
+        try await Fixture.wait { ConnectorCensus.pendingVerifications[1] != nil }
+        HostedConnectorSetup.settingsOpened(slug: "gmail")
+        ConnectorCensus.ready.insert("gmail")
+        ConnectorCensus.finishVerification(1)
+        try Fixture.check(!(await old.value) && ConnectorCensus.declarations.isEmpty,
+                          "reconnect in another window invalidates older verification")
+        let first = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "gmail") }
+        try await Fixture.wait { ConnectorCensus.pendingVerifications[2] != nil }
+        let latest = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "gmail") }
+        try await Fixture.wait { ConnectorCensus.pendingVerifications[3] != nil }
+        let unrelated = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "google-drive") }
+        try await Fixture.wait { ConnectorCensus.pendingVerifications[4] != nil }
+        ConnectorCensus.finishVerification(2)
+        ConnectorCensus.finishVerification(3)
+        ConnectorCensus.finishVerification(4)
+        let firstAccepted = await first.value, latestAccepted = await latest.value, unrelatedAccepted = await unrelated.value
+        try Fixture.check(!firstAccepted && latestAccepted && unrelatedAccepted,
+                          "newest Done wins for its source without cancelling another source")
+        try Fixture.check(ConnectorCensus.declarations.count == 2,
+                          "concurrent sources each confirm exactly once")
+        HostedConnectorSetup.stopReading(slug: "gmail", backend: .chatgpt)
+        try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail"),
+                          "a stale provider sheet cannot revoke the current selection")
+        await Fixture.reset()
+        ConnectorCensus.ready = ["outlook-mail"]; ConnectorCensus.holdVerifications = true
+        let alias = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "outlook-email") }
+        try await Fixture.wait { ConnectorCensus.pendingVerifications[1] != nil }
+        HostedConnectorSetup.stopReading(slug: "outlook-mail")
+        ConnectorCensus.finishVerification(1)
+        try Fixture.check(!(await alias.value) && !UserDefaults.standard.bool(forKey: "mcp.outlook-mail.kb"),
+                          "aliases share the canonical source consent revision")
+        print("PASS: \(Fixture.passed) verified setup and deferred-contact checks")
     }
 }
 '''

@@ -304,20 +304,13 @@ enum ConnectorReliabilityTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try "# Synthetic knowledge\nA synthetic project.\n".write(to: root.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [NoNetwork.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        NoNetwork.requests.withLock { $0 = 0 }
-        var missingSamples = false
-        do { _ = try await DoubleTapInference.draft(screenshot: Data([0]), vault: root, session: session) }
-        catch DoubleTapInference.Failure.noWritingStyle { missingSamples = true }
-        try check(missingSamples && NoNetwork.requests.withLock({ $0 }) == 0,
-                  "Double Tap with failed writing setup stops locally before any drafting request")
+        let withoutSamples = try DoubleTapInference.packVault(root)
+        try check(withoutSamples.notes == 1 && withoutSamples.text.contains("Synthetic knowledge"),
+                  "Double Tap packs valid knowledge when optional writing examples are absent")
         try "# Writing samples\nSynthetic sample.\n".write(to: root.appendingPathComponent(WritingStyle.fileName), atomically: true, encoding: .utf8)
         let packed = try DoubleTapInference.packVault(root)
         try check(packed.notes == 1 && packed.text.contains("Synthetic sample."),
-                  "publishing the writing snapshot removes the Double Tap context blocker")
+                  "optional writing samples join the existing knowledge context")
     }
 
     nonisolated private final class NoNetwork: URLProtocol, @unchecked Sendable {

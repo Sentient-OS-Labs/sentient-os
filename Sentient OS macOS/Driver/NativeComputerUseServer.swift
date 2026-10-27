@@ -161,11 +161,11 @@ actor NativeComputerUseServer {
         }
         let automation = await Permissions.nativeAutomationState(ask: false)
         let permissionState = await MainActor.run {
-            let grants = [Permissions.tccState(service: "kTCCServiceAccessibility", clientBundleID: OpenAIComputerUse.bundleID),
-                          Permissions.tccState(service: "kTCCServiceScreenCapture", clientBundleID: OpenAIComputerUse.bundleID)]
-            let missing = !Permissions.hasScreenRecording() || grants.contains(.denied) || grants.contains(.notAsked)
+            NativePermissionCheck.shared.refresh()
+            let grants = NativePermissionCheck.shared.snapshot
+            let missing = !Permissions.hasScreenRecording() || grants.accessibility == .denied || grants.screenRecording == .denied
                 || automation == .denied || automation == .notAsked
-            return (missing: missing, verified: grants.allSatisfy { $0 == .granted } && automation == .granted)
+            return (missing: missing, verified: grants.isReady && automation == .granted)
         }
         guard !permissionState.missing else {
             interaction?.computerUseCheckConsent.invalidate(owner: diagnosticOwner)
@@ -344,6 +344,10 @@ actor NativeComputerUseServer {
             var failure = (error as? NativeComputerUseFailure)
                 ?? .init(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
             failure.actionEffectsUnconfirmed = tool != "list_apps" && !isState
+            if failure.kind == .permission {
+                let permissionFailure = failure
+                await MainActor.run { NativePermissionCheck.shared.invalidate(failure: permissionFailure) }
+            }
             diagnostics.record(.failed, attempt: attempt, failure: failure, fields: fields)
             throw failure
         }

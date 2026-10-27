@@ -13,6 +13,7 @@ struct OnboardingDoubleTapView: View {
     var coordinator: CommandCoordinator?
     let onContinue: () -> Void
     @State var demo = OnboardingDoubleTapDemo()
+    @State var shortcutHint = OnboardingShortcutHint()
     @AppStorage("sidekick.hotkey") private var shortcutRaw = ShortcutPreferences.current.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -54,7 +55,7 @@ struct OnboardingDoubleTapView: View {
                         // so changing samples cannot move the instruction or keyboard below.
                         .frame(height: 440)
 
-                    Text("Double tap your \(shortcut.spokenLabel) key")
+                    OnboardingShortcutInstruction(prefix: "Double tap your ", key: shortcut, suffix: " key", hint: shortcutHint)
                         .font(Self.instructionFont)
                         .foregroundStyle(.white)
                         .opacity(demo.instructionVisible ? (demo.phase == .waiting ? 1 : 0.42) : 0)
@@ -145,9 +146,18 @@ struct OnboardingDoubleTapView: View {
                                    onFocusLost: demo.resetGesture)
             }
         }
+        .background(OnboardingWrongCommandMonitor(hint: shortcutHint,
+            // Waiting is the input boundary. The instruction's opacity changes
+            // in a separate animation transaction as that phase begins.
+            enabled: shortcut == .rightCommand && demo.phase == .waiting,
+            onMistake: demo.resetGesture))
+        .onAppear { shortcutHint.activate() }
         .onChange(of: reduceMotion) { demo.setReduceMotion(reduceMotion) }
-        .onChange(of: shortcutRaw) { demo.resetGesture() }
-        .onDisappear { demo.stop() }
+        .onChange(of: shortcutRaw) { demo.resetGesture(); shortcutHint.clear() }
+        .onChange(of: demo.phase) {
+            if demo.phase != .waiting { shortcutHint.clear() }
+        }
+        .onDisappear { demo.stop(); shortcutHint.deactivate() }
         .preferredColorScheme(.dark)
     }
 
@@ -295,7 +305,8 @@ private struct DemoWindowFlight: GeometryEffect {
     }
 }
 
-/// Reuses the app's modifier monitor; no additional keyboard listener or permission prompt.
+/// Reuses the app's modifier monitor for the correct key. Wrong-side feedback has its
+/// own instruction-scoped local monitor; neither path adds a permission prompt.
 private struct DoubleTapDemoInput: NSViewRepresentable {
     let coordinator: CommandCoordinator
     let onKeyChange: (Bool) -> Void

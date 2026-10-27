@@ -21,6 +21,37 @@ an entire validated snapshot with its coverage checkpoint because events can cha
 | `PipelineActivity.swift` | A tiny "is a run active?" counter (`IterativeRun` and `ProactiveCycle` bump it). Settings disables Reset and Uninstall while it is non-zero; the updater also refuses to relaunch during a run. |
 | `FactoryReset.swift` | The one full wipe shared by Settings → System → Reset and Dev Tools → Reset everything: cycle store, knowledge base folder, proactive traces, counters, cloud copy (best-effort), and the rewind to the start of onboarding. |
 
+## Admission, partial work and the first analysis
+
+`ProcessingRequest.current()` snapshots `SourceSelection.current()` and ready hosted/direct sources.
+It never uses a global Full Disk Access verdict to suppress local sources. First-setup readiness
+requires verified native linked-account/read-tool metadata for hosted sources, rather than a browser
+Done declaration. Existing completed users may still attempt opted-in healthy legacy cache entries
+that predate verification; validated source success establishes readiness and auth failures revoke it. Unavailable selected
+sources are retained as actionable `unavailableSources`, with unavailable provider slugs excluded
+from the proactive tail. A provider switch does not silently convert a saved connection into a
+working connection for the new AI. Saved choices remain available to repair or remove in Knowledge
+Sources, including when that source is unavailable with the current backend.
+
+The first production analysis needs **three ready selected sources**. The coordinator checks this
+at admission, so a source lost after setup cannot bypass the minimum. Completed users can run fewer
+sources. An explicit developer/test request has a nil `readySelectionCount` and deliberately bypasses
+this production minimum. Requests waiting for source recovery remain requested; the existing monitor
+rechecks without launching work or repeatedly emitting diagnostics. Sidekick remains available.
+Cloud-only requests neither resolve nor wait for an on-device model. A request containing local
+adapters waits for that model; direct execution without it produces a failure instead of skipping
+those adapters as though they succeeded.
+
+A read of healthy sources can still build useful partial knowledge when another selected source is
+unavailable. Its checkpointed work and generated knowledge survive. Missing selected chat IDs fail
+with a reselect instruction rather than masquerading as an empty conversation; local discovery
+errors similarly name their source without placing identifiers in diagnostics. Empty but successfully
+read sources remain valid reads. Initial completion additionally requires a nonempty regular
+`README.md` in the knowledge folder: an empty first pass cannot unlock personal features just because
+there were no provider errors. Partial reads, malformed model output, deferred Mail and diagnostic
+failures leave the first-analysis milestone incomplete and explain retry/reselection in the saved
+notice. Once earned, an existing first-analysis milestone survives a later source failure.
+
 ## The data model (`CycleStore`)
 
 Its own on-disk container: `~/Library/Application Support/SentientOS/IterativeCycle.store`. Two models:

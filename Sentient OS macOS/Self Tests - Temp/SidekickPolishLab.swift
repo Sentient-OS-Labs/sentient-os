@@ -1,20 +1,34 @@
 #if DEBUG
 // Targeted native UI checks after SidekickAppLab isolates defaults and support files.
-// Five captures of this process's windows only. No provider, computer-use helper or other app.
+// Captures only this process's windows. No provider, computer-use helper or other app.
 // Doc: ../Documentation - General - Self-Testing (Eval Harness).md
 import AppKit
+import ApplicationServices
 import Foundation
 import ScreenCaptureKit
 import SwiftUI
 import WebKit
 
+// A deliberate headless render surface for the film fixture only. Some remote Mac
+// sessions report every automated window fully occluded. WebKit then correctly pauses
+// rAF. The explicit runner flag supplies visibility to this owned test window; hiding
+// or minimizing it still pauses normally. Production NSWindows are never changed.
+@MainActor private final class FilmFixtureWindow: NSWindow {
+    var rendersWhileOccluded = false
+    override var occlusionState: NSWindow.OcclusionState {
+        rendersWhileOccluded && isVisible && !isMiniaturized
+            ? super.occlusionState.union(.visible) : super.occlusionState
+    }
+}
+
 @MainActor enum SidekickPolishLab {
     enum Failure: String, Error { case isolation, screenLocked, unavailable, capture, accessibility, foreground }
-    private struct Element {
+    struct Element {
         let identifier: String
         let label: String
         let role: String
         let frame: CGRect
+        var enabled: Bool? = nil
     }
     @MainActor private final class MenuObservation {
         var opened = 0
@@ -470,7 +484,14 @@ import WebKit
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: NotchPreferences.clickEnabledKey)
         defaults.set(ShortcutKey.rightCommand.rawValue, forKey: ShortcutPreferences.storageKey)
-        defaults.set("https://sentient-os.ai/onboarding?end=0.707&duration=1&delay=0", forKey: "dev.film.url")
+        var filmOrigin = "https://sentient-os.ai"
+        let originFile = root.appendingPathComponent("onboarding-film-origin.txt")
+        if let candidate = try? String(contentsOf: originFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let url = URL(string: candidate), ["localhost", "127.0.0.1", "sentient-os.ai"].contains(url.host ?? ""),
+           ["http", "https"].contains(url.scheme ?? ""), url.user == nil, url.password == nil {
+            filmOrigin = candidate
+        }
+        defaults.set(filmOrigin + "/onboarding?end=0.707&duration=1&delay=0", forKey: "dev.film.url")
         let coordinator = app.commandCoordinator
         coordinator.run.preventsTaskExecutionForUIFixture = true
         let notch = NotchWindowController(coordinator: coordinator)
@@ -482,19 +503,23 @@ import WebKit
         var completed = false
         defer {
             let manifest: [String: Any] = ["checks": checks, "captures": captures, "completed": completed,
-                "provider_calls": 0, "capture_scope": "current_process_windows_only"]
+                "provider_calls": 0, "capture_scope": "current_process_windows_only",
+                "render_mode": FileManager.default.fileExists(atPath: root.appendingPathComponent("onboarding-offscreen-render").path) ? "controlled-occlusion" : "onscreen"]
             if let data = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: root.appendingPathComponent("invitation-manifest.json"))
             }
             coordinator.disarmOnboardingNotchDemo(); coordinator.dismissTyping(); notch.shutdownForTesting()
         }
         func film() -> AnyView {
-            AnyView(OnboardingFilmView.invitationForTesting().environment(app).preferredColorScheme(.dark))
+            AnyView(OnboardingCanvas(scale: 1) {
+                OnboardingFilmView.invitationForTesting()
+            }.environment(app).environment(\.accessibilityEnabled, true).preferredColorScheme(.dark))
         }
         let host = NSHostingView(rootView: film())
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 680),
+        let window = FilmFixtureWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 680),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Sidekick onboarding · isolated preview"
+        window.rendersWhileOccluded = FileManager.default.fileExists(atPath: root.appendingPathComponent("onboarding-offscreen-render").path)
         window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = host; window.center()
         defer { window.close() }
@@ -520,6 +545,18 @@ import WebKit
                 if probe(host) != nil { try await settle(500); return }
                 try await settle(400)
             }
+            func findWeb(_ view: NSView) -> WKWebView? {
+                if let web = view as? WKWebView { return web }
+                return view.subviews.lazy.compactMap { findWeb($0) }.first
+            }
+            if let web = findWeb(host) {
+                let diagnostic = try? await web.evaluateJavaScript("JSON.stringify({visibility:document.visibilityState,url:location.href,scroll:scrollY,height:innerHeight,film:document.querySelector('main > section')?.offsetHeight,autopilot:typeof window.__sentientAutopilot,body:document.body.innerText.slice(0,300)})")
+                Log("Invitation film diagnostic: \(String(describing: diagnostic))")
+                Log("Invitation native geometry: host=\(host.frame), web=\(web.frame), hidden=\(web.isHiddenOrHasHiddenAncestor), alpha=\(web.alphaValue), visible=\(web.visibleRect), windowVisible=\(window.isVisible), occlusion=\(window.occlusionState.rawValue)")
+                var parent: NSView? = web
+                while let current = parent { Log("Invitation ancestor: \(type(of: current)) frame=\(current.frame) hidden=\(current.isHidden) alpha=\(current.alphaValue)"); parent = current.superview }
+            }
+            _ = try? await capture(host, name: "invitation-failure", directory: directory)
             throw Failure.unavailable
         }
         try await reveal()
@@ -577,6 +614,56 @@ import WebKit
                 && placement.minY + 8 == button.maxY + 12
         }
 
+        // Wrong-side feedback uses actual local NSEvents in this owned window.
+        // The events never enter the global keyboard stream or any other application.
+        func hintProbe(_ view: NSView) -> OnboardingWrongCommandMonitor.Probe? {
+            if let found = view as? OnboardingWrongCommandMonitor.Probe { return found }
+            return view.subviews.lazy.compactMap { hintProbe($0) }.first
+        }
+        func modifier(_ down: Bool) throws {
+            let flags = down ? NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.command.rawValue
+                | UInt(ShortcutKey.leftCommand.deviceBit)) : []
+            guard let event = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+                keyCode: ShortcutKey.leftCommand.keyCode) else { throw Failure.accessibility }
+            NSApp.postEvent(event, atStart: false)
+        }
+        func leftCommandTap() async throws {
+            try modifier(true); try await settle(45); try modifier(false); try await settle(45)
+        }
+        guard let sidekickHint = hintProbe(host) else { throw Failure.unavailable }
+        try await leftCommandTap()
+        checks["wrong_command_lights_sidekick_instruction"] = sidekickHint.hint.isActive
+            && sidekickHint.hint.pulseCount == 1 && coordinator.onboardingDemoArmed && !coordinator.run.isRunning
+        try await settle(350)
+        captures.append(try await capture(host, name: "shortcut-sidekick-glow", directory: directory))
+        try await settle(900)
+        checks["sidekick_correction_expires"] = !sidekickHint.hint.isActive
+        let beforeChord = sidekickHint.hint.pulseCount
+        try modifier(true); try await settle(30)
+        guard let chord = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 8) else { throw Failure.accessibility }
+        NSApp.postEvent(chord, atStart: false); try await settle(30); try modifier(false); try await settle(80)
+        checks["modified_key_does_not_flash_correction"] = sidekickHint.hint.pulseCount == beforeChord
+        ShortcutPreferences.setRecording(true)
+        try await leftCommandTap()
+        checks["recording_does_not_flash_correction"] = sidekickHint.hint.pulseCount == beforeChord
+        ShortcutPreferences.setRecording(false)
+        try await leftCommandTap()
+        let beforeFocusChange = sidekickHint.hint.pulseCount
+        try modifier(true); try await settle(30)
+        let other = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 120, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        other.title = "Owned focus check"
+        other.makeKeyAndOrderFront(nil); try await settle(80)
+        checks["focus_loss_clears_correction"] = !sidekickHint.hint.isActive
+        try modifier(false); try await settle(50)
+        checks["another_window_cannot_trigger_correction"] = sidekickHint.hint.pulseCount == beforeFocusChange
+        other.close(); try await reveal()
+
         // Exercise the keyboard fallback in the same native film, including compact layout.
         defaults.set(false, forKey: NotchPreferences.clickEnabledKey)
         NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
@@ -602,6 +689,112 @@ import WebKit
         checks["key_opens_actual_notch_demo"] = coordinator.phase == .typing && notch.panelForTesting?.isVisible == true
         checks["instruction_yields_when_notch_opens"] = !elements(host).contains { $0.label == "Press right Command" }
         checks["no_real_task_started"] = !coordinator.run.isRunning
+        window.setContentSize(CGSize(width: 1100, height: 760))
+        window.center()
+        let firstTaskBefore = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey)
+        for _ in 0..<400 {
+            if coordinator.run.isRunning && coordinator.run.isDemo { break }
+            try await settle(10)
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        checks["demo_starts_with_computer_use_caption"] = coordinator.run.statusLine == "Starting computer use…"
+        for _ in 0..<150 {
+            if coordinator.run.onboardingDemoBeat != .read { break }
+            try await settle(10)
+        }
+        let startingDuration = ProcessInfo.processInfo.systemUptime - startedAt
+        Log("Restaurant starting caption duration: \(startingDuration)")
+        checks["starting_caption_lasts_half_a_second"] = (0.35...0.68).contains(startingDuration)
+            && coordinator.run.onboardingDemoBeat == .remember
+        func waitForBeat(_ beat: OnboardingRestaurantStory.Beat) async throws {
+            for _ in 0..<150 {
+                if let current = coordinator.run.onboardingDemoBeat, current.index >= beat.index { return }
+                try await settle(200)
+            }
+            throw Failure.unavailable
+        }
+        for (beat, name) in [(OnboardingRestaurantStory.Beat.remember, "restaurant-05-remembering"),
+                             (.time, "restaurant-06-booking"), (.confirmed, "restaurant-07-confirmed"),
+                             (.done, "restaurant-08-replied")] {
+            try await waitForBeat(beat)
+            try await settle(beat == .remember ? 950 : 350)
+            checks["film_narrates_" + beat.rawValue] = (coordinator.run.onboardingDemoBeat?.index ?? -1) >= beat.index
+            if beat == .remember { checks["native_remembering_is_weekend_plan"] = coordinator.run.remembering == "Weekend plan" }
+            if let panel = notch.panelForTesting, let screen = window.screen {
+                captures.append(try await captureDisplay(windows: [window, panel], screen: screen, name: name, directory: directory))
+            } else { throw Failure.unavailable }
+        }
+        checks["scripted_run_finishes_without_provider"] = coordinator.run.isDemo && !coordinator.run.isRunning
+            && coordinator.run.interaction == nil
+        checks["demo_does_not_claim_first_successful_task"] = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey) == firstTaskBefore
+        coordinator.run.advanceOnboardingDemo(.read)
+        checks["late_film_message_cannot_restart_run"] = !coordinator.run.isRunning && coordinator.run.onboardingDemoBeat == .done
+        coordinator.run.startOnboardingDemo()
+        coordinator.run.advanceOnboardingDemo(.remember)
+        coordinator.disarmOnboardingNotchDemo()
+        checks["leaving_film_cancels_demo_and_memory"] = !coordinator.run.isRunning && coordinator.run.remembering == nil
+        checks["sidekick_hint_monitor_detaches"] = !sidekickHint.isMonitoring && !sidekickHint.hint.acceptsInput
+
+        func waitButton(_ label: String) async throws -> Element {
+            for _ in 0..<100 {
+                if let button = elements(host, maximumDepth: 80).first(where: {
+                    $0.label == label && $0.role == NSAccessibility.Role.button.rawValue && $0.frame.width > 0
+                }) { return button }
+                _ = await activateOwnAccessibility()
+                try await settle(80)
+            }
+            throw Failure.accessibility
+        }
+        func click(_ label: String) async throws {
+            let button = try await waitButton(label)
+            try postClick(window: window, screenPoint: CGPoint(x: button.frame.midX, y: button.frame.midY))
+            try await settle(100)
+        }
+        window.setContentSize(CGSize(width: 1180, height: 880)); window.center()
+        try await click("Continue")
+        // Both real Double Tap samples use the same correction. Wrong taps cannot
+        // draft or advance either sample; ordinary clicks still complete the lesson.
+        for (index, name) in ["shortcut-double-tap-email-glow", "shortcut-double-tap-messages-glow"].enumerated() {
+            _ = try await waitButton("right Command key")
+            var currentHint: OnboardingWrongCommandMonitor.Probe?
+            for _ in 0..<60 {
+                if let found = hintProbe(host), found.isMonitoring, found.hint.acceptsInput { currentHint = found; break }
+                try await settle(60)
+            }
+            guard let currentHint else {
+                func logHints(_ view: NSView) {
+                    if let probe = view as? OnboardingWrongCommandMonitor.Probe {
+                        Log("Hint probe: monitoring=\(probe.isMonitoring), accepts=\(probe.hint.acceptsInput), active=\(probe.hint.isActive), window=\(String(describing: probe.window?.title))")
+                    }
+                    view.subviews.forEach(logHints)
+                }
+                logHints(host)
+                Log("Double Tap hint AX: \(elements(host, maximumDepth: 80).map(\.label))")
+                _ = try? await capture(host, name: "shortcut-hint-failure", directory: directory)
+                throw Failure.unavailable
+            }
+            let before = currentHint.hint.pulseCount
+            try await leftCommandTap(); try await leftCommandTap()
+            checks["wrong_double_tap_only_hints_\(index)"] = currentHint.hint.isActive
+                && currentHint.hint.pulseCount == before + 1
+            try await settle(280)
+            captures.append(try await capture(host, name: name, directory: directory))
+            try await settle(900)
+            checks["double_tap_hint_expires_\(index)"] = !currentHint.hint.isActive
+            let button = try await waitButton("right Command key")
+            let point = CGPoint(x: button.frame.midX, y: button.frame.midY)
+            try postClick(window: window, screenPoint: point)
+            try await settle(80)
+            try postClick(window: window, screenPoint: point)
+            try await settle(120)
+            checks["correction_stops_during_drafting_\(index)"] = !currentHint.isMonitoring
+            let count = currentHint.hint.pulseCount
+            try await leftCommandTap()
+            checks["drafting_ignores_wrong_key_\(index)"] = currentHint.hint.pulseCount == count
+            if index == 0 { try await click("Next: iMessage demo") }
+        }
+        _ = try await waitButton("Continue")
+        checks["double_tap_completes_after_correct_input"] = true
         completed = true
         return checks
     }
@@ -696,7 +889,7 @@ import WebKit
             setViewport(OnboardingWindowLayout.initialSize(visibleSize: visibleSize))
             host.rootView = AnyView(ZStack {
                 Color.black.ignoresSafeArea()
-                OnboardingCanvas(scale: scale) { OnboardingView(onFinished: { _ in }) }
+                OnboardingCanvas(scale: scale) { OnboardingView(onFinished: {}) }
             }.environment(app).id("film-\(index)").preferredColorScheme(.dark))
             window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             var ready = false
@@ -819,7 +1012,7 @@ import WebKit
         return checks
     }
 
-    private static func postClick(window: NSWindow, screenPoint: CGPoint) throws {
+    static func postClick(window: NSWindow, screenPoint: CGPoint) throws {
         let point = window.convertPoint(fromScreen: screenPoint)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
@@ -846,35 +1039,78 @@ import WebKit
                 demoText: phase == .typing ? "Help me with this" : nil, metrics: metrics)
         }.environment(\.colorScheme, .dark))
     }
-    private static func settle(_ milliseconds: Int) async throws {
+    static func settle(_ milliseconds: Int) async throws {
         await Task.yield(); try await Task.sleep(for: .milliseconds(milliseconds))
     }
-    private static func elements(_ view: NSView) -> [Element] {
+    /// SwiftUI exposes semantic nodes lazily when a real assistive client reads them.
+    /// Query only our process through the public AX API, off-main so AppKit can answer.
+    /// Include scroll contents/visible children: warming only the native window/footer can
+    /// otherwise leave a newly attached sheet's choice buttons as in-process AXUnknown nodes.
+    static func activateOwnAccessibility() async -> Int {
+        let pid = getpid()
+        return await Task.detached(priority: .userInitiated) {
+            let application = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(application, 0.15)
+            var raw: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &raw)
+            guard result == .success, let windows = raw as? [AXUIElement] else { return Int(result.rawValue) }
+            let deadline = Date().addingTimeInterval(3)
+            var pending = windows, visited: [AXUIElement] = []
+            var index = 0
+            while index < pending.count, visited.count < 192, Date() < deadline {
+                let node = pending[index]; index += 1
+                guard !visited.contains(where: { CFEqual($0, node) }) else { continue }
+                visited.append(node)
+                AXUIElementSetMessagingTimeout(node, 0.15)
+                for attribute in [kAXRoleAttribute, kAXIdentifierAttribute] {
+                    var value: CFTypeRef?
+                    _ = AXUIElementCopyAttributeValue(node, attribute as CFString, &value)
+                }
+                for attribute in [kAXChildrenAttribute, kAXContentsAttribute, kAXVisibleChildrenAttribute] {
+                    guard Date() < deadline else { break }
+                    var children: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(node, attribute as CFString, &children) == .success,
+                       let values = children as? [AXUIElement] {
+                        pending.append(contentsOf: values.prefix(32))
+                    }
+                }
+            }
+            return Int(result.rawValue)
+        }.value
+    }
+
+    static func elements(_ view: NSView, maximumDepth: Int = 35) -> [Element] {
         var result: [Element] = []
         var visited = Set<ObjectIdentifier>()
         func text(_ value: Any?) -> String? {
             let value = (value as? NSAttributedString)?.string ?? (value as? String)
             return value?.isEmpty == false ? value : nil
         }
+        func enabled(_ value: Any) -> Bool? {
+            guard let node = value as? NSObject,
+                  node.responds(to: NSSelectorFromString("isAccessibilityEnabled"))
+                    || node.responds(to: NSSelectorFromString("accessibilityEnabled")) else { return nil }
+            return node.value(forKey: "accessibilityEnabled") as? Bool
+        }
         @MainActor func walk(_ value: Any, depth: Int) {
-            guard depth < 35, result.count < 3000 else { return }
+            guard depth < maximumDepth, result.count < 6000 else { return }
             let identity = ObjectIdentifier(value as AnyObject)
             guard visited.insert(identity).inserted else { return }
             var children: [Any] = []
             if let node = value as? NSView {
                 result.append(Element(identifier: node.accessibilityIdentifier(),
                     label: text(node.accessibilityLabel()) ?? text(node.accessibilityTitle()) ?? text(node.accessibilityValue()) ?? "",
-                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame()))
+                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame(), enabled: enabled(node)))
                 children = (node.accessibilityChildren() ?? []) + node.subviews
             } else if let node = value as? NSAccessibilityElement {
                 result.append(Element(identifier: node.accessibilityIdentifier() ?? "",
                     label: text(node.accessibilityLabel()) ?? text(node.accessibilityTitle()) ?? text(node.accessibilityValue()) ?? "",
-                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame()))
+                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame(), enabled: enabled(node)))
                 children = node.accessibilityChildren() ?? []
             } else if let node = value as? any NSAccessibilityProtocol {
                 result.append(Element(identifier: node.accessibilityIdentifier() ?? "",
                     label: text(node.accessibilityLabel()) ?? text(node.accessibilityTitle()) ?? text(node.accessibilityValue()) ?? "",
-                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame()))
+                    role: node.accessibilityRole()?.rawValue ?? "", frame: node.accessibilityFrame(), enabled: enabled(node)))
                 children = node.accessibilityChildren() ?? []
             } else if let node = value as? NSObject {
                 // SwiftUI AccessibilityNode implements AppKit's informal getters without
@@ -882,10 +1118,13 @@ import WebKit
                 func attribute(_ key: String) -> Any? {
                     node.responds(to: NSSelectorFromString(key)) ? node.value(forKey: key) : nil
                 }
-                guard let frame = attribute("accessibilityFrame") as? NSValue else { return }
-                result.append(Element(identifier: text(attribute("accessibilityIdentifier")) ?? "",
-                    label: text(attribute("accessibilityLabel")) ?? text(attribute("accessibilityTitle")) ?? text(attribute("accessibilityValue")) ?? "",
-                    role: text(attribute("accessibilityRole")) ?? "", frame: frame.rectValue))
+                if let frame = attribute("accessibilityFrame") as? NSValue {
+                    result.append(Element(identifier: text(attribute("accessibilityIdentifier")) ?? "",
+                        label: text(attribute("accessibilityLabel")) ?? text(attribute("accessibilityTitle")) ?? text(attribute("accessibilityValue")) ?? "",
+                        role: text(attribute("accessibilityRole")) ?? "", frame: frame.rectValue, enabled: enabled(node)))
+                }
+                // Some SwiftUI container nodes expose children without their own frame.
+                // They are transparent to navigation, not the end of the accessibility tree.
                 children = attribute("accessibilityChildren") as? [Any] ?? []
             }
             for child in children { walk(child, depth: depth + 1) }
@@ -916,7 +1155,7 @@ import WebKit
         try await settle(300)
         return observation.opened > 0
     }
-    private static func capture(_ view: NSView, name: String, directory: URL, includingChild: NSWindow? = nil) async throws -> [String: Any] {
+    static func capture(_ view: NSView, name: String, directory: URL, includingChild: NSWindow? = nil) async throws -> [String: Any] {
         guard let window = view.window, window.isVisible else { throw Failure.capture }
         view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
         let content = try await SCShareableContent.currentProcess

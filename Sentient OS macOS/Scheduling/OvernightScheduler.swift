@@ -36,17 +36,18 @@ final class OvernightScheduler {
     private var processing: ProcessingCoordinator { .shared }
 
     var isEnabled: Bool {
-        guard !processing.isSuspended, UserDefaults.standard.bool(forKey: AppState.onboardingKey) else { return false }
+        guard !processing.isSuspended, UserDefaults.standard.bool(forKey: AppState.onboardingKey),
+              PersonalSetupProgress.isComplete() || processing.hasPendingFirstNight else { return false }
         return UserDefaults.standard.bool(forKey: Self.enabledKey)
             || (UserDefaults.standard.bool(forKey: Self.prodEnabledKey) && !CodexAuth.knowledgeBaseOnly)
             || processing.hasPendingFirstNight
     }
 
-    /// Called at setup completion and launch. No delay, implicit helper install, or login prompt.
+    /// Called only after an explicit overnight choice. No implicit helper install or login prompt.
     /// Existing deliberately disabled schedulers stay disabled; first-night intent is separate.
     func enableAfterSetup() {
         let d = UserDefaults.standard
-        guard d.bool(forKey: AppState.onboardingKey) else { return }
+        guard d.bool(forKey: AppState.onboardingKey), PersonalSetupProgress.isComplete() else { return }
         if !d.bool(forKey: Self.setupEnabledKey) {
             if !d.bool(forKey: Self.autoEnableFiredKey),
                d.object(forKey: Self.prodEnabledKey) == nil, !CodexAuth.knowledgeBaseOnly {

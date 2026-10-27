@@ -263,18 +263,24 @@ actor ProactiveCycle {
     /// knowledge base, which is what lets the first build run it alongside itself. Silent on the
     /// takeover, and best-effort like the welcome gift: a failure never discards a completed
     /// knowledge base; it is logged, and the absent file keeps the home's setup eligible to retry.
-    static func collectWritingStyle() async -> String? {
-        let initial = await MainActor.run { ProcessingPlan.initialCompletedAt() == nil }
+    @MainActor static func collectWritingStyle() async -> String? {
+        let initial = ProcessingPlan.initialCompletedAt() == nil
         guard initial, !WritingStyle.exists() else { return nil }
-        do { return try await WritingStyle.collect() }
-        catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
+        // Samples are optional. Retain their own diagnostics without marking the required
+        // analysis operation failed when this independent enrichment cannot be collected.
+        return await Diagnostics.$current.withValue(nil) {
+            do { return try await WritingStyle.collect() }
+            catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
+        }
     }
 
     /// Land collected samples in the knowledge base, which exists by the time this is called.
     @MainActor static func publishWritingStyle(_ content: String?) {
         guard !Task.isCancelled, let content else { return }
-        do { try WritingStyle.publishIfNeeded(content) }
-        catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
+        Diagnostics.$current.withValue(nil) {
+            do { try WritingStyle.publishIfNeeded(content) }
+            catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
+        }
     }
 
     /// The one shape every catch site shares: classify the failure, persist the caution on the

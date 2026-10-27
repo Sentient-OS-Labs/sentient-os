@@ -10,12 +10,18 @@ struct ComputerUseGateView: View {
     let gate: ComputerUseGate
 
     var body: some View {
-        PermissionSetupView(title: "Allow the permissions needed to control your computer",
-                            continueTitle: continueTitle, canContinue: gate.allRequiredGranted,
+        PermissionSetupView(title: gate.showingVoiceRepair ? "Set up voice input" : "Allow Sidekick to use your computer",
+                            continueTitle: continueTitle, canContinue: gate.showingVoiceRepair || gate.allRequiredGranted,
                             onContinue: gate.continueNow) {
-            SentientPermissionRows(gate: gate)
-
-            SettingsGroup(label: "Sidekick") {
+            if !gate.showingVoiceRepair {
+                SentientPermissionRows(gate: gate)
+                if !gate.sentientScreen, SafeAppRelaunch.shared.canRelaunchPermissionWait {
+                    SettingsProse("If macOS asks you to restart, keep this request as a draft. Send it again after relaunching.")
+                    SettingsPillButton(title: "Save request & relaunch") { _ = SafeAppRelaunch.shared.relaunchPermissionWait() }
+                }
+                if let failure = SafeAppRelaunch.shared.failure { SettingsProse(failure) }
+            }
+            if gate.showingVoiceRepair { SettingsGroup(label: "Voice input") {
                 StatusLine(title: "Microphone & Speech",
                            health: gate.micSpeech == .granted ? .ok : .warn,   // optional — amber, never blocking
                            note: micSpeechNote,
@@ -23,7 +29,7 @@ struct ComputerUseGateView: View {
                            fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
                     fixMicSpeech()
                 }
-            }
+            } }
         }
         .task {
             while !Task.isCancelled {
@@ -39,6 +45,7 @@ struct ComputerUseGateView: View {
     // MARK: Sentient's grants — native prompts first, the guide as the fallback
 
     private var continueTitle: String {
+        if gate.showingVoiceRepair { return "Done" }
         if gate.allRequiredGranted { return "Continue" }
         if gate.backend == .openAI {
             return gate.checkingAutomation ? "Checking computer use…" : "Finish setup to continue"
@@ -49,7 +56,7 @@ struct ComputerUseGateView: View {
     private var micSpeechNote: String {
         switch gate.micSpeech {
         case .granted:  return "granted"
-        case .notAsked: return "recommended"
+        case .notAsked: return "not requested"
         case .denied:   return "off"
         }
     }
@@ -111,23 +118,30 @@ struct NativeComputerUsePermissionRows: View {
         case .unavailable: return "not checked"
         }
     }
+    private func note(_ state: NativePermissionReadiness.State) -> String {
+        switch state {
+        case .verified: "verified"
+        case .denied: "not allowed"
+        case .unknown: "not checked"
+        }
+    }
     var body: some View {
         SettingsGroup(label: formStyle ? "Computer use" : "Computer Use") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Accessibility",
-                           health: gate.helperAccessibility ? .ok : .bad,
-                           note: gate.helperAccessibility ? "granted" : "not granted",
+                           health: gate.helperAccessibility ? .ok : .warn,
+                           note: note(gate.helperPermissionState.accessibility),
                            tip: "Allows clicking and typing in your apps.",
-                           fixTitle: "Allow…",
+                           fixTitle: "Open Settings",
                            fix: !gate.setup.ready || gate.helperAccessibility ? nil : {
                     PermissionGuide.shared.guide(.accessibility, dragging: OpenAIComputerUse.appURL)
                 })
                 if formStyle { SettingsHairline(opacity: 0.10) }
                 StatusLine(title: "Screen Recording",
-                           health: gate.helperScreen ? .ok : .bad,
-                           note: gate.helperScreen ? "granted" : "not granted",
+                           health: gate.helperScreen ? .ok : (gate.helperPermissionState.screenRecording == .denied ? .bad : .warn),
+                           note: note(gate.helperPermissionState.screenRecording),
                            tip: "Allows computer use to see the app it is working in.",
-                           fixTitle: "Allow…",
+                           fixTitle: "Open Settings",
                            fix: !gate.setup.ready || gate.helperScreen ? nil : {
                     PermissionGuide.shared.guide(.screenRecording, dragging: OpenAIComputerUse.appURL)
                 })
@@ -158,6 +172,12 @@ struct NativeComputerUsePermissionRows: View {
                     }
                 } else if gate.setup.ready, gate.checkingAutomation, gate.automation != .granted {
                     SettingsProse("Checking permissions…")
+                }
+                if gate.setup.ready, gate.automation == .granted, !gate.helperPermissionState.isReady,
+                   gate.nativePermissionError == nil, !gate.requestingAutomation {
+                    SettingsProse("Already allowed these permissions? Check them using a temporary Sentient window. Full Disk Access is not needed.")
+                    SettingsPillButton(title: "Check computer use") { gate.requestAutomation() }
+                        .disabled(gate.checkingAutomation)
                 }
             }
         }
