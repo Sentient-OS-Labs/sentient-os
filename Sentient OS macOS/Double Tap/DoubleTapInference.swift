@@ -482,6 +482,7 @@ enum DoubleTapInference {
         }
         for rel in paths {
             guard let content = try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8) else { skipped += 1; continue }
+            guard content.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil else { continue }
             let chunk = "# \(rel)\n\(content)\n\n"
             if packed.bytes + chunk.utf8.count > notesBudget { packed.truncated = true; continue }
             packed.text += chunk
