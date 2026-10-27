@@ -31,7 +31,10 @@ import Foundation
 
 enum Verdict { case survivor, junk }
 enum CodexTrigger { case onboarding, analyzeNow, overnight }
-struct CycleFailure: Error, Equatable {}
+struct CycleFailure: Error, Equatable {
+    enum Stage { case vault, deciding, preparing }
+    var stage: Stage = .vault
+}
 protocol Connector {}
 struct FixtureConnector: Connector {}
 struct RunSource {
@@ -212,17 +215,53 @@ checks = r'''
         check(!coordinator.initialComplete, "empty README cannot certify initial knowledge")
         try "# Synthetic user context".write(to: root.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
         coordinator.finish(partial, request: cloud)
-        check(!coordinator.initialComplete && coordinator.record.notice?.contains("iMessage") == true,
-              "partial source failures remain actionable even after useful knowledge was saved")
+        check(coordinator.initialComplete && ProcessingPlan.initialCompletedAt(defaults) != nil
+            && coordinator.record.notice?.contains("iMessage") == true,
+              "useful knowledge completes initial setup on the first pass while source failures remain actionable")
+        let firstPassMilestone = ProcessingPlan.initialCompletedAt(defaults)
         coordinator.finish(empty, request: cloud)
-        check(coordinator.initialComplete && ProcessingPlan.initialCompletedAt(defaults) != nil,
-              "successful retry with actual knowledge completes the initial milestone")
+        check(coordinator.initialComplete && ProcessingPlan.initialCompletedAt(defaults) == firstPassMilestone,
+              "one-second no-work retry cannot be needed to create or replace the initial milestone")
         let milestone = ProcessingPlan.initialCompletedAt(defaults)
         coordinator.finish(partial, request: tooFew)
         check(coordinator.initialComplete && ProcessingPlan.initialCompletedAt(defaults) == milestone,
               "later permission loss preserves the existing completion milestone and retry notice")
         var parseFailure = RunProgress(); parseFailure.parseFailures = 1
         check(!ProcessingRun.Result(progress: parseFailure).complete, "malformed output cannot masquerade as completed analysis")
+        func resetMilestone() {
+            defaults.removeObject(forKey: ProcessingPlan.initialCompletedKey)
+            coordinator.initialComplete = false
+        }
+        for progress in [parseFailure, { var p = RunProgress(); p.failed = 1; p.extractionFailed = 1; return p }(),
+                         { var p = RunProgress(); p.mailDeferred = 1; p.mailIncomplete = true; return p }()] {
+            resetMilestone()
+            coordinator.finish(.init(progress: progress), request: cloud)
+            check(coordinator.initialComplete && coordinator.record.notice != nil,
+                  "skipped items or deferred Mail cannot withhold already-published personal knowledge")
+        }
+        resetMilestone()
+        coordinator.finish(.init(progress: RunProgress(), hadDiagnostics: true), request: cloud)
+        check(coordinator.initialComplete, "diagnostic warnings cannot veto a usable published knowledge base")
+        for stage in [CycleFailure.Stage.deciding, .preparing] {
+            resetMilestone()
+            coordinator.finish(.init(progress: RunProgress(), failure: CycleFailure(stage: stage)), request: cloud)
+            check(coordinator.initialComplete && coordinator.record.status == .failed,
+                  "later proactive failure preserves knowledge readiness and still reports its own failure")
+        }
+        resetMilestone()
+        coordinator.finish(.init(progress: RunProgress(), failure: CycleFailure(stage: .vault)), request: cloud)
+        check(!coordinator.initialComplete && coordinator.record.status == .failed,
+              "failed knowledge publication never certifies the first analysis")
+        var diskFull = RunProgress(); diskFull.diskFull = true
+        coordinator.finish(.init(progress: diskFull), request: cloud)
+        check(!coordinator.initialComplete && coordinator.state == .diskFull,
+              "storage failure still blocks initial completion")
+        var localOnly = cloud; localOnly.fullCycle = false
+        coordinator.finish(empty, request: localOnly)
+        check(!coordinator.initialComplete, "local-only developer pass cannot certify a full analysis")
+        try " \n\t".write(to: root.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        coordinator.finish(empty, request: cloud)
+        check(!coordinator.initialComplete, "whitespace placeholder does not certify personal knowledge")
         try ChatSelectionReadError.validate(selected: [], available: [])
         try ChatSelectionReadError.validate(selected: ["kept"], available: ["kept", "other"])
         var missing = false

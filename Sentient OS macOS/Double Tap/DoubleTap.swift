@@ -9,12 +9,13 @@
 //  field (pasteboard + ⌘V, the user's clipboard put back after). A screenshot that isn't an email
 //  or message reply box pastes nothing. Nothing about a run ever shows on the notch: the feedback
 //  is the light at the caret (CaretSwirl, placed by CaretLocator) that gathers while the reply is
-//  drafted and blooms as the text lands, then the paste itself; the log plus Dev Tools' timing
-//  readout carry the rest.
+//  drafted and blooms as the text lands, then the paste itself. Missing personal setup gets a
+//  short mouse-following explanation after the swirl; other failures go to the log and Dev Tools.
 //
 //  On by default: an unset `doubletap.enabled` means on, so a fresh install and a Release build
-//  (which has no Dev Tools) enable Double Tap after the first analysis completes; Dev Tools keeps a dev-only off switch, the
-//  route picker, and the timing readout. The key listener and the two-presses-in-a-window test
+//  (which has no Dev Tools) enable Double Tap after analysis or with an imported knowledge base;
+//  Dev Tools keeps a dev-only off switch, the route picker, and the timing readout.
+//  The key listener and the two-presses-in-a-window test
 //  live in CommandCoordinator: one press opens the notch, a second inside `window` retracts it and
 //  fires this instead of the type field (the notch waits out the window before becoming key, so
 //  the ⌘V lands in the user's own box). The run stays outside the coordinator's one-task lock, so
@@ -41,9 +42,12 @@ final class DoubleTap {
         UserDefaults.standard.object(forKey: enabledKey) == nil || UserDefaults.standard.bool(forKey: enabledKey)
     }
 
-    /// Keep this separate from the preference: an early double tap must be consumed silently,
-    /// rather than falling back to Sidekick. The persisted milestone also survives relaunch.
+    /// The analysis milestone stays truthful even when an imported vault enables drafting.
     static var initialAnalysisComplete: Bool { ProcessingPlan.initialCompletedAt() != nil }
+
+    static var isReady: Bool {
+        initialAnalysisComplete || DoubleTapKnowledge.hasContent(in: VaultGenerator.vaultRoot)
+    }
 
     /// Screenshots are shrunk to this long edge before upload; a model downscales past ~2000 px
     /// anyway, so a full Retina frame only costs upload time.
@@ -63,6 +67,7 @@ final class DoubleTap {
     private var phase: Diagnostics.Phase = .capture
     private var diagnosticReason: String?
     private let swirl = CaretSwirl()
+    private let setupNotice = DoubleTapSetupNotice()
 
     /// True from the second tap until the paste (or the fade). CommandCoordinator swallows every
     /// Sidekick press meanwhile: a stray third tap must never open the type field, which would take
@@ -73,8 +78,8 @@ final class DoubleTap {
     /// flight is ignored rather than restarted: cancelling the first run would fade the ring the
     /// second one just started, and the paste would arrive twice.
     func start(completion: @escaping @MainActor (Result) -> Void) {
-        guard Self.initialAnalysisComplete else { completion(.stopped); return }
         guard task == nil else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
+        guard Self.isReady else { showSetupRequired(completion: completion); return }
         let provider = DoubleTapProvider.current
         let runID = DiagnosticHistory.begin(.doubleTap, provider: provider.rawValue,
                                              model: provider == .sentient ? nil : provider.model)
@@ -122,6 +127,31 @@ final class DoubleTap {
     }
 
     func cancel() { task?.cancel() }
+
+    /// A recognized gesture always gets feedback, even before personal setup. Keep the same
+    /// task lock as drafting so further taps cannot open Sidekick or stack notices. No capture,
+    /// permission prompt, provider request or paste happens on this path.
+    private func showSetupRequired(completion: @escaping @MainActor (Result) -> Void) {
+        lastReport = DoubleTapSetupNotice.message
+        task = Task { [self] in
+            defer {
+                swirl.dissolve()
+                setupNotice.dismiss()
+                task = nil
+                completion(.stopped)
+            }
+            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                swirl.begin(at: CaretLocator.locate())
+                do {
+                    try await Task.sleep(for: .milliseconds(650))
+                    swirl.dissolve()
+                    try await Task.sleep(for: .seconds(SwirlMath.dissolveDuration))
+                } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            await setupNotice.show()
+        }
+    }
 
     private func perform() async -> Result {
         if let problem = DoubleTapInference.configurationProblem {

@@ -96,7 +96,9 @@ final class ProcessingCoordinator {
         case .preparing: return "Building your knowledge"
         case .stopping: return "Pausing analysis safely"
         case .paused: return "Analysis paused"
-        case .completed: return record.notice == nil ? "Analysis complete" : "Analysis needs attention"
+        case .completed:
+            if record.notice == nil { return "Analysis complete" }
+            return initialComplete ? "Knowledge ready · some sources need attention" : "Analysis needs attention"
         case .diskFull: return "Analysis needs disk space"
         case .failed: return "Analysis needs attention"
         }
@@ -345,9 +347,15 @@ final class ProcessingCoordinator {
             if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .stopped, reason: "paused") }
             return
         }
-        // A successful empty source read is valid, but it cannot unlock personal features
-        // before any knowledge exists. Existing completed users keep their milestone.
+        // A successful empty source read is valid. Initial readiness belongs to the published
+        // knowledge, not a perfect score across every source/item/diagnostic or proactive task.
+        // A retry with no new work must not be needed to unlock knowledge already saved here.
+        // Cancellation was handled above; failed publication and disk-full remain hard failures.
         let knowledgeReady = Self.knowledgeExists(in: VaultGenerator.vaultRoot)
+        if request.fullCycle && knowledgeReady && !result.progress.diskFull && result.failure?.stage != .vault {
+            ProcessingPlan.completeInitial(defaults)
+            initialComplete = true
+        }
         let complete = result.complete && (initialComplete || !request.fullCycle || knowledgeReady)
         if result.progress.diskFull {
             state = .diskFull; record.status = .failed
@@ -358,10 +366,6 @@ final class ProcessingCoordinator {
             record.notice = "Analysis needs attention. Your progress is saved."
         } else {
             state = .completed; record.status = .completed
-            if request.fullCycle && complete {
-                ProcessingPlan.completeInitial(defaults)
-                initialComplete = true
-            }
             if complete { record.notice = nil }
             else if !result.progress.sourceReadFailures.isEmpty {
                 let names = result.progress.sourceReadFailures.keys.sorted().prefix(3).joined(separator: ", ")
@@ -380,7 +384,7 @@ final class ProcessingCoordinator {
             if complete { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
         }
         if scheduled && !initialComplete {
-            // A partial first night remains pending even for knowledge-base-only users.
+            // Keep the first night pending only while it has not produced usable knowledge.
             record.status = .scheduled
             record.due = OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes)
         }
@@ -391,7 +395,9 @@ final class ProcessingCoordinator {
     private static func knowledgeExists(in root: URL) -> Bool {
         let readme = root.appendingPathComponent("README.md")
         guard let values = try? readme.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) else { return false }
-        return values.isRegularFile == true && values.isSymbolicLink != true && (values.fileSize ?? 0) > 0
+        guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0,
+              let content = try? String(contentsOf: readme, encoding: .utf8) else { return false }
+        return content.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
     }
 
     private func execute(_ request: ProcessingRequest, scheduled: Bool, id: UUID,

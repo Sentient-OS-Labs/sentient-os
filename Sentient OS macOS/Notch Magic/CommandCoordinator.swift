@@ -331,7 +331,7 @@ final class CommandCoordinator {
         guard !ShortcutPreferences.isRecording, doubleTapDemoKeyChanged == nil,
               !DoubleTap.shared.isDrafting else { return }
         guard key == ShortcutPreferences.current else { return }
-        if run.recovery.isPending, DoubleTap.initialAnalysisComplete {
+        if run.recovery.isPending, DoubleTap.isReady {
             handleSingleTap(activity: activity, waitForDoubleTap: false)
             return
         }
@@ -345,7 +345,6 @@ final class CommandCoordinator {
             if hotkeyPair.register(key, at: time, activity: activity, window: DoubleTap.window,
                                    lastInputTime: ShortcutActivity.lastInputTime) {
                 pendingSingleTap?.cancel(); pendingSingleTap = nil
-                guard DoubleTap.initialAnalysisComplete else { interruptHotkeyGesture(); return }
                 guard !interceptForOnboarding() else { return }
                 fireDoubleTap()
                 return
@@ -354,8 +353,8 @@ final class CommandCoordinator {
             hotkeyPair.reset()
         }
         pendingSingleTap?.cancel(); pendingSingleTap = nil
-        if DoubleTap.isEnabled && !DoubleTap.initialAnalysisComplete {
-            // Wait before any notch reveal, notice or setup check. Two early taps do nothing;
+        if DoubleTap.isEnabled && !DoubleTap.isReady {
+            // Wait before any notch reveal or setup check. Two early taps show cursor feedback;
             // one still opens Sidekick after the same gesture window as a completed install.
             let token = phaseToken
             pendingSingleTap = Task { [weak self] in
@@ -474,10 +473,10 @@ final class CommandCoordinator {
 
     // MARK: Double Tap (DoubleTap.swift)
 
-    /// The second press landed: draft the reply, silently. Double Tap never shows on the notch and
+    /// The second press landed: draft the reply or explain missing setup at the cursor. Double Tap never shows on the notch and
     /// never takes the one-task lock, so it runs beside computer use and beside whatever the notch
-    /// is doing; its only outcome is the paste (or nothing), and the log and Dev Tools' timing
-    /// readout carry the rest. From `.opening` (the idle path, where the first press already passed
+    /// is doing; drafting ends with the paste (or nothing), and the log and Dev Tools' timing
+    /// readout carry failures. From `.opening` (the idle path, where the first press already passed
     /// the onboarding, plan, and permission doors) the reveal retracts first; from a running task
     /// the notch is left exactly as it was.
     private func fireDoubleTap() {
@@ -485,7 +484,7 @@ final class CommandCoordinator {
         // Never paste into the Sidekick field or disturb an active voice capture.
         guard phase != .typing, phase != .listening, phase != .transcribing else { return }
         if phase == .opening { setPhase(.hidden) }
-        Log("⌘⌘ double tap → drafting a reply" + (run.isRunning ? " (beside the running task)" : ""))
+        Log("⌘⌘ double tap → checking readiness" + (run.isRunning ? " (beside the running task)" : ""))
         DoubleTap.shared.start { result in
             switch result {
             case .pasted:          Log("⌘⌘ reply pasted")
