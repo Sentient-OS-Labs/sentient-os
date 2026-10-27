@@ -100,6 +100,7 @@ nonisolated enum DependencyDownload {
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture.unused.helper"
     enum RuntimeError: Error { case helperRunning }
+    static func stopOwnedHelper(allowForce: Bool) async throws { fatalError("No helper execution") }
     static func validate(at url: URL) async throws -> Bool { fatalError("No helper execution") }
 }
 nonisolated enum CustomProvider { static let apiKeyEnvName = "SENTIENT_MODEL_API_KEY"; static let apiKeyEnvValue = "fixture-custom-only" }
@@ -267,55 +268,56 @@ case "$*" in
 esac
 '''
 
-with tempfile.TemporaryDirectory(prefix='sentient-private-runtime-') as directory:
-    root = Path(directory)
-    package = root / 'package'
-    (package / 'bin').mkdir(parents=True)
-    (package / 'bin/codex').write_text(SHELL)
-    (package / 'bin/codex').chmod(0o755)
-    (package / 'codex-package.json').write_text(json.dumps({'version': '0.160.0', 'target': 'fixture'}))
-    archives = root / 'archives'
-    archives.mkdir()
-    archive = archives / 'fixture-cli.tar.gz'
-    with tarfile.open(archive, 'w:gz') as tar:
-        for relative in ['bin/codex', 'codex-package.json']:
-            tar.add(package / relative, arcname=relative)
-    files = [dict(path=str(path.relative_to(package)), bytes=path.stat().st_size,
-                  sha256=hashlib.sha256(path.read_bytes()).hexdigest(), executable=bool(path.stat().st_mode & 0o111))
-             for path in sorted(package.rglob('*')) if path.is_file()]
-    cli_manifest = dict(version='0.160.0', filename=archive.name, sha256=hashlib.sha256(archive.read_bytes()).hexdigest(), bytes=archive.stat().st_size, files=files)
-    manifest = root / 'manifest.json'
-    manifest.write_text(json.dumps(dict(target='fixture', cli=cli_manifest, helper=cli_manifest, helperBuild=1)))
-    fixture = root / 'Fixture.swift'
-    fixture.write_text(FIXTURE + '\n' + production)
-    binary = root / 'checks'
-    subprocess.run(['xcrun', 'swiftc', '-DDEBUG', '-swift-version', '6', '-parse-as-library',
-                    str(APP / 'Cloud/CodexRuntime.swift'), str(APP / 'Cloud/CodexRuntimeInstall.swift'),
-                    str(fixture), '-o', str(binary)], check=True)
-    total_checks = 1  # Release artifact selection below.
-    for scenario in ['normal', 'auth-link', 'auth-fifo', 'home-link', 'root-link', 'plugin-link', 'plugin-cache-link', 'marker-link', 'marker-fifo', 'modified-cli', 'cli-link', 'cli-directory-link', 'manifest-link', 'bad-archive']:
-        base = root / scenario
-        base.mkdir()
-        env = dict(PATH='/usr/bin:/bin:/usr/sbin:/sbin', FIXTURE_BASE=str(base), FIXTURE_SCENARIO=scenario,
-                   SENTIENT_CODEX_MANIFEST=str(manifest), SENTIENT_CODEX_ARCHIVE_DIR=str(archives),
-                   HOME=str(base / 'standalone'), CODEX_HOME=str(base / 'standalone/.codex'),
-                   CODEX_CLI_PATH=str(base / 'standalone/.codex/packages/standalone/current/bin/codex'),
-                   SENTIENT_CODEX_MIGRATION_SOURCE=str(base / 'standalone/.codex'))
-        if scenario == 'bad-archive':
-            bad = base / 'archives'
-            bad.mkdir()
-            (bad / archive.name).write_text('wrong bytes')
-            env['SENTIENT_CODEX_ARCHIVE_DIR'] = str(bad)
-        result = subprocess.run([str(binary)], env=env, cwd=base, timeout=30, capture_output=True, text=True)
-        print(result.stdout, end='', flush=True)
-        if result.returncode:
-            print(result.stderr, end='', flush=True)
-        result.check_returncode()
-        total_checks += int(result.stdout.split('Checked ')[-1].split()[0])
-    # Release artifact selection must ignore the DEBUG local-archive knob.
-    release_probe = root / 'ReleaseProbe.swift'
-    release_probe.write_text('import Foundation\nextension URL { static var sentientSupport: URL { fatalError() } }\n@main struct Probe { static func main() { let artifact = CodexRuntime.Artifact(version: "fixture", filename: "fixture.tar.gz", sha256: "", bytes: 0, files: []); precondition(artifact.url.absoluteString == "https://sentient-downloads.sentient-doubletap-relay.workers.dev/releases/fixture.tar.gz"); print("PASS release: approved Cloudflare artifact source only") } }')
-    release_binary = root / 'release-check'
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(APP / 'Cloud/CodexRuntime.swift'), str(release_probe), '-o', str(release_binary)], check=True)
-    subprocess.run([str(release_binary)], env=dict(PATH='/usr/bin:/bin', SENTIENT_CODEX_ARCHIVE_DIR=str(archives)), check=True, timeout=10)
-    print(f'Checked {total_checks} private runtime assertions; failures=0')
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory(prefix='sentient-private-runtime-') as directory:
+        root = Path(directory)
+        package = root / 'package'
+        (package / 'bin').mkdir(parents=True)
+        (package / 'bin/codex').write_text(SHELL)
+        (package / 'bin/codex').chmod(0o755)
+        (package / 'codex-package.json').write_text(json.dumps({'version': '0.160.0', 'target': 'fixture'}))
+        archives = root / 'archives'
+        archives.mkdir()
+        archive = archives / 'fixture-cli.tar.gz'
+        with tarfile.open(archive, 'w:gz') as tar:
+            for relative in ['bin/codex', 'codex-package.json']:
+                tar.add(package / relative, arcname=relative)
+        files = [dict(path=str(path.relative_to(package)), bytes=path.stat().st_size,
+                      sha256=hashlib.sha256(path.read_bytes()).hexdigest(), executable=bool(path.stat().st_mode & 0o111))
+                 for path in sorted(package.rglob('*')) if path.is_file()]
+        cli_manifest = dict(version='0.160.0', filename=archive.name, sha256=hashlib.sha256(archive.read_bytes()).hexdigest(), bytes=archive.stat().st_size, files=files)
+        manifest = root / 'manifest.json'
+        manifest.write_text(json.dumps(dict(target='fixture', cli=cli_manifest, helper=cli_manifest, helperBuild=1)))
+        fixture = root / 'Fixture.swift'
+        fixture.write_text(FIXTURE + '\n' + production)
+        binary = root / 'checks'
+        subprocess.run(['xcrun', 'swiftc', '-DDEBUG', '-swift-version', '6', '-parse-as-library',
+                        str(APP / 'Cloud/CodexRuntime.swift'), str(APP / 'Cloud/CodexRuntimeInstall.swift'),
+                        str(fixture), '-o', str(binary)], check=True)
+        total_checks = 1  # Release artifact selection below.
+        for scenario in ['normal', 'auth-link', 'auth-fifo', 'home-link', 'root-link', 'plugin-link', 'plugin-cache-link', 'marker-link', 'marker-fifo', 'modified-cli', 'cli-link', 'cli-directory-link', 'manifest-link', 'bad-archive']:
+            base = root / scenario
+            base.mkdir()
+            env = dict(PATH='/usr/bin:/bin:/usr/sbin:/sbin', FIXTURE_BASE=str(base), FIXTURE_SCENARIO=scenario,
+                       SENTIENT_CODEX_MANIFEST=str(manifest), SENTIENT_CODEX_ARCHIVE_DIR=str(archives),
+                       HOME=str(base / 'standalone'), CODEX_HOME=str(base / 'standalone/.codex'),
+                       CODEX_CLI_PATH=str(base / 'standalone/.codex/packages/standalone/current/bin/codex'),
+                       SENTIENT_CODEX_MIGRATION_SOURCE=str(base / 'standalone/.codex'))
+            if scenario == 'bad-archive':
+                bad = base / 'archives'
+                bad.mkdir()
+                (bad / archive.name).write_text('wrong bytes')
+                env['SENTIENT_CODEX_ARCHIVE_DIR'] = str(bad)
+            result = subprocess.run([str(binary)], env=env, cwd=base, timeout=30, capture_output=True, text=True)
+            print(result.stdout, end='', flush=True)
+            if result.returncode:
+                print(result.stderr, end='', flush=True)
+            result.check_returncode()
+            total_checks += int(result.stdout.split('Checked ')[-1].split()[0])
+        # Release artifact selection must ignore the DEBUG local-archive knob.
+        release_probe = root / 'ReleaseProbe.swift'
+        release_probe.write_text('import Foundation\nextension URL { static var sentientSupport: URL { fatalError() } }\n@main struct Probe { static func main() { let artifact = CodexRuntime.Artifact(version: "fixture", filename: "fixture.tar.gz", sha256: "", bytes: 0, files: []); precondition(artifact.url.absoluteString == "https://sentient-downloads.sentient-doubletap-relay.workers.dev/releases/fixture.tar.gz"); print("PASS release: approved Cloudflare artifact source only") } }')
+        release_binary = root / 'release-check'
+        subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(APP / 'Cloud/CodexRuntime.swift'), str(release_probe), '-o', str(release_binary)], check=True)
+        subprocess.run([str(release_binary)], env=dict(PATH='/usr/bin:/bin', SENTIENT_CODEX_ARCHIVE_DIR=str(archives)), check=True, timeout=10)
+        print(f'Checked {total_checks} private runtime assertions; failures=0')

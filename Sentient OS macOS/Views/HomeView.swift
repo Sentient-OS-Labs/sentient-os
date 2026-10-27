@@ -1003,10 +1003,12 @@ struct HomeView: View {
             if !kbOnly {
                 if needsPersonalSetup && !inConversation {
                     HomeSidekickSuggestions { prompt in
-                        guard !appState.commandCoordinator.run.isRunning, !appState.commandCoordinator.run.recovery.isPending else { return }
+                        guard !appState.commandCoordinator.run.isRunning, !appState.commandCoordinator.run.recovery.isPending else { return false }
                         conversation.draft = prompt
                         composerFocusRequest &+= 1
+                        return true
                     }
+                    .disabled(appState.commandCoordinator.run.isRunning || appState.commandCoordinator.run.recovery.isPending)
                     .frame(maxWidth: 744)
                 }
                 SidekickComposer(coordinator: appState.commandCoordinator, presentation: presentation,

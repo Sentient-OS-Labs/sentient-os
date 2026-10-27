@@ -201,21 +201,22 @@ nonisolated enum OpenAIComputerUse {
         }
     }
 
-    /// Uninstall stops only the helper launched from Sentient's directory.
-    @MainActor static func stopOwnedHelper() async throws {
+    /// Stops only Sentient's helper. Updates hold the exclusive runtime lease and allow
+    /// graceful exit only; uninstall can also force a stuck owned helper to exit.
+    @MainActor static func stopOwnedHelper(allowForce: Bool = true) async throws {
         // Compare the owned path itself. Resolving a replaced app symlink could make a
         // standalone helper appear to be ours and terminate another application's process.
         let ownedURL = CodexRuntime.helper.standardizedFileURL
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter {
             $0.bundleURL?.standardizedFileURL == ownedURL
         }
-        try await terminateHelpers(running, failure: .helperRunning)
+        try await terminateHelpers(running, failure: .helperRunning, allowForce: allowForce)
     }
 
     /// Takeover uses the same force-quit as Activity Monitor. Uninstall still prefers a
     /// graceful exit. Both wait for process death before letting a replacement launch.
     @MainActor private static func terminateHelpers(_ running: [NSRunningApplication], failure: RuntimeError,
-                                                   forceImmediately: Bool = false) async throws {
+                                                   forceImmediately: Bool = false, allowForce: Bool = true) async throws {
         try Task.checkCancellation()
         if !forceImmediately {
             for app in running where !app.isTerminated { app.terminate() }
@@ -225,6 +226,7 @@ nonisolated enum OpenAIComputerUse {
             }
         }
         try Task.checkCancellation()
+        guard allowForce else { throw failure }
         for app in running where !app.isTerminated { app.forceTerminate() }
         for _ in 0..<20 {
             if running.allSatisfy(\.isTerminated) { return }

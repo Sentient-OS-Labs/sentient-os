@@ -110,7 +110,7 @@ import SwiftUI
             let content = window.convertToScreen(host.convert(host.bounds, to: nil))
             let ids = ["personalSetup.finish", "sidekick.composer"]
                 + HomePersonalFeature.allCases.map { "personalSetup.feature." + $0.rawValue }
-                + HomeSidekickSuggestions.suggestions.map { "sidekick.suggestion." + $0.id }
+                + HomeSidekickSuggestions.initialSuggestions.map { "sidekick.suggestion." + $0.id }
             checks[name + "_all_controls_fit"] = ids.allSatisfy { identifier in
                 nodes.contains { $0.identifier == identifier && $0.frame.width > 0 && content.insetBy(dx: -1, dy: -1).contains($0.frame) }
             }
@@ -118,7 +118,7 @@ import SwiftUI
                let lastFeature = find("personalSetup.feature.sidekick") {
                 checks[name + "_setup_below_rewards"] = finish.frame.maxY < lastFeature.frame.minY
                 checks[name + "_workspace_left_of_setup"] = composer.frame.maxX < finish.frame.minX
-                checks[name + "_suggestions_above_composer"] = HomeSidekickSuggestions.suggestions.allSatisfy {
+                checks[name + "_suggestions_above_composer"] = HomeSidekickSuggestions.initialSuggestions.allSatisfy {
                     find("sidekick.suggestion." + $0.id).map { $0.frame.minY > composer.frame.maxY } == true
                 }
             }
@@ -261,12 +261,50 @@ import SwiftUI
             && !app.hasCompletedPersonalSetup && !app.hasCompletedFirstSidekickTask
             && !run.isRunning && run.interaction == nil && !app.processing.isBusy
 
-        for suggestion in HomeSidekickSuggestions.suggestions {
-            try await click("sidekick.suggestion." + suggestion.id)
-            let sequence = try store.latestSequence
-            checks[suggestion.id + "_fills_existing_draft"] = conversation.draft == suggestion.prompt
-            checks[suggestion.id + "_never_submits"] = !run.isRunning && run.interaction == nil && sequence == baseline
+        // Click all six real starters, including both reserve entries. The other three
+        // slots must keep their IDs and frames; no task or personal setup may start.
+        let rotation = [("subscriptions", "trip"), ("followups", "catchup"),
+                        ("purchase", "subscriptions"), ("meeting", "followups"),
+                        ("trip", "purchase"), ("catchup", "meeting")]
+        func visibleSuggestions() -> [SidekickPolishLab.Element] {
+            elements().filter { $0.identifier.hasPrefix("sidekick.suggestion.") && $0.frame.width > 0 && $0.frame.height > 0 }
         }
+        checks["wide_suggestions_fit_one_row"] = Set(visibleSuggestions().map { $0.frame.midY }).count == 1
+        checks["suggestions_start_with_exactly_four"] = Set(visibleSuggestions().map(\.identifier))
+            == Set(HomeSidekickSuggestions.initialSuggestions.map { "sidekick.suggestion." + $0.id })
+        for (selectedID, replacementID) in rotation {
+            guard let suggestion = HomeSidekickSuggestions.suggestions.first(where: { $0.id == selectedID }),
+                  let oldButton = find("sidekick.suggestion." + selectedID) else { throw Failure.accessibility }
+            let neighbors = visibleSuggestions().filter { $0.identifier != oldButton.identifier }
+            // A longer draft can grow the composer and shift the entire row upwards.
+            // Compare within the suggestion group, not against the desktop origin.
+            let oldOrigin = visibleSuggestions().map { $0.frame.minY }.min() ?? 0
+            try await click(oldButton.identifier)
+            let newOrigin = visibleSuggestions().map { $0.frame.minY }.min() ?? 0
+            let sequence = try store.latestSequence
+            checks[selectedID + "_fills_existing_draft"] = conversation.draft == suggestion.prompt
+            checks[selectedID + "_never_submits"] = !run.isRunning && run.interaction == nil && sequence == baseline
+            checks[selectedID + "_replaced_in_same_slot"] = find("sidekick.suggestion." + replacementID).map {
+                abs($0.frame.midX - oldButton.frame.midX) < 1
+                    && abs(($0.frame.midY - newOrigin) - (oldButton.frame.midY - oldOrigin)) < 1
+            } == true && find(oldButton.identifier) == nil
+            checks[selectedID + "_keeps_three_neighbors"] = neighbors.count == 3 && neighbors.allSatisfy { old in
+                find(old.identifier).map {
+                    $0.frame.offsetBy(dx: 0, dy: -newOrigin) == old.frame.offsetBy(dx: 0, dy: -oldOrigin)
+                } == true
+            }
+            let visible = visibleSuggestions()
+            checks[selectedID + "_keeps_four_unique_suggestions"] = visible.count == 4
+                && Set(visible.map(\.identifier)).count == 4
+            if selectedID == "followups" { try await capture("personal-setup-suggestions-rotated") }
+        }
+        host.rootView = home(reducedMotion: true); try await settle()
+        try await click("sidekick.suggestion.purchase")
+        checks["reduced_motion_suggestions_still_rotate"] = find("sidekick.suggestion.trip") != nil
+            && find("sidekick.suggestion.purchase") == nil
+            && conversation.draft == HomeSidekickSuggestions.suggestions.first { $0.id == "purchase" }?.prompt
+            && !run.isRunning
+        host.rootView = home(); try await settle()
         let draft = conversation.draft
         try await click("personalSetup.finish")
         checks["finish_setup_only_calls_flow"] = finishRequests == 1 && !app.processing.isBusy
@@ -337,7 +375,7 @@ import SwiftUI
         app.hasCompletedOnboarding = true // the model step admits Home; normal startup stays off in this fixture
         host.rootView = home()
         try await settle(450)
-        checks["reset_then_home_shows_all_suggestions"] = HomeSidekickSuggestions.suggestions.allSatisfy {
+        checks["reset_then_home_shows_all_suggestions"] = HomeSidekickSuggestions.initialSuggestions.allSatisfy {
             find("sidekick.suggestion." + $0.id) != nil
         }
         checks["first_home_has_empty_history"] = conversation.messages.isEmpty && conversation.draft.isEmpty
@@ -354,7 +392,7 @@ import SwiftUI
         }
         checks["personal_setup_never_starts_analysis"] = !app.processing.isBusy && !app.processing.initialComplete
         checks["saved_instructions_preserved"] = try SidekickInstructionStore.read().text == memory
-        checks["expected_owned_window_captures"] = captures.count == (presentationCapture ? 19 : 10)
+        checks["expected_owned_window_captures"] = captures.count == (presentationCapture ? 20 : 11)
         completed = true; phase = "complete"
         return checks
     }

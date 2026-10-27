@@ -83,6 +83,10 @@ nonisolated enum CodexRuntimeInstall {
         let runtimeLock = try CodexRuntime.FileLock(CodexRuntime.root.appendingPathComponent(".runtime.lock"), exclusive: true)
         defer { runtimeLock.unlock() }
         if component == .helper {
+            // A previous app build can leave its idle helper alive across relaunch. Only
+            // after verifying its replacement and excluding live tasks may we stop our
+            // helper. Refusal or a concurrent relaunch leaves the installed bundle intact.
+            try await OpenAIComputerUse.stopOwnedHelper(allowForce: false)
             let running = await MainActor.run {
                 NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID).contains {
                     $0.bundleURL?.standardizedFileURL == destination.standardizedFileURL
@@ -91,6 +95,7 @@ nonisolated enum CodexRuntimeInstall {
             }
             guard !running else { throw OpenAIComputerUse.RuntimeError.helperRunning }
         }
+        try Task.checkCancellation()
         let existed = fm.fileExists(atPath: destination.path)
         onLine("Finishing setup…")
         try publish(candidate: candidate, destination: destination, replacing: existed)

@@ -47,7 +47,7 @@ def main() -> int:
         receipt = app.run_stage(executable, root, fixture, runtime, "ui-personal-setup", 180 if args.manual_review else 90)
         manifest = app.read_json(root / "personal-setup-manifest.json")
         captures = manifest.get("captures", [])
-        app.require(manifest.get("completed") is True and len(captures) == (19 if args.presentation_capture else 10)
+        app.require(manifest.get("completed") is True and len(captures) == (20 if args.presentation_capture else 11)
                     and manifest.get("provider_calls") == 0, "Incomplete native fixture")
         app.require(manifest.get("capture_scope") == "current_process_windows_only", "Unexpected screenshot scope")
         for capture in captures:
