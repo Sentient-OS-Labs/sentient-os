@@ -111,10 +111,9 @@ nonisolated final class SidekickInteraction: Sendable {
         fields["has_error"] = String(error != nil)
         let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action"
             : (["final_failure", "expired"].contains(stage) ? "ui_outcome" : "model_report")
-        CrashReporting.captureEvent("sidekick.recovery", level: .info,
-            tags: ["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
-                   "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"], extra: fields,
-            fingerprint: ["sidekick.recovery", stage], cooldown: 0, includeInformational: true)
+        fields.merge(["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
+                      "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"]) { _, value in value }
+        CrashReporting.diagnosticBreadcrumb("sidekick.recovery", data: fields)
     }
 
     func updateInstructions(_ review: SidekickPersonalization.Review) async throws -> String {

@@ -18,9 +18,11 @@ struct OvernightSetupRequirements: View {
                            note: loginOn ? "on" : (loginNeedsApproval ? "approval needed" : "off"),
                            tip: "Keeps Sentient available in your menu bar after you log in.",
                            fixTitle: loginNeedsApproval ? "Approve…" : "Turn on") {
-                    LoginItem.enableOrRequestApproval()
-                    refresh()
-                    if LoginItem.needsApproval { PermissionGuide.shared.guide(.loginItems, dragging: nil) }
+                    Task {
+                        await LoginItem.enableOrRequestApproval()
+                        refresh()
+                        if LoginItem.needsApproval { PermissionGuide.shared.guide(.loginItems, dragging: nil) }
+                    }
                 }
             }
             if !ready {
@@ -34,8 +36,10 @@ struct OvernightSetupRequirements: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
     }
     private func refresh() {
-        loginOn = LoginItem.isEnabled
-        loginNeedsApproval = LoginItem.needsApproval
-        Task { await wakeSetup.refresh() }
+        Task {
+            loginOn = await LoginItem.refresh()
+            loginNeedsApproval = LoginItem.needsApproval
+            await wakeSetup.refresh()
+        }
     }
 }

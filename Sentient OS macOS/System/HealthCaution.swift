@@ -180,7 +180,7 @@ enum HealthCaution {
         if overnight {
             // Actual reachability is the scheduler's ground truth, rather than a file existing.
             wakeReady = await WakeHelperClient.shared.isReachable()
-            loginEnabled = LoginItem.isEnabled
+            loginEnabled = await LoginItem.refresh()
         }
         let missing = permissionRequirements(unreadableSources: unreadable, overnightRequested: overnight,
                                              wakeReady: wakeReady, loginEnabled: loginEnabled)

@@ -137,7 +137,7 @@ nonisolated enum CrashReporting {
             // should report. Auto session tracking is deliberately OFF: release-health sessions
             // are a "how many people use Sentient" signal, and ALL usage counting belongs to the
             // ANALYTICS toggle (TelemetryDeck), never the crash toggle.
-            options.enableAppHangTracking = true
+            options.enableAppHangTracking = role == .app
             options.appHangTimeoutInterval = 10
             options.enableAutoSessionTracking = false
 
@@ -152,8 +152,13 @@ nonisolated enum CrashReporting {
             options.environment = "release"
 
             // PII backstop (defense in depth — clean-at-source is the primary defense): scrub free
-            // text on both outgoing events and Log()-fed breadcrumbs, on the SDK's transport thread.
-            options.beforeSend = { event in diagnosticsEnabled ? scrub(event) : nil }
+            // text on both outgoing events and Log()-fed breadcrumbs before transport.
+            options.beforeSend = { event in
+                guard diagnosticsEnabled,
+                      let retained = SentryHangPolicy.apply(event, identity: role.rawValue + ":" + installID,
+                                                            release: reportingRelease) else { return nil }
+                return scrub(retained)
+            }
             options.beforeBreadcrumb = { crumb in
                 guard diagnosticsEnabled else { return nil }
                 crumb.message = crumb.message.map(scrub(text:))
@@ -199,16 +204,25 @@ nonisolated enum CrashReporting {
                                          cooldown: TimeInterval = 900,
                                          includeInformational: Bool = false,
                                          affectsOperation: Bool = true) {
-        guard level != .info || includeInformational else { return } // opt in for diagnostic blockers, never usage
+        // Informational observations stay in the bounded breadcrumb trail, not the error quota.
+        if level == .info {
+            if includeInformational { diagnosticBreadcrumb(message, data: tags.merging(extra) { _, value in value }) }
+            return
+        }
         let key = Diagnostics.repeatKey(event: message, fingerprint: fingerprint, tags: tags)
         if level != .info, let operation = Diagnostics.current, !operation.claim(key, marksFailure: affectsOperation) { return }
-        guard diagnosticsEnabled else { return }
-        guard let suppressed = Diagnostics.claim(event: message, fingerprint: fingerprint, tags: tags, cooldown: cooldown) else { return }
+        guard started, diagnosticsEnabled else { return }
+        guard let suppressed = Diagnostics.claim(event: message, fingerprint: fingerprint, tags: tags, cooldown: max(900, cooldown)) else { return }
+        let budget = level == .fatal ? DiagnosticEventBudget.Decision(allowed: true, suppressed: 0)
+            : DiagnosticEventBudget.shared.claim(signature: "message:" + key, release: reportingRelease,
+                identity: state.withLock { $0.role.rawValue } + ":" + installID, observations: suppressed + 1)
+        guard budget.allowed else { return }
         #if DEBUG
         Log("Diagnostic: \(message) phase=\(tags["phase"] ?? "unspecified") reason=\(tags["reason"] ?? "unspecified")")
         #endif
         var details = correlationFields.merging(extra) { _, supplied in supplied }
-        if suppressed > 0 { details["suppressed_count"] = String(suppressed) }
+        details["reporting_policy"] = "message_signature_daily_v1"
+        if suppressed + budget.suppressed > 0 { details["suppressed_count"] = String(suppressed + budget.suppressed) }
         if let operation = Diagnostics.current {
             details["operation_id"] = operation.id
             if let parent = operation.parentID { details["parent_operation_id"] = parent }
@@ -337,10 +351,14 @@ nonisolated enum CrashReporting {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
     }
 
+    private static var reportingRelease: String {
+        appVersion + "+" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")
+    }
+
     // MARK: - PII scrubber (backstop; capture clean at the source is the real defense)
 
     /// Redact the free-text fields of an outgoing event: the message, exception values, and any
-    /// breadcrumb messages. Runs on the SDK transport thread — captures nothing MainActor-isolated.
+    /// breadcrumb messages. May run synchronously on the capturing thread; no MainActor dependencies.
     private static func scrub(_ event: Event) -> Event {
         if let formatted = event.message?.formatted {
             event.message = SentryMessage(formatted: scrub(text: formatted))
