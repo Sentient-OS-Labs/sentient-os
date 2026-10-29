@@ -29,6 +29,12 @@ attribution in the file headers). Details there that must not be "simplified": `
 sizingOptions = []` (otherwise the hosting view re-advertises its own size every layout pass and the
 panel strands off-screen), the Finder-shaped pasteboard mix, and the CG → AppKit coordinate flip.
 
+The Sidekick popup keeps **One-time setup** and uses **Let Sidekick use your computer** as its title.
+Its compact layout keeps muted Computer use and Sentient permissions headings, removes Not granted
+labels, and uses **Grant** buttons for
+remaining steps. Release hides verified rows; Debug deliberately shows all rows. Settings and
+Double Tap keep their existing full permission layouts.
+
 ## The grants
 
 The required grants follow the selected runtime:
@@ -43,9 +49,11 @@ Visible permission setup requests unasked Automation consent through the macOS d
 Automation never starts a capability test. The helper's Accessibility and Screen Recording rows use
 Sentient's floating drag guide. A completed copy drop inside the tracked Settings window changes
 only that row to **Restart to finish**; cancelled, misplaced and stale-guide drops do nothing.
-The user still enables each macOS toggle, confirms both permissions, and selects **Restart Sentient**.
-Drag completion and confirmation never create permission proof. Existing enabled entries need not
-be dragged again. Full Disk Access is not required and the gate never reads TCC databases.
+The user opens each required grant action, enables its macOS toggle, and selects **Restart Sentient**.
+There is no confirmation checkbox or explanatory block. Restart enables once each helper grant
+action has been opened (or that grant is verified), and Automation/Sentient Screen Recording are
+either already granted or their grant actions have been opened. Automatic Automation probing does
+not count as a button click. Grant actions and drags never create permission proof. Full Disk Access is not required and the gate never reads TCC databases.
 
 After a confirmed relaunch, rows without live proof say **Ready to try**. `isReadyForTask` permits an
 ordinary native request; `allRequiredGranted` continues to mean actual capability evidence. The
@@ -78,7 +86,7 @@ be stopped explicitly before restarting. The setup window remains available if s
 or preparing the relaunch fails. No saved request is automatically submitted after relaunch.
 
 The restart receipt is bound to the confirming process. Closing a guide and relaunching without
-confirmation does not complete setup. Before the first post-restart request, an exclusive runtime
+selecting Restart Sentient does not complete setup. Before the first post-restart request, an exclusive runtime
 lease protects a graceful stop of only Sentient's idle helper. Active work and foreign helpers are
 never stopped by this preparation. Confirmation survives later launches until reset or a new setup
 round; it remains separate from grant evidence.
@@ -138,7 +146,7 @@ An onboarded user enters native migration when prior computer-use readiness, a C
 receipt or binary, or an earlier deferred migration establishes existing setup history.
 Earlier deferral is treated as unfinished setup. Native completion remains separate from CUA history.
 
-The flow is pitch → shared installation → required grants → confirmed restart → functional check.
+The flow is pitch → shared installation → required grant actions → restart → normal task.
 Failure is retryable. Completing it
 requires a fresh readiness check and an explicit Done action. Native migration is mandatory:
 the regular interface stays unavailable until installation and required permissions are ready.

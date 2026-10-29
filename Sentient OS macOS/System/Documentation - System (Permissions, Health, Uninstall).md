@@ -54,7 +54,8 @@ Automation access. The helper is started through LaunchServices before querying,
 is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, and the user chooses Allow in that dialog.
 
 The helper owns its Accessibility and Screen Recording grants. Our setup rows show **Restart to
-finish** after accepted drags, with explicit confirmation before relaunch. After a confirmed
+finish** after accepted drags. Required grant-action clicks enable Restart Sentient; already-granted
+Automation and Sentient capture need no extra clicks. After a confirmed
 restart, the gate permits a normal task to try without a synthetic test window. Workflow completion
 is separate from verified grant evidence; no TCC database read or Full Disk Access is required.
 A native permission denial opens the helper's own setup at most once per task, while ordinary

@@ -163,10 +163,25 @@ import Foundation
               "One completed drag updates only progress, never a grant")
         firstUse.continueNow();try await settle(firstUse)
         check(SafeAppRelaunch.shared.savedRestarts == 0 && firstFired == 0,"Drag alone cannot admit or restart")
-        firstUse.permissionSetupConfirmed=true
+        firstUse.beganPermissionAction(.helperAccessibility)
+        check(!firstUse.canRestartAfterPermissions,"One helper grant action cannot enable restart")
+        firstUse.beganPermissionAction(.helperScreenRecording)
+        check(firstUse.canRestartAfterPermissions,"Already granted Automation and Sentient capture need no clicks")
+        check(!firstUse.helperAccessibility && !firstUse.helperScreen && !firstUse.isReadyForTask,
+              "Grant-button visits never invent actual helper grants or admit work")
+        Permissions.screen=false;firstUse.fixturePassiveRefresh();try await settle(firstUse)
+        check(!firstUse.canRestartAfterPermissions,"Unvisited missing Sentient capture requires its grant action")
+        firstUse.beganPermissionAction(.sentientScreen)
+        check(firstUse.canRestartAfterPermissions,"Clicking Sentient capture counts even before its check refreshes")
+        Permissions.automation = .denied;firstUse.fixturePassiveRefresh();try await settle(firstUse)
+        check(!firstUse.canRestartAfterPermissions,"Unvisited denied Automation still requires its action")
+        firstUse.beganPermissionAction(.automation)
+        check(firstUse.canRestartAfterPermissions,"All required actions enable restart without a checkbox")
+        Permissions.screen=true;Permissions.automation = .granted
+        firstUse.fixturePassiveRefresh();try await settle(firstUse)
         SafeAppRelaunch.shared.canRelaunchPermissionWait=false;SafeAppRelaunch.shared.canRelaunch=false
         firstUse.restartAfterPermissions()
-        check(NativePermissionSetup.shared.restartProcess == nil,"Busy work refuses restart")
+        check(NativePermissionSetup(defaults:fixtureDefaults,processID:"busy-restart-check").needsRestart,"Busy work cannot accept restart completion")
         SafeAppRelaunch.shared.canRelaunchPermissionWait=true;SafeAppRelaunch.shared.canRelaunch=true
         firstUse.restartAfterPermissions()
         check(NativePermissionSetup.shared.needsRestart && !NativePermissionSetup.shared.canAttemptTask,"Same process cannot consume confirmation")
@@ -238,7 +253,7 @@ import Foundation
         NativePermissionSetup.shared.requestRestart()
         let savedWait=ComputerUseGate.fixture()
         let savedTask=Task {try await savedWait.waitUntilReady()};try await settle(savedWait)
-        savedWait.permissionSetupConfirmed=true;savedWait.restartAfterPermissions()
+        savedWait.beganPermissionAction(.helperAccessibility);savedWait.beganPermissionAction(.helperScreenRecording);savedWait.restartAfterPermissions()
         SafeAppRelaunch.shared.isPreparing=true;savedTask.cancel()
         do {try await savedTask.value;fatalError("Saved waiter admitted")}
         catch is ComputerUseGate.SetupCancelled {} catch is CancellationError {}

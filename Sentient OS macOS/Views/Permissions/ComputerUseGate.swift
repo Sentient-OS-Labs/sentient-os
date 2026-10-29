@@ -83,8 +83,9 @@ final class ComputerUseGate {
     var nativeRestartRequired: Bool { runtimeFailure?.restartRequired == true }
     private(set) var restartingNative = false
     private(set) var checkingCapabilities = false
-    /// User acknowledgement enables a restart, never task admission or a green grant row.
-    var permissionSetupConfirmed = false
+    /// Visiting grant actions enables restart without claiming that macOS granted access.
+    enum PermissionAction { case helperAccessibility, helperScreenRecording, automation, sentientScreen }
+    private var permissionActions: Set<PermissionAction> = []
     private var postRestartCheckAttempted = false
     private var helperRestartedForPermissions = false
     private var ownsPermissionRelaunch = false
@@ -107,8 +108,21 @@ final class ComputerUseGate {
     }
 
     var canRestartAfterPermissions: Bool {
-        permissionSetupConfirmed && nativeInstallationReady && !requestingAutomation && !checkingCapabilities
+        (helperAccessibility || permissionActions.contains(.helperAccessibility))
+            && (helperScreen || permissionActions.contains(.helperScreenRecording))
+            && (automation == .granted || permissionActions.contains(.automation))
+            && (sentientScreen || permissionActions.contains(.sentientScreen))
+            && nativeInstallationReady && !requestingAutomation && !checkingCapabilities
             && (SafeAppRelaunch.shared.canRelaunchPermissionWait || SafeAppRelaunch.shared.canRelaunch)
+    }
+
+    func beganPermissionAction(_ action: PermissionAction) {
+        guard teardownDepth == 0, backend == .openAI else { return }
+        // Preserve already verified helper steps before changing a grant retires old proof.
+        if helperAccessibility { permissionActions.insert(.helperAccessibility) }
+        if helperScreen { permissionActions.insert(.helperScreenRecording) }
+        changingNativePermissions()
+        permissionActions.insert(action)
     }
 
     var hasWaitingAction: Bool { pending != nil }
@@ -135,7 +149,6 @@ final class ComputerUseGate {
         NativePermissionCheck.shared.invalidate()
         capabilityFailure = nil
         NativePermissionSetup.shared.requestRestart()
-        permissionSetupConfirmed = false
         if pending != nil, window == nil { presentPendingAction() }
     }
 
@@ -189,7 +202,7 @@ final class ComputerUseGate {
     /// gate must drain its producers as well as cancelling the held task.
     func beginTeardown() async {
         teardownDepth += 1
-        permissionSetupConfirmed = false
+        permissionActions.removeAll()
         postRestartCheckAttempted = false
         helperRestartedForPermissions = false
         nativeOperationID = UUID()
