@@ -102,6 +102,7 @@ actor CodexCLI {
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
         var webSearch = true                   // native web_search tool — available to EVERY call
+        var hostedVaultRoot: String? = nil     // explicit staged Markdown capability for Sentient-hosted knowledge edits
         var includeUserConfig = true           // load Sentient's private config + MCP servers (e.g.
                                                // their Gmail MCP) for EVERY call. Set false for a
                                                // hermetic run (then we pass --ignore-user-config).

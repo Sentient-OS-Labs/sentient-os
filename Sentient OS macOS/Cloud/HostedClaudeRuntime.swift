@@ -32,18 +32,18 @@ nonisolated enum HostedClaudeRuntime {
 
     static func environment() throws -> [String: String] {
         guard let run = HostedInference.currentRun else { throw Failure.runRequired }
-        return try environment(gatewayURL: run.gatewayURL, token: run.token, model: run.model, profile: profileDirectory)
+        return try environment(gatewayURL: run.gatewayURL, token: run.token, model: run.model, profile: profileDirectory, maxOutputTokens: run.maximumOutputTokens)
     }
 
     /// Pure input validation plus private-directory preparation; never writes a credential file.
-    static func environment(gatewayURL: URL, token: String, model: String, profile: URL) throws -> [String: String] {
+    static func environment(gatewayURL: URL, token: String, model: String, profile: URL, maxOutputTokens: Int = 8_192) throws -> [String: String] {
         let loopback = ["127.0.0.1", "localhost", "[::1]", "::1"].contains(gatewayURL.host ?? "")
         guard gatewayURL.scheme == "https" || (gatewayURL.scheme == "http" && loopback),
               gatewayURL.host?.isEmpty == false, gatewayURL.user == nil, gatewayURL.password == nil,
               gatewayURL.query == nil, gatewayURL.fragment == nil,
               !token.isEmpty, token.utf8.count <= 16_384,
               !token.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
-              validModel(model), profile.isFileURL else { throw Failure.invalidConfiguration }
+              validModel(model), (1...65_536).contains(maxOutputTokens), profile.isFileURL else { throw Failure.invalidConfiguration }
         let fm = FileManager.default
         if fm.fileExists(atPath: profile.path) {
             let values = try profile.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
@@ -63,6 +63,7 @@ nonisolated enum HostedClaudeRuntime {
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
             "CLAUDE_CODE_SUBAGENT_MODEL": model,
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": String(maxOutputTokens),
             "DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "ENABLE_TOOL_SEARCH": "false"

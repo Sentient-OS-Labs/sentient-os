@@ -11,6 +11,42 @@ The shared `CodexCLI.Invocation`, `Envelope`, and `CLIError` types keep structur
 of the selected engine. Authentication remains owned by the official CLIs; Sentient does not extract
 Claude OAuth credentials or send requests directly to Anthropic inference endpoints.
 
+## Sentient-funded inference
+
+`.sentient` reuses the Claude harness and the computer relay with an explicit hosted run from
+`HostedInference`. `FrontierRun` pins the selected backend for the invocation, joins an existing
+run scope, or admits a background/Sidekick run when no outer scope exists. The gateway supplies
+the full model ID and output-token ceiling; subscription plan and speed preferences do not choose
+a hosted model. Cost and time accounting belong to the gateway, not the normalized `Envelope`.
+
+`HostedClaudeRuntime` creates a private `Hosted Claude` profile and injects only the short-lived
+run capability as `ANTHROPIC_API_KEY`, the explicit gateway base URL, and the admitted model for
+implicit model calls. Both Claude paths add `--bare`, clear OAuth/auth-token environment values,
+and disable telemetry, error reporting, nonessential traffic and auto-update inside inference.
+The shared process runner starts from a sanitized environment. The Anthropic organization key is
+never present in the desktop process. The computer relay captures the hosted environment before
+Network callbacks lose TaskLocal state; the outer Codex executor receives only a local relay token.
+
+Subscription connector capabilities are unavailable in `.sentient`; existing direct MCP connections
+retain their own authorization. Structured hosted runs reject subscription targets before admission,
+and the Claude argument builder repeats the check. Hosted quota errors preserve session IDs without
+writing Claude subscription reset preferences. Other gateway failures use fixed, nonsecret copy.
+
+Knowledge generation explicitly sets `Invocation.hostedVaultRoot` to the staged directory.
+`HostedVaultToolServer` exposes only `vault_list`, `vault_read`, `vault_write` and `vault_edit`;
+Claude runs with an empty builtin tool set and only these MCP tools preapproved. Workspace writes
+without this capability fail closed. `HostedVaultFiles` resolves every file through directory
+file descriptors with `openat`/`O_NOFOLLOW`, rejects symlinks and hard links, absolute/hidden/traversal
+paths, non-Markdown files and app-managed `writingstyle.md`, and atomically replaces private files.
+Individual files are capped at 256 KiB, transfers at 8 MiB, and RPC calls at 512 per run. Reusing a
+request ID with different arguments is rejected. A stopped/cancelled server cannot serve cached calls.
+The app's staging checkpoint and merge own publication of validated knowledge changes.
+
+Regression checks: `Scripts/test_hosted_claude_runtime.py`, `test_hosted_vault_tools.py`,
+`test_agent_completion_envelopes.py`, and `test_computer_use_speed.py` compile production code with
+inert dependencies. `Scripts/hosted_vault_fixture.py` runs the production loopback transport against
+an explicitly supplied synthetic directory for live CLI acceptance; it reads no provider credentials.
+
 ## Files
 
 | File | Job |
