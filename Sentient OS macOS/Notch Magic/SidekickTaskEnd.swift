@@ -62,6 +62,9 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
                 return reason.map { Self(reason: $0, evidence: .errorText) } ?? typed(fallback)
             }
             if error is CancellationError { return typed(.cancelledUnknown) }
+            if let hosted = error as? HostedInference.Failure {
+                return typed(hosted.isUsageLimit ? .usageLimit : .backendUnavailable)
+            }
             if let native = error as? NativeComputerUseFailure {
                 switch native.kind {
                 case .capture: return typed(.screenCapture)

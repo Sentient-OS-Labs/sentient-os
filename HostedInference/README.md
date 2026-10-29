@@ -38,6 +38,45 @@ loopback and funds only its disposable fixture ledger. It does not authenticate 
 Load secrets through the process environment; never put them in shell history or this repository.
 Restarting this fixture creates a fresh test budget; it is a developer tool, not a subsidy boundary.
 
+From the repository root, the app-side checks can run without provider credentials:
+
+```sh
+python3 Scripts/test_hosted_inference_client.py
+python3 Scripts/test_hosted_sidekick_waits.py
+python3 Scripts/test_hosted_claude_runtime.py
+python3 Scripts/test_hosted_vault_tools.py
+python3 Scripts/test_hosted_vault_recovery.py
+python3 Scripts/test_vault_integrity.py
+python3 Scripts/test_sidekick_lifecycle.py
+```
+
+`Scripts/test_hosted_gateway_live.py --key-file <local-secret-file>` is an opt-in, billable
+acceptance test. It accepts a plain-text or RTF secret file, loads the key only into the loopback
+gateway process, and sends synthetic data through the actual Claude CLI and disposable SQL
+ledger. Its configured ledger ceiling is $2, using deliberately conservative test prices.
+Add `--with-vault-tools` to exercise the confined production knowledge tools, or
+`--app <Debug-app-executable>` to exercise the full Sidekick bridge with a synthetic native
+tool. This does not test real desktop Accessibility permissions, screen capture, signing,
+or production enrollment. Test those on a consenting Mac before release.
+
+## App configuration
+
+Set the Xcode build setting `SENTIENT_INFERENCE_URL` to the deployed HTTPS gateway base URL.
+The `SentientInferenceURL` Info.plist entry reads that setting; leaving it unset keeps the
+hosted option unavailable. Debug builds also accept the `sentient.hosted.gatewayURL` user
+default for a loopback fixture. Release builds reject HTTP endpoints.
+
+The app uses its existing Supabase project's public configuration for a separate anonymous
+hosted identity. Optional bundle keys `SentientInferenceIdentityURL` and
+`SentientInferencePublishableKey` select a different project. Enable and protect anonymous
+enrollment in that project before rollout. Do not put the Anthropic key or a Supabase service
+role key in any app build setting, bundle, user default, or client configuration.
+
+The server pins the model and output ceiling for every run. Keep `MAXIMUM_OUTPUT_TOKENS`
+between 1 and 65,536 for the current app runtime, and within the selected model's supported
+limit. The app's hosted setup validates availability and runtime prerequisites before the
+user selects it; existing provider selection is preserved during upgrade.
+
 ## HTTP contract
 
 All responses use `Cache-Control: no-store`. Dates are ISO 8601 UTC timestamps. Run control and

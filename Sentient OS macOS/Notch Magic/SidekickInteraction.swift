@@ -33,6 +33,11 @@ nonisolated final class SidekickInteraction: Sendable {
         var errorDescription: String? { "Sidekick tried to use another tool while waiting for your answer. The task was stopped. Check the current app before trying again." }
     }
     private let wait = OSAllocatedUnfairLock(initialState: Wait())
+    private let hosted = OSAllocatedUnfairLock<HostedInference.Run?>(initialState: nil)
+
+    /// Local MCP callbacks do not inherit task locals. Retain only the active run's short-lived
+    /// authority so an explicit user question can pause and resume its server-side allowance.
+    func attachHostedRun(_ run: HostedInference.Run?) { hosted.withLock { $0 = run } }
 
     init(retryContext: String = "", historyContext: String = "",
          instructionsSnapshot: SidekickInstructionStore.Snapshot? = nil,
@@ -77,10 +82,14 @@ nonisolated final class SidekickInteraction: Sendable {
         let started = Date()
         recordRecovery("asked", error: question.error)
         do {
+            let hostedRun = hosted.withLock { $0 }
+            try await hostedRun?.pause()
             try conversationRun?.question(id: question.id, text: question.question, choices: question.answers, error: question.error)
             SidekickDiagnostics.event(.question, taskID: conversationRun?.taskID,
                 backend: .init(rawValue: diagnosticBackend) ?? .unknown, counts: [.questions: 1])
             let answer = try await request(question)
+            try Task.checkCancellation()
+            try await hostedRun?.resume()
             try conversationRun?.answer(questionID: question.id, text: answer.text)
             SidekickDiagnostics.event(.answer, taskID: conversationRun?.taskID,
                 backend: .init(rawValue: diagnosticBackend) ?? .unknown, duration: Date().timeIntervalSince(started))

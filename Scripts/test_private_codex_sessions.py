@@ -131,6 +131,8 @@ enum CodexCLI {
         enum Effort { case high }; var effort: Effort = .high
         var feature = ""; var cwd: String? = nil; var timeout: Double = 60
         var resumeSessionID: String? = nil; var diag: [String: String] = [:]
+        var hostedVaultRoot: String? = nil
+        var webSearch = true; var includeUserConfig = true
     }
     struct Envelope: Sendable { var inputTokens: Int? = nil; var outputTokens: Int? = nil }
     enum CLIError: Error { case usageLimit(message: String, sessionID: String?), timedOut }
@@ -281,5 +283,6 @@ with tempfile.TemporaryDirectory(prefix='sentient-private-session-') as director
     source = root / 'Fixture.swift'
     source.write_text(FIXTURE + '\n' + production)
     binary = root / 'checks'
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(source), '-o', str(binary)], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(source),
+                    str(APP.parent / 'Scripts/Fixtures/HostedInferenceStub.swift'), '-o', str(binary)], check=True)
     subprocess.run([str(binary), str(root)], check=True, timeout=30)

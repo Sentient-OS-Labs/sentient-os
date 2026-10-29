@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Supplied by the team's hosted deployment build; an unset value keeps the service unavailable. -->
+	<key>SentientInferenceURL</key>
+	<string>$(SENTIENT_INFERENCE_URL)</string>
 	<!--
 	  Sparkle auto-update configuration.
 

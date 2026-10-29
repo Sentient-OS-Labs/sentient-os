@@ -81,7 +81,13 @@ actor ProactiveExecutor {
         // trigger=card: every codex call under a card fire reports it (task-local, inherited).
         await ModelBackend.$runOverride.withValue(ModelBackend.current) {
             await CodexTrigger.$current.withValue(.card) {
-                await Diagnostics.withOperation("proactive_action") { await fireBody(action, progress: progress) }
+                do {
+                    return try await HostedInference.withRun(purpose: .sidekick) {
+                        await Diagnostics.withOperation("proactive_action") { await self.fireBody(action, progress: progress) }
+                    }
+                } catch {
+                    return .failed((error as? LocalizedError)?.errorDescription ?? "Hosted execution stopped. Check the current app before continuing.")
+                }
             }
         }
     }
