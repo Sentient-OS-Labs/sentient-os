@@ -80,6 +80,7 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
             if error is SlackActionEvidence.Failure || error is OutlookActionEvidence.Failure
                 || error is OutlookCalendarActionEvidence.Failure { return .unconfirmed }
             if error is CodexRuntime.Failure { return typed(.backendUnavailable) }
+            if error is ClaudeAuth.LoginRequired { return typed(.loginRequired) }
             if let error = error as? MCPSource.MCPError {
                 switch error {
                 case .noReadSurface: return typed(.unavailableTool)

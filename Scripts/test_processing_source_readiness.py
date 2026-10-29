@@ -33,14 +33,23 @@ enum Verdict { case survivor, junk }
 enum CodexTrigger { case onboarding, analyzeNow, overnight }
 struct CycleFailure: Error, Equatable {
     enum Stage { case vault, deciding, preparing }
+    var message = ""
+    var kind: OvernightCaution.Kind? = nil
     var stage: Stage = .vault
+    var reason: CodexFailureReason? = nil
 }
 protocol Connector {}
 struct FixtureConnector: Connector {}
 struct RunSource {
     static func connectors(from sources: [RunSource]) -> [any Connector] { sources.isEmpty ? [] : [FixtureConnector()] }
 }
-enum ModelBackend { case chatgpt, claude, custom; static var current: Self = .chatgpt }
+enum ModelBackend { case chatgpt, claude, custom, sentient; static var current: Self = .chatgpt }
+enum CodexFailureReason { case notLoggedIn }
+enum ClaudeAuth {
+    static var requiresVerification = false
+    static var rejectDuringGmail = false
+    struct LoginRequired: LocalizedError { var errorDescription: String? { "Fixture sign-in required" } }
+}
 enum ConnectorCensus {
     static var identity: String? = "fixture"
     static var outcomes: [(String, ModelBackend, Bool)] = []
@@ -72,7 +81,7 @@ enum Diagnostics {
     static var current: Operation? = nil
     static func withOperation<T>(_ name: String, _ work: () async -> T) async -> T { await work() }
 }
-enum ProactiveCyclePhase { case done }
+enum ProactiveCyclePhase { case done, failed(CycleFailure) }
 final class ProactiveCycle {
     static let shared = ProactiveCycle()
     var calls = 0
@@ -99,7 +108,7 @@ enum PowerState {
     static func block(_ value: Snapshot, initial: Bool, allowBattery: Bool, scheduled: Bool) -> Block? { blocked }
 }
 enum OvernightScheduler { static let allowBatteryKey = "battery" }
-enum OvernightCaution { enum Kind { case diskFull }; static func record(_ value: Kind) {} }
+enum OvernightCaution { enum Kind { case diskFull, loggedOut }; static func record(_ value: Kind) {} }
 enum VaultGenerator { static var vaultRoot = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("Knowledge") }
 '''
 
@@ -107,6 +116,7 @@ run_class = '\n'.join(member(run, signature) for signature in (
     'struct Result',
     'func execute(progress:',
     'private func recordConnectionOutcome(',
+    'private func claudeLoginFailure(',
 ))
 run_fixture = r'''
 @MainActor final class ProcessingRun {
@@ -118,6 +128,7 @@ run_fixture = r'''
         self.request = request; self.scheduled = scheduled; unavailableConnectors = request.unavailableConnectorSlugs
     }
     func runGmailLeg(base: RunProgress, yield: (RunProgress) -> Void) async -> RunProgress {
+        if ClaudeAuth.rejectDuringGmail { ClaudeAuth.requiresVerification = true }
         var p = base; p.finishSourceRead(name: "Gmail", label: "fixture", summary: "safe summary", items: 1); return p
     }
     func runCalendarLeg(base: RunProgress, yield: (RunProgress) -> Void) async -> RunProgress {
@@ -201,6 +212,21 @@ checks = r'''
               "healthy source work still reaches the knowledge tail during partial analysis")
         check(ProactiveCycle.shared.excluded.contains("gmail"), "unavailable provider is excluded from proactive fetches")
         check(IterativeRun.calls == 0, "cloud-only execution never runs the on-device model")
+        let beforeAuthFailure = ProactiveCycle.shared.calls
+        ModelBackend.current = .claude; ClaudeAuth.requiresVerification = true
+        let authFailure = await ProcessingRun(request: cloud, scheduled: true).execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+        check(authFailure.failure?.kind == .loggedOut && authFailure.progress.successfulSources.isEmpty
+            && ProactiveCycle.shared.calls == beforeAuthFailure, "Claude rejection stops before source reads and knowledge publication")
+        ClaudeAuth.requiresVerification = false; ClaudeAuth.rejectDuringGmail = true
+        let midReadFailure = await ProcessingRun(request: cloud, scheduled: false).execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+        check(midReadFailure.failure?.kind == .loggedOut && midReadFailure.progress.successfulSources.contains("Gmail")
+            && !midReadFailure.progress.successfulSources.contains("Calendar") && ProactiveCycle.shared.calls == beforeAuthFailure,
+              "new Claude rejection preserves completed source progress and prevents later cloud legs")
+        ClaudeAuth.rejectDuringGmail = false; ModelBackend.current = .sentient
+        let hosted = await ProcessingRun(request: cloud, scheduled: false).execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
+        check(hosted.failure == nil && ProactiveCycle.shared.calls == beforeAuthFailure + 1,
+              "subscription rejection does not block the hosted backend")
+        ModelBackend.current = .chatgpt; ClaudeAuth.requiresVerification = false
         let missingModel = await ProcessingRun(request: local, scheduled: false).execute(progress: { _ in }, phase: { _ in }, onLine: { _ in })
         check(!missingModel.complete && missingModel.progress.sourceReadFailures["On-device sources"] != nil,
               "direct execution cannot silently skip local connectors with a missing model")

@@ -44,6 +44,7 @@ nonisolated enum CodexCLI {
     }
 __CODEX__
 }
+nonisolated enum ClaudeAuth { static func authenticationFailure(_ detail: String) -> Error? { nil } }
 nonisolated enum ClaudeCLI {
     static let usageLimitMarkers = ["usage limit", "rate limit"]
     nonisolated(unsafe) static var recordedLimits = 0

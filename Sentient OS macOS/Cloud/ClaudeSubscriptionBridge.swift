@@ -290,6 +290,14 @@ actor ClaudeSubscriptionBridge {
         let webInstructions = hostedEnvironment == nil
             ? "Use your built-in WebSearch and WebFetch tools for web research, and the relay tools for app and file actions."
             : "Use the advertised native browser tools for web research. Built-in WebSearch and WebFetch are unavailable in this hosted run."
+        let authRevision: UUID?
+        do { authRevision = hostedEnvironment == nil ? try ClaudeAuth.usableRevision() : nil }
+        catch {
+            // Preserve the typed reason for the owner even when rejection was already known
+            // before the first inference process (the HTTP response itself is intentionally generic).
+            fail(error)
+            throw error
+        }
         let system = (payload["instructions"] as? String ?? Wire.instructions) + """
 
         The sentient_relay MCP tools correspond to this Codex client's tools. Codex executes
@@ -322,6 +330,8 @@ actor ClaudeSubscriptionBridge {
         claudeTask = Task {
             let began = Date()
             do {
+                try Task.checkCancellation()
+                if let authRevision, ClaudeAuth.revision != authRevision { throw CancellationError() }
                 let result = try await ChildProcessDiagnostics.$directory.withValue(diagnosticDirectory) {
                     try await ChildProcessDiagnostics.$intentionalStops.withValue(diagnosticStops) {
                         try await SidekickInteraction.$current.withValue(interaction) {
@@ -338,7 +348,10 @@ actor ClaudeSubscriptionBridge {
                 if result.status == 124 { throw CodexCLI.CLIError.timedOut(after: timeout) }
                 let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000), hosted: hostedEnvironment != nil)
                 complete(envelope)
-            } catch { fail(error) }
+            } catch {
+                if let authRevision { ClaudeAuth.rejected(error, after: authRevision) }
+                fail(error)
+            }
         }
     }
 

@@ -770,6 +770,7 @@ actor CodexCLI {
         }
         var bridge: ClaudeSubscriptionBridge?
         do {
+            if backend == .claude, ClaudeAuth.requiresVerification { throw ClaudeAuth.LoginRequired() }
             if prompt.utf8.count > Self.promptByteCap { throw CLIError.inputTooLarge(chars: prompt.utf8.count) }
             guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
                 try Task.checkCancellation()

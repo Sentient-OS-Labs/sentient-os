@@ -58,6 +58,7 @@ nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"
     static func route(_ task: String, cardContext: String, standingInstructions: String) async -> Route { .computer }
     static func recordOutcome(route: String, slug: String?, ms: Int, fellBack: Bool) { }
 }
+nonisolated enum ClaudeAuth { struct LoginRequired: Error {} }
 nonisolated enum CodexCLI {
     enum Effort: Sendable { case medium }
     struct Invocation: Sendable {

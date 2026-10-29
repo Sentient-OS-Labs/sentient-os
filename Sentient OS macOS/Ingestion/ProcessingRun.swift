@@ -77,12 +77,16 @@ final class ProcessingRun {
             // Cancellation is checked at EVERY leg boundary. Stopping a read must never launch
             // another cloud request or publish the knowledge base while the old task drains.
             if Task.isCancelled || p.diskFull { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             if request.runGmail { p = await runGmailLeg(base: p, yield: progress) }
             if Task.isCancelled { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             if request.runCalendar { p = await runCalendarLeg(base: p, yield: progress) }
             if Task.isCancelled { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             if !request.mcpSlugs.isEmpty { p = await runMCPLeg(base: p, yield: progress) }
             if Task.isCancelled { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             progress(p)
             var failure: CycleFailure?
             if request.fullCycle {
@@ -103,6 +107,19 @@ final class ProcessingRun {
                   account == ConnectorCensus.readinessAccountIdentity(for: backend) else { return }
         }
         ConnectorCensus.recordReadOutcome(slug: slug, backend: backend, connected: connected)
+    }
+
+    /// Stop before another cloud leg when Claude has rejected its own login. In particular,
+    /// don't let an empty read look like successful onboarding or consume pending summaries.
+    private func claudeLoginFailure(progress: RunProgress,
+                                    phase: @Sendable (ProactiveCyclePhase) -> Void) -> Result? {
+        guard ModelBackend.current == .claude, ClaudeAuth.requiresVerification,
+              request.fullCycle || request.runGmail || request.runCalendar || !request.mcpSlugs.isEmpty else { return nil }
+        let failure = CycleFailure(message: ClaudeAuth.LoginRequired().localizedDescription,
+                                   kind: .loggedOut, stage: .vault, reason: .notLoggedIn)
+        phase(.failed(failure))
+        if scheduled { OvernightCaution.record(.loggedOut) }
+        return Result(progress: progress, failure: failure)
     }
 
     /// Cloud Gmail leg — each weekly window maps onto the SAME bar/card: its prompt → the prompt

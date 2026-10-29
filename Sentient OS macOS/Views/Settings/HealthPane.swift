@@ -483,10 +483,15 @@ struct HealthPane: View {
                            health: claude.loggedIn ? .ok : (claude.loggingIn ? .warn : .bad),
                            note: claude.loggedIn
                                ? (claude.plan.map { "signed in · \($0.lowercased()) plan" } ?? "signed in")
-                               : claude.loggingIn ? "finish in your browser" : "not signed in",
+                               : claude.verifyingLogin ? "checking sign-in…"
+                               : claude.loggingIn ? "finish in your browser"
+                               : claude.verificationPending ? "sign-in needs checking" : "not signed in",
                            tip: "Sign in directly through Claude Code in your browser. Its login is kept in your Mac’s Keychain and shared with your existing Claude Code setup.",
-                           fixTitle: claude.loggingIn ? "Re-open…" : "Sign in…",
-                           fix: claude.loggedIn ? nil : { claude.startLogin() })
+                           fixTitle: claude.loggingIn ? "Re-open…" : claude.loginActionTitle,
+                           fix: claude.loggedIn || (claude.loggingIn && claude.loginURL == nil) ? nil : {
+                               if claude.loggingIn, let url = claude.loginURL { NSWorkspace.shared.open(url) }
+                               else { claude.startLogin() }
+                           })
                 failureLine(claude.loginStatusLine)
                 codexCLIRow
                 computerUseRow

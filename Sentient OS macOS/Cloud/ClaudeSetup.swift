@@ -181,13 +181,16 @@ final class ClaudeSetup {
 
     // MARK: Step 2 — auth (claude auth login)
 
-    /// Is Claude Code logged in? Ground truth = `claude auth status` (via ClaudeAuth, which also
-    /// caches the plan for the model choke point).
-    private(set) var loggedIn = false
+    /// Runtime rejection overrides an earlier local status, including while a view is open.
+    private var statusLoggedIn = false
+    var loggedIn: Bool { statusLoggedIn && !ClaudeAuth.requiresVerification }
     /// The plan's display name ("Max", "Pro"…), refreshed with the login status.
     private(set) var plan: String?
     /// A login flow is in progress — the browser opened, awaiting the user to finish.
     private(set) var loggingIn = false
+    private(set) var verifyingLogin = false
+    private(set) var verificationPending = false
+    var loginActionTitle: String { verificationPending ? "Check Claude sign-in" : "Sign in to Claude" }
     /// Exact automatic browser URL for this attempt, never persisted or logged.
     private(set) var loginURL: URL?
     /// Latest status line for step 2.
@@ -196,26 +199,28 @@ final class ClaudeSetup {
     private var loginProcess: Process?
     private var loginGeneration = UUID()
     private var loginStatusProbe = UUID()
+    private var authRevision: UUID?
+    private var verificationTask: Task<Void, Never>?
+
+    /// Refresh observable UI state without spawning a status poll that could race OAuth.
+    func authenticationRejected() {
+        if ClaudeAuth.requiresVerification { statusLoggedIn = false }
+    }
 
     /// Re-check login + plan — call on appear, on foreground, and while a login is out.
     func refreshLoginStatus() async {
-        guard !Task.isCancelled else { return }
+        // The old credential can still look logged in while OAuth is unfinished. Only the
+        // owned process's successful exit starts verification; polling never completes login.
+        guard !Task.isCancelled, !loggingIn else { return }
         let generation = loginGeneration
         let probe = UUID()
         loginStatusProbe = probe
         let status = await ClaudeAuth.refresh()
-        guard !Task.isCancelled, generation == loginGeneration, probe == loginStatusProbe else { return }
-        loggedIn = status.loggedIn
+        guard !Task.isCancelled, !loggingIn, generation == loginGeneration, probe == loginStatusProbe else { return }
+        statusLoggedIn = status.loggedIn
         plan = ClaudeAuth.planDisplayName
         if loggedIn {
-            loggingIn = false
-            loginURL = nil
-            if loginProcess?.isRunning != true { loginProcess = nil }
-        } else if let process = loginProcess, !process.isRunning {
-            loginProcess = nil
-            loggingIn = false
-            loginURL = nil
-            loginStatusLine = "✗ Sign-in didn't finish. Please try again."
+            verificationPending = false
         }
     }
 
@@ -223,10 +228,19 @@ final class ClaudeSetup {
     /// flips into the awaiting-browser state; the panels notice the finished sign-in on their own.
     func startLogin(force: Bool = false) {
         guard installed else { loginStatusLine = "✗ Install Claude Code first"; return }
+        guard !loggingIn else { return }
         if !force, loggedIn { loginStatusLine = "✓ Already signed in"; return }
+        if verificationPending {
+            startVerification(generation: loginGeneration)
+            return
+        }
         cancelLogin()
         ClaudeAuth.beginAccountChange()
         let generation = loginGeneration
+        authRevision = ClaudeAuth.beginLogin()
+        statusLoggedIn = false
+        loggingIn = true
+        loginStatusLine = "A browser window opened; finish signing in there. Sentient will then check your sign-in."
         do {
             loginProcess = try ClaudeCLI.startLogin(onURL: { [weak self] url in
                 guard let self else { return }
@@ -235,17 +249,20 @@ final class ClaudeSetup {
                           self.loginProcess?.isRunning == true else { return }
                     self.loginURL = url
                 }
-            }, onExit: { [weak self] in
+            }, onExit: { [weak self] status in
                 guard let self else { return }
                 Task { @MainActor in
                     guard self.loginGeneration == generation else { return }
                     self.loginURL = nil
-                    await self.refreshLoginStatus()
+                    self.loginProcess = nil
+                    if status == 0 {
+                        self.startVerification(generation: generation)
+                    } else {
+                        self.loggingIn = false
+                        self.loginStatusLine = "✗ Sign-in didn't finish. Please try again."
+                    }
                 }
             })
-            loggedIn = false
-            loggingIn = true
-            loginStatusLine = "A browser window opened; finish signing in there. Sentient notices on its own when you're done."
         } catch {
             loggingIn = false
             loginURL = nil
@@ -254,21 +271,69 @@ final class ClaudeSetup {
         }
     }
 
+    private func startVerification(generation: UUID) {
+        let revision = ClaudeAuth.revision
+        authRevision = revision
+        loggingIn = true
+        verifyingLogin = true
+        verificationPending = true
+        loginStatusLine = "Checking that Claude accepts your sign-in…"
+        verificationTask = Task { [weak self] in
+            do {
+                try await ClaudeAuth.verifyLogin(revision: revision)
+                guard let self, !Task.isCancelled, self.loginGeneration == generation else { return }
+                self.statusLoggedIn = ClaudeAuth.cachedLoggedIn
+                self.plan = ClaudeAuth.planDisplayName
+                self.verificationPending = false
+                self.loginStatusLine = self.loggedIn ? "✓ Signed in to Claude"
+                    : "✗ Claude rejected the sign-in again. Please sign in to continue."
+                self.finishVerification()
+            } catch {
+                guard let self, !Task.isCancelled, self.loginGeneration == generation else { return }
+                ClaudeAuth.rejected(error, after: revision)
+                self.statusLoggedIn = false
+                if error is ClaudeAuth.LoginRequired {
+                    self.verificationPending = false
+                    self.loginStatusLine = "✗ Claude still rejected this sign-in. Please sign in again."
+                } else if CodexFailureReason.classify(error) == .usageLimit {
+                    self.loginStatusLine = "✗ Claude's usage limit prevented the check. Wait for it to reset, then check your sign-in again."
+                } else {
+                    self.loginStatusLine = "✗ Couldn't verify Claude's sign-in. Check your connection, then try Check Claude sign-in."
+                }
+                self.finishVerification()
+                if !(error is CancellationError) { self.stepFailed(.verify, error) }
+            }
+        }
+    }
+
+    private func finishVerification() {
+        verificationTask = nil
+        verifyingLogin = false
+        loggingIn = false
+        loginURL = nil
+    }
+
     /// Stop a login attempt that's still out (tab switched away, restart) — the process is the
     /// localhost OAuth callback server; it self-exits after a finished sign-in anyway.
     func cancelLogin() {
         loginGeneration = UUID()
         loginStatusProbe = UUID()
+        verificationTask?.cancel()
+        verificationTask = nil
+        if let authRevision { ClaudeAuth.cancelLogin(revision: authRevision) }
+        authRevision = nil
         if let process = loginProcess, process.isRunning { process.terminate() }
         loginProcess = nil
         loggingIn = false
+        verifyingLogin = false
+        verificationPending = false
         loginURL = nil
         loginStatusLine = nil
     }
 
     // MARK: Diagnostics
 
-    enum Step: String, Sendable { case install, login }
+    enum Step: String, Sendable { case install, login, verify }
 
     /// Structure-only failure signal — error TYPE only, never the streamed installer/login lines.
     private func stepFailed(_ step: Step, _ error: Error, binaryFound: Bool? = nil) {
