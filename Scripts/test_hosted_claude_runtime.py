@@ -32,6 +32,14 @@ nonisolated enum HostedInference {
         let model = "claude-sonnet-5-5"
         let gateway = URL(string: "https://gateway.example.invalid/anthropic")!
         let token = "synthetic-run-capability"
+        let executor = HostedClaudeRuntime.executorEnvironment([
+            "HOME":"/synthetic", "PATH":"/usr/bin", "TMPDIR":"/synthetic/tmp", "USER":"fixture",
+            "ANTHROPIC_API_KEY":"provider-secret", "ANTHROPIC_AUTH_TOKEN":"run-secret",
+            "CLAUDE_CODE_OAUTH_TOKEN":"consumer-secret", "SENTIENT_HOSTED_API_TOKEN":"identity-secret",
+            "SENTIENT_MODEL_API_KEY":"custom-secret", "SENTIENT_CLAUDE_BRIDGE_TOKEN":"inherited-local-secret",
+            "OPENAI_API_KEY":"other-secret", "AWS_SECRET_ACCESS_KEY":"unrelated-secret"])
+        check(executor.count == 4 && executor["HOME"] == "/synthetic" && executor["TMPDIR"] != nil,
+              "native executor retains routing but no inherited provider, identity, custom or relay credential")
         let env = try HostedClaudeRuntime.environment(gatewayURL: gateway, token: token, model: model, profile: profile)
         check(env["ANTHROPIC_API_KEY"] == token && env["ANTHROPIC_AUTH_TOKEN"] == "", "bare API auth contains only the scoped gateway token")
         check(env["ANTHROPIC_BASE_URL"] == gateway.absoluteString, "base URL is explicit")

@@ -122,6 +122,10 @@ enum FrontierRun {
                                 try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
                                     var interactive = prepared
                                     if HostedVaultToolServer.connection != nil { interactive.prompt += "\n\n" + HostedVaultToolServer.instructions }
+                                    if backend == .sentient, interactive.webSearch {
+                                        interactive.webSearch = false
+                                        interactive.prompt += "\n\nThis hosted background run has no web search or page-fetch tools. Use only the supplied evidence and explicitly connected local tools. Do not claim current external facts were verified; omit recommendations that require unavailable external verification."
+                                    }
                                     if let connection = SidekickToolServer.connection {
                                         interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
                                         interactive.configOverrides += connection.codexOverrides
@@ -225,7 +229,7 @@ enum FrontierRun {
                     let guidance = Set(attachments.map { ConnectorRegistry.actionInstructions(slug: $0.connection.slug) }.filter { !$0.isEmpty }).sorted().joined(separator: "\n\n")
                     // The selected runtime's manual belongs at the dispatch seam. Every caller,
                     // including cards and Sidekick, gets exactly one matching tool contract.
-                    let researchTools = backend == .custom
+                    let researchTools = backend == .custom || backend == .sentient
                         ? "Use the browser through your computer-use tools to search the web and read sources."
                         : "Web search is available throughout this task. Use your web search and page-reading tools whenever external information would help; you do not need the user to explicitly ask you to search."
                     let researchInstructions = """

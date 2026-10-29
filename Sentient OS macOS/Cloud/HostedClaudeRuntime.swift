@@ -30,6 +30,14 @@ nonisolated enum HostedClaudeRuntime {
             && model.unicodeScalars.allSatisfy { CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:").contains($0) }
     }
 
+    /// The native executor gets GUI/session routing, never inherited inference credentials.
+    /// Explicit local relay capabilities are merged by the caller only after this filter.
+    static func executorEnvironment(_ inherited: [String: String]) -> [String: String] {
+        let allowed: Set<String> = ["HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR", "LANG",
+                                    "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING", "XPC_SERVICE_NAME", "XPC_FLAGS"]
+        return inherited.filter { allowed.contains($0.key) }
+    }
+
     static func environment() throws -> [String: String] {
         guard let run = HostedInference.currentRun else { throw Failure.runRequired }
         return try environment(gatewayURL: run.gatewayURL, token: run.token, model: run.model, profile: profileDirectory, maxOutputTokens: run.maximumOutputTokens)
