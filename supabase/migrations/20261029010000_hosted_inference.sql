@@ -124,7 +124,7 @@ begin
             cursor_at := segment_end;
         end loop;
     end if;
-    update public.hosted_inference_runs set last_accounted_at = least(at_time, lease_expires_at),
+    update public.hosted_inference_runs set last_accounted_at = greatest(last_accounted_at,least(at_time, lease_expires_at)),
         phase = case when lease_expires_at <= at_time then 'expired' else phase end where id = run_id;
 end;
 $$;
@@ -195,6 +195,12 @@ begin
         principal := r.principal_id;
     end if;
     perform pg_advisory_xact_lock(hashtextextended(principal::text,29100001));
+    -- A queued call must account from the time it actually owns this principal. Using a
+    -- timestamp captured before the lock can backdate a later heartbeat or cross UTC days.
+    at_time := clock_timestamp();
+    today := (at_time at time zone 'UTC')::date;
+    month_key := to_char(at_time at time zone 'UTC','YYYY-MM');
+    reset_at := (today+1)::timestamp at time zone 'UTC';
     insert into public.hosted_inference_principals(principal_id) values(principal) on conflict do nothing;
     select * into principal_row from public.hosted_inference_principals where principal_id = principal for update;
     if principal_row.disabled and operation <> 'settle' then
