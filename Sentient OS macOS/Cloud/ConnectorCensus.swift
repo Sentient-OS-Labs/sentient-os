@@ -2,9 +2,9 @@
 //  ConnectorCensus.swift
 //  Sentient OS macOS
 //
-//  Hosted connector metadata and separately verified readiness. Explicit Done uses native
-//  provider control protocols; cached declarations/catalog presence never prove a linked account.
-//  Legacy listing/refresh remains available to lab diagnostics and tool-address resolution.
+//  Hosted connector declarations and separately observed connection health. Explicit Done
+//  permits a source read; only successful reads or native diagnostics verify the connection.
+//  Listing/refresh remains available to lab diagnostics and tool-address resolution.
 //
 //  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 //
@@ -65,9 +65,10 @@ nonisolated enum ConnectorCensus {
             }
             return true
         }
-        func canAttempt(legacyCompleted: Bool) -> Bool {
-            if isReady { return true }
-            guard healthy, readinessVerified == nil, legacyCompleted else { return false }
+        /// A user's declaration permits the first read without claiming verified OAuth.
+        /// Real authentication failures stop later reads until the user reconnects.
+        var canAttempt: Bool {
+            guard healthy else { return false }
             if origin == .claude {
                 let owner = readinessAccountIdentity ?? ClaudeAuth.legacyConnectorAccountIdentity
                 return owner != nil && owner == ClaudeAuth.cachedAccountIdentity
@@ -154,8 +155,8 @@ nonisolated enum ConnectorCensus {
         return await list()
     }
 
-    /// Verify only after explicit Connect/Done. Neither a local plugin directory nor a saved
-    /// declaration proves OAuth. No model turn or content tool is called by this path.
+    /// Explicit diagnostics only; never a prerequisite for Done or the first source read.
+    /// No model turn or content tool is called by this path.
     static func verifyConnection(slug: String, backend: ModelBackend) async -> Bool {
         guard ModelBackend.current == backend, let origin = DetectedConnector.Origin(backend: backend) else { return false }
         let claudeScope: ClaudeAuth.ReadinessScope?
@@ -178,7 +179,7 @@ nonisolated enum ConnectorCensus {
                 guard !Task.isCancelled, ModelBackend.current == backend,
                       account == readinessAccountIdentity(for: backend),
                       backend != .claude || claudeScope == ClaudeAuth.readinessScope else { return false }
-                // Two source sheets can finish concurrently; serialize their cache merge.
+                // Concurrent diagnostics serialize their cache merge.
                 var records = cached(for: origin)
                 records.removeAll { $0.slug == slug }
                 records.append(verified)
@@ -205,18 +206,6 @@ nonisolated enum ConnectorCensus {
         return cached(for: origin).contains { $0.slug == slug && $0.isReady }
     }
 
-    /// A browser reconnect can change the account. Keep intent, but invalidate the readiness
-    /// proof until a new native check or successful source read establishes the current grant.
-    static func invalidateReadiness(slug: String, backend: ModelBackend) {
-        guard let origin = DetectedConnector.Origin(backend: backend) else { return }
-        let records = cached(for: origin).map { record in
-            var record = record
-            if record.slug == slug { record.readinessVerified = false }
-            return record
-        }
-        persist(records, for: origin)
-    }
-
     /// Existing opted-in sources may be read before their old cache has a verification marker.
     /// Only the source reader's validated success or authentication failure updates this proof.
     static func recordReadOutcome(slug: String, backend: ModelBackend, connected: Bool) {
@@ -231,8 +220,8 @@ nonisolated enum ConnectorCensus {
         persist(records, for: origin)
     }
 
-    /// Save selection bookkeeping only after the caller verifies readiness. This helper never
-    /// upgrades a declaration or cached catalog entry into an authenticated connection.
+    /// Explicit Done permits another read, including after a reconnect. Preserve provider and
+    /// account scope, but leave OAuth verification to the actual reader or diagnostics.
     static func confirmSelection(slug: String, reconnected: Bool = false) {
         guard let origin = DetectedConnector.Origin(backend: ModelBackend.current) else { return }
         var records = cached(for: origin)
@@ -240,11 +229,10 @@ nonisolated enum ConnectorCensus {
         let pack = ConnectorRegistry.pack(forSlug: slug)
         records.removeAll { $0.slug == slug }
         records.append(DetectedConnector(slug: slug, displayName: previous?.displayName ?? pack?.displayName ?? titleCased(slug),
-            origin: origin, serverURL: previous?.serverURL ?? pack?.claudeServerURL,
-            catalogID: previous?.catalogID ?? pack?.codexCatalogID, iconPath: previous?.iconPath,
-            healthy: previous?.healthy ?? false, lastSeen: previous?.lastSeen ?? .distantPast,
-            readinessVerified: previous?.readinessVerified,
-            readinessAccountIdentity: previous?.readinessAccountIdentity))
+            origin: origin, serverURL: origin == .claude ? previous?.serverURL ?? pack?.claudeServerURL : nil,
+            catalogID: origin == .chatgpt ? previous?.catalogID ?? pack?.codexCatalogID : nil, iconPath: previous?.iconPath,
+            healthy: true, lastSeen: .now, readinessVerified: false,
+            readinessAccountIdentity: origin == .claude ? ClaudeAuth.cachedAccountIdentity : nil))
         if reconnected, previous != nil {
             let key = ConnectorRegistry.readGenerationKey(slug, origin.rawValue)
             UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + 1, forKey: key)
@@ -334,9 +322,13 @@ nonisolated enum ConnectorCensus {
                         for origin: DetectedConnector.Origin,
                         defaults: UserDefaults = .standard) -> [DetectedConnector] {
         let old = cached(for: origin, defaults: defaults)
-        let connectors = logicalServices(connectors).map { record in
+        var connectors = logicalServices(connectors).map { record in
             preservingReadiness(record, previous: old.first { $0.id == record.id })
         }
+        // Discovery can lag behind Done or omit a connected service. Keep explicit selections
+        // and actual read outcomes; a missing catalog entry is not an authentication failure.
+        let discovered = Set(connectors.map(\.id))
+        connectors += old.filter { $0.readinessVerified != nil && !discovered.contains($0.id) }
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
         let previous = old.count
@@ -357,15 +349,15 @@ nonisolated enum ConnectorCensus {
         return logicalServices(connectors)
     }
 
-    /// Catalog refreshes supply addressing metadata, not fresh OAuth evidence. They cannot
-    /// erase a verified connection or turn a known authentication failure back into healthy.
+    /// Catalog refreshes supply addressing metadata, not a verdict on an explicit selection.
+    /// Keep declarations and actual read outcomes until another explicit Done or read updates them.
     static func preservingReadiness(_ record: DetectedConnector, previous: DetectedConnector?) -> DetectedConnector {
         guard record.readinessVerified == nil, let previous,
               record.catalogID == previous.catalogID, record.serverURL == previous.serverURL else { return record }
-        let preserveDisconnect = record.origin == .chatgpt && previous.readinessVerified == false && !previous.healthy
+        let health = previous.readinessVerified == nil ? record.healthy : previous.healthy
         return DetectedConnector(slug: record.slug, displayName: record.displayName, origin: record.origin,
             serverURL: record.serverURL, catalogID: record.catalogID, iconPath: record.iconPath,
-            healthy: preserveDisconnect ? false : record.healthy, lastSeen: record.lastSeen,
+            healthy: health, lastSeen: record.lastSeen,
             readinessVerified: previous.readinessVerified,
             readinessAccountIdentity: previous.readinessAccountIdentity)
     }

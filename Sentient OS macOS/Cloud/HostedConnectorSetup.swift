@@ -1,4 +1,4 @@
-// Verifies native hosted-connection metadata on explicit Done, without a model turn.
+// Trusts explicit Done as the user's hosted-source selection, without a provider probe.
 // Defers disclosed contact collection until actual mailbox processing.
 // Doc: ../Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 
@@ -8,40 +8,13 @@ import Foundation
 enum HostedConnectorSetup {
     private static var collectionJobs: [String: Task<Void, Never>] = [:]
     private static var teardownDepth = 0
-    private static var generation = 0
-    private struct VerificationJob {
-        let slug: String
-        let task: Task<Bool, Never>
-    }
-    private static var verificationJobs: [UUID: VerificationJob] = [:]
-    // Source selections are shared by every window and backend. A later Stop reading or
-    // reconnect therefore retires every older confirmation for that same canonical source.
-    private static var sourceRevisions: [String: UInt64] = [:]
-
-    /// Explicit Done checks only native connection metadata. A cancellation/backend change
-    /// cannot save a late selection, and no model turn or content read is used for readiness.
-    static func verifyAndConfirm(slug: String, backend: ModelBackend = .current, reconnected: Bool = false) async -> Bool {
-        guard teardownDepth == 0, !Task.isCancelled, ModelBackend.current == backend else { return false }
-        let slug = ConnectorRegistry.canonicalSlug(slug)
-        let startedGeneration = generation, id = UUID()
-        let revision = advanceSourceRevision(slug)
-        let verification = Task { await ConnectorCensus.verifyConnection(slug: slug, backend: backend) }
-        verificationJobs[id] = VerificationJob(slug: slug, task: verification)
-        defer { verificationJobs.removeValue(forKey: id) }
-        let ready = await withTaskCancellationHandler { await verification.value } onCancel: { verification.cancel() }
-        guard ready, !Task.isCancelled, teardownDepth == 0, generation == startedGeneration,
-              sourceRevisions[slug] == revision,
-              ModelBackend.current == backend else { return false }
-        return confirm(slug: slug, backend: backend, reconnected: reconnected)
-    }
-
-    /// This synchronous persistence seam also requires native readiness. Callers cannot turn
-    /// an unverified browser declaration into a connected source by skipping the async check.
+    /// Done saves the user's declaration immediately. Actual reads establish connection health;
+    /// provider discovery and optional contact collection never gate source selection.
     @discardableResult
     static func confirm(slug: String, backend: ModelBackend = .current, reconnected: Bool = false) -> Bool {
-        guard teardownDepth == 0, backend != .custom, ModelBackend.current == backend else { return false }
+        guard teardownDepth == 0, !Task.isCancelled, backend != .custom, ModelBackend.current == backend else { return false }
         let slug = ConnectorRegistry.canonicalSlug(slug)
-        guard !slug.hasPrefix("direct-"), ConnectorCensus.isReady(slug: slug, backend: backend) else { return false }
+        guard !slug.hasPrefix("direct-") else { return false }
         ConnectorCensus.confirmSelection(slug: slug, reconnected: reconnected)
         let defaults = UserDefaults.standard
         switch slug {
@@ -72,8 +45,6 @@ enum HostedConnectorSetup {
         guard teardownDepth == 0, backend != .custom, ModelBackend.current == backend else { return }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return }
-        advanceSourceRevision(slug)
-        ConnectorCensus.invalidateReadiness(slug: slug, backend: backend)
         let defaults = UserDefaults.standard
         let selected: Bool
         switch slug {
@@ -88,13 +59,12 @@ enum HostedConnectorSetup {
         defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
     }
 
-    /// A source-level opt-out wins over Done in any other open window. It keeps the linked
-    /// provider and existing knowledge, but retires pending verification and contact consent.
+    /// Source selection is synchronous, so no delayed verification can undo this opt-out.
+    /// Keep the provider connection and existing knowledge; retire pending contact consent.
     static func stopReading(slug: String, backend: ModelBackend = .current) {
         guard teardownDepth == 0, ModelBackend.current == backend else { return }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return }
-        advanceSourceRevision(slug)
         let defaults = UserDefaults.standard
         switch slug {
         case "gmail": defaults.set(false, forKey: "dbg.run.gmail")
@@ -106,14 +76,6 @@ enum HostedConnectorSetup {
             defaults.removeObject(forKey: request.key)
             collectionJobs[request.key]?.cancel()
         }
-    }
-
-    @discardableResult
-    private static func advanceSourceRevision(_ slug: String) -> UInt64 {
-        let revision = (sourceRevisions[slug] ?? 0) &+ 1
-        sourceRevisions[slug] = revision
-        for job in verificationJobs.values where job.slug == slug { job.task.cancel() }
-        return revision
     }
 
     /// Start alongside the first ensuing mailbox read, never from the connector screen.
@@ -164,10 +126,6 @@ enum HostedConnectorSetup {
     /// actions remain suspended through the whole teardown, including its asynchronous steps.
     static func beginTeardown() async {
         teardownDepth += 1
-        generation &+= 1
-        let verifications = verificationJobs.values.map(\.task)
-        for job in verifications { job.cancel() }
-        for job in verifications { _ = await job.value }
         let pending = Array(collectionJobs.values)
         for job in pending { job.cancel() }
         for job in pending { await job.value }

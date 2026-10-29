@@ -6,11 +6,16 @@ import subprocess
 import tempfile
 APP=Path(__file__).resolve().parents[1]/'Sentient OS macOS'
 source=(APP/'Views/Permissions/NativePermissionCheck.swift').read_text()
-source=source[:source.index('@MainActor private final class NativePermissionCheckWindow')].replace('import AppKit','import Foundation')
+source=source.replace('import AppKit','import Foundation')
 source += '\nextension NativePermissionCheck { static func fixture() -> NativePermissionCheck { NativePermissionCheck() } }\n'
 SUPPORT=r'''
 import Foundation
+@MainActor enum Analytics {
+    static func signal(_ name: String, parameters: [String:String]) {}
+}
 enum CodexRuntime {
+    struct Release { let helperBuild = 1001365 }
+    static let release = Release()
     struct Lease { func unlock() {} }
     static func sharedRuntimeLease() async throws -> Lease { .init() }
 }
@@ -23,11 +28,17 @@ enum CodexRuntime {
 @MainActor final class OpenAIComputerUseRuntime {
     static let shared=OpenAIComputerUseRuntime()
     var busy=false
-    func reserveDiagnostic() -> UUID? { busy ? nil : UUID() }
-    func endDiagnostic(_ id:UUID) {}
+    var helper=NSRunningApplication(1)
+    var reservation: UUID?
+    func reserveDiagnostic() -> UUID? {
+        guard !busy, reservation == nil else {return nil}
+        let id=UUID();reservation=id;return id
+    }
+    func endDiagnostic(_ id:UUID) {if reservation == id {reservation=nil}}
+    func start(configuration: OpenAIComputerUse.Configuration) async throws -> NSRunningApplication {helper}
 }
 nonisolated enum OpenAIComputerUse {
-    enum RuntimeError:Error {case helperRunning}
+    enum RuntimeError:Error {case helperRunning,backendUnavailable}
     nonisolated(unsafe) static var installed = true
     static let appURL = URL(fileURLWithPath:"/fixture-helper.app")
     static func validate(at:URL) async throws -> Bool { true }
@@ -46,6 +57,7 @@ nonisolated enum OpenAIComputerUse {
     var isCurrent: Bool { true }
     func show() { Self.shown += 1; Self.currentMarker = marker }
     func close() { Self.closed += 1 }
+    func waitUntilCurrent() async throws {try Task.checkCancellation()}
 }
 actor OpenAIComputerUseSession {
     @MainActor static var sessions: [OpenAIComputerUseSession] = []
@@ -58,12 +70,20 @@ actor OpenAIComputerUseSession {
         await MainActor.run { sessions.append(s) }; return s
     }
     func call(_ tool: String, arguments: Data, timeout: TimeInterval) async throws -> Data {
-        precondition(timeout == 12 && tool == "get_app_state")
+        precondition(timeout > 0 && timeout <= 12 && tool == "get_app_state")
         if await Self.delay { try await Task.sleep(for:.seconds(30)) }
         let marker = await NativePermissionCheckWindow.currentMarker
         return try JSONSerialization.data(withJSONObject:["content":[["type":"text","text":marker],["type":"image","data":"fixture"]]])
     }
-    func isUsable() -> Bool { usable }
+    var livenessDelay: Duration = .zero
+    var livenessStarted = false
+    func delayLiveness() {livenessDelay = .milliseconds(200);livenessStarted=false}
+    func didStartLiveness() -> Bool {livenessStarted}
+    func isUsable() async -> Bool {
+        livenessStarted=true
+        if livenessDelay > .zero {try? await Task.sleep(for:livenessDelay)}
+        return usable
+    }
     func expire() { usable = false }
     func close() async {
         if await Self.closeDelay { try? await Task.sleep(for:.milliseconds(100)) }
@@ -81,7 +101,7 @@ import Foundation
     @MainActor static func check(_ condition: Bool,_ label:String) { precondition(condition,label);count+=1 }
     @MainActor static func main() async throws {
         let cache=NativePermissionCheck.fixture(), config=OpenAIComputerUse.Configuration(revision:1)
-        let helper=NSRunningApplication(1)
+        let helper=OpenAIComputerUseRuntime.shared.helper
         cache.refresh()
         check(!cache.snapshot.isReady && NativePermissionCheckWindow.shown == 0,"Passive refresh never opens a window")
         try await cache.check(configuration:config,helper:helper)
@@ -96,6 +116,7 @@ import Foundation
         helper.isTerminated=true;cache.refresh()
         check(!cache.snapshot.isReady,"Helper exit invalidates evidence")
         let next=NSRunningApplication(2)
+        OpenAIComputerUseRuntime.shared.helper=next
         try await cache.check(configuration:config,helper:next)
         await cache.refresh(configuration:config,helper:NSRunningApplication(3))
         check(!cache.snapshot.isReady,"Replacement process cannot inherit proof")
@@ -151,6 +172,79 @@ import Foundation
         let retiredCloses = await retiring.closes
         let retiredUsable = await retiring.isUsable()
         check(retiredCloses == 1 && !retiredUsable,"Teardown joins previously invalidated retained clients")
+
+        OpenAIComputerUseSession.closeDelay=false
+        try await cache.check(configuration:config,helper:next)
+        let staleProof=OpenAIComputerUseSession.sessions.last!
+        await staleProof.delayLiveness()
+        let stale=Task {await cache.refresh(configuration:config,helper:next)}
+        while !(await staleProof.didStartLiveness()) {await Task.yield()}
+        cache.invalidate()
+        try await cache.check(configuration:config,helper:next)
+        let newest=cache.proofID
+        await stale.value
+        check(cache.snapshot.isReady && cache.proofID == newest,"Old liveness failure cannot invalidate a newer proof")
+
+        let shared=OpenAIComputerUseSession.sessions.last!
+        await shared.delayLiveness();await shared.expire()
+        let beforeShared=NativePermissionCheckWindow.shown
+        let firstCheck=Task {try await cache.check(configuration:config,helper:next)}
+        while !(await shared.didStartLiveness()) {await Task.yield()}
+        let secondCheck=Task {try await cache.check(configuration:config,helper:next)}
+        try await firstCheck.value;try await secondCheck.value
+        check(cache.snapshot.isReady && NativePermissionCheckWindow.shown == beforeShared + 1,
+              "Cached-liveness callers join one new proof without a spurious busy error")
+
+        let closing=OpenAIComputerUseSession.sessions.last!
+        await closing.delayLiveness()
+        let late=Task {try await cache.check(configuration:config,helper:next)}
+        while !(await closing.didStartLiveness()) {await Task.yield()}
+        let beforeClose=NativePermissionCheckWindow.shown
+        await cache.close()
+        do {try await late.value;fatalError("Liveness waiter survived teardown")} catch is CancellationError {count+=1}
+        check(!cache.snapshot.isReady && NativePermissionCheckWindow.shown == beforeClose,
+              "Close drains admitted cached-proof waiter without a later window or publication")
+
+        try await cache.check(configuration:config,helper:next)
+        let stillLive=OpenAIComputerUseSession.sessions.last!
+        await stillLive.delayLiveness()
+        let oldSuccess=Task {try await cache.check(configuration:config,helper:next)}
+        while !(await stillLive.didStartLiveness()) {await Task.yield()}
+        cache.invalidate()
+        do {try await oldSuccess.value;fatalError("Stale liveness success admitted work")} catch is CancellationError {count+=1}
+        check(!cache.snapshot.isReady,"Late true liveness cannot certify an invalidated proof")
+
+        try await cache.check(configuration:config,helper:next)
+        let owned=OpenAIComputerUseSession.sessions.last!
+        await owned.delayLiveness()
+        let owner=Task {try await cache.check(configuration:config,helper:next)}
+        while !(await owned.didStartLiveness()) {await Task.yield()}
+        let observer=Task {try await cache.check(configuration:config,helper:next)}
+        await Task.yield();observer.cancel()
+        do {try await observer.value;fatalError("Cancelled observer waited")} catch is CancellationError {count+=1}
+        try await owner.value
+        check(cache.snapshot.isReady,"Cancelling an observer preserves the still-owned successful check")
+
+        let observed=cache.proofID
+        cache.invalidate()
+        next.isTerminated=true
+        let replacement=NSRunningApplication(4)
+        OpenAIComputerUseRuntime.shared.helper=replacement
+        try await cache.check(configuration:config,helper:replacement)
+        let replacementID=cache.proofID
+        let beforeStaleInput=NativePermissionCheckWindow.shown
+        await cache.refresh(configuration:.init(revision:2),helper:next,observedProofID:observed)
+        check(cache.snapshot.isReady && cache.proofID == replacementID,
+              "Stale configuration/helper lookup cannot erase proof committed before refresh entry")
+        await cache.refresh(configuration:config,helper:next,observedProofID:nil)
+        check(cache.snapshot.isReady && cache.proofID == replacementID,
+              "Lookup begun without evidence cannot erase a newly committed proof")
+        try await cache.check(configuration:config,helper:next)
+        check(cache.snapshot.isReady && cache.proofID == replacementID && NativePermissionCheckWindow.shown == beforeStaleInput,
+              "Admitted check resolves a terminated supplied handle and reuses current proof")
+        await cache.refresh(configuration:.init(revision:2),helper:replacement,observedProofID:replacementID)
+        check(!cache.snapshot.isReady,"Matching observation still invalidates changed configuration")
+        await cache.close()
         print("PASS \(count) native permission lifecycle checks")
     }
 }

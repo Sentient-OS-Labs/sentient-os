@@ -48,20 +48,21 @@ actor CodexCLI {
     }
 
     /// The model id passed to `codex exec -m`. Computer-use tiers are defined in
-    /// ComputerUseSpeed; Sol handles background work, Terra the free/go fallback, Luna reads.
+    /// ComputerUseSpeed; Sol handles background work, Terra its free/go fallback, Luna reads
+    /// and Free/Go computer use.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
-        case gpt61terra = "gpt-6.1-terra" // computer use: Faster
-        case gpt61sol = "gpt-6.1-sol"     // computer use: Medium
-        case gpt6astra = "gpt-6-astra"  // computer use: Smarter
+        case gpt61terra = "gpt-6.1-terra" // paid computer use: Faster
+        case gpt61sol = "gpt-6.1-sol"     // paid computer use: Medium
+        case gpt6astra = "gpt-6-astra"  // paid computer use: Smarter
         case gpt6sol = "gpt-6-sol"    // knowledge-base work + everything else (paid plans)
         case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
-        case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing
+        case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing; Free/Go computer use
     }
 
     /// Model resolution for structured runs and custom-provider computer use. ChatGPT computer
-    /// use sends the user's selected tier directly, without a plan-based substitution.
+    /// use gets its plan-aware model and effort from ComputerUseSpeed instead.
     ///  - Custom backend (Settings → Frontier Model Choice): the user's endpoint model rides
     ///    EVERY call — the tier enums collapse to one model, and the caller's effort is
     ///    replaced by the pane's ONE per-endpoint reasoning level (per-call effort tuning is

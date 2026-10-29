@@ -26,6 +26,12 @@ enum FactoryReset {
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
         guard conversation.beginMaintenance() else { return false }
         defer { conversation.endMaintenance() }
+        await ComputerUseGate.shared.beginTeardown()
+        await NativePermissionCheck.shared.beginTeardown()
+        defer {
+            NativePermissionCheck.shared.endTeardown()
+            ComputerUseGate.shared.endTeardown()
+        }
         let processing = appState?.processing ?? ProcessingCoordinator.shared
         await processing.suspend()
         appState?.scheduler.reevaluate()
@@ -44,8 +50,8 @@ enum FactoryReset {
             return false
         }
         await conversation.drainBackgroundWork()
-        await NativePermissionCheck.shared.close()
         await ComputerUseDoctor.shared.clear(defaults: defaults)
+        await NativePermissionCheck.shared.close()
         // Invalidate in-flight learning before any suspension; explicit settings survive.
         SidekickInstructionStore.resetLearning()
         await HostedConnectorSetup.beginTeardown()

@@ -16,6 +16,7 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case unexpectedEOF, processExited, requestTimedOut, unexpectedRequest, launchFailed, writeFailed
         case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall
         case imageEncodingFailed, displayUnavailable, invalidArguments, testWindowNotObserved
+        case testWindowNotCurrentBeforeRead, testWindowNotCurrentAfterRead, testWindowMarkerMissing
         case focusChanged, inputInterrupted, elementUnavailable
         // Legacy diagnostic values only; no Chromium-specific runtime policy.
         case chromiumAppChanged, chromiumRecoveryExhausted
@@ -37,6 +38,13 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
     var actionEffectsUnconfirmed: Bool?
 
     var effectsMayBeUnknown: Bool { actionEffectsUnconfirmed ?? (stage == .action) }
+
+    /// An owned capability check was interrupted or its marker was not observed. None of
+    /// these local proof failures establishes that an operating-system grant was denied.
+    var isReadinessInterruption: Bool {
+        [.testWindowNotObserved, .testWindowNotCurrentBeforeRead,
+         .testWindowNotCurrentAfterRead, .testWindowMarkerMissing].contains(detail)
+    }
 
     var modelGuidance: String {
         "This step did not complete as expected; it does not end the task. User clicks, typing or Space changes can interrupt computer use. Pause briefly, re-query the app with get_app_state and retry using fresh controls when appropriate. "
