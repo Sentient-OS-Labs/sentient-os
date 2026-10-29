@@ -782,14 +782,22 @@ actor ClaudeCLI {
             let detail = !resultDetail.isEmpty ? resultDetail
                 : (out.stderr.isEmpty ? String(out.stdout.suffix(600)) : out.stderr)
             let lowered = detail.lowercased()
-            if rateLimitRejected || usageLimitMarkers.contains(where: { lowered.contains($0) }) {
-                throw CodexCLI.CLIError.usageLimit(message: String(detail.prefix(600)),
-                                                   sessionID: sessionID)
+            let hostedQuota = hosted && ["daily_time_exhausted", "usage_limit_reached"].contains(where: lowered.contains)
+            if hostedQuota || rateLimitRejected || usageLimitMarkers.contains(where: { lowered.contains($0) }) {
+                throw CodexCLI.CLIError.usageLimit(message: hosted
+                    ? "Sentient hosted inference has reached its usage allowance. Try again after it resets."
+                    : String(detail.prefix(600)), sessionID: sessionID)
             }
+            // Gateway/provider payloads never enter a hosted user-facing error or diagnostic.
+            // Service funding, transient throttles and expired leases are not user daily quotas.
+            let safeDetail = hosted
+                ? (lowered.contains("run_expired") ? "This hosted inference session expired. Try again."
+                    : "Sentient hosted inference could not complete this request. Try again.")
+                : String(detail.prefix(600))
             if out.status != 0 {
-                throw CodexCLI.CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+                throw CodexCLI.CLIError.exitFailure(code: out.status, message: safeDetail)
             }
-            throw CodexCLI.CLIError.badEnvelope(String(detail.prefix(600)))
+            throw CodexCLI.CLIError.badEnvelope(safeDetail)
         }
 
         let usage = resultObj?["usage"] as? [String: Any]
