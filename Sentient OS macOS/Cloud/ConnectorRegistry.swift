@@ -309,7 +309,7 @@ nonisolated enum ConnectorRegistry {
         var entries: [Entry] = []
         var gmailWritesLive = false
         switch ModelBackend.current {
-        case .custom, .claude:
+        case .custom, .claude, .sentient:
             return ""
         case .chatgpt:
             var slugs: [String] = []
@@ -459,7 +459,7 @@ nonisolated enum ConnectorRegistry {
                 && pack.claudeToolPrefix != nil
         case .chatgpt:
             return pack.codexReadTools?.isEmpty == false
-        case .custom:
+        case .custom, .sentient:
             return false
         }
     }

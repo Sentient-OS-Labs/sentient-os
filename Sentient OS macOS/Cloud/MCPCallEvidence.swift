@@ -25,7 +25,7 @@ nonisolated enum MCPCallEvidence {
 
     static func receipts(raw: String, backend: ModelBackend) -> [Receipt] {
         switch backend {
-        case .claude: claudeReceipts(raw: raw)
+        case .claude, .sentient: claudeReceipts(raw: raw)
         case .chatgpt: codexReceipts(raw: raw)
         case .custom: []
         }

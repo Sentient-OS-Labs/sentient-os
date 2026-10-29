@@ -12,7 +12,7 @@ enum HostedConnectorSetup {
     /// provider discovery and optional contact collection never gate source selection.
     @discardableResult
     static func confirm(slug: String, backend: ModelBackend = .current, reconnected: Bool = false) -> Bool {
-        guard teardownDepth == 0, !Task.isCancelled, backend != .custom, ModelBackend.current == backend else { return false }
+        guard teardownDepth == 0, !Task.isCancelled, backend.hasSubscriptionConnectors, ModelBackend.current == backend else { return false }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return false }
         ConnectorCensus.confirmSelection(slug: slug, reconnected: reconnected)
@@ -42,7 +42,7 @@ enum HostedConnectorSetup {
     /// The existing checkpoint and notes remain intact until a subsequent read succeeds.
     /// This is not a new declaration or consent to collect an address: no background work runs.
     static func settingsOpened(slug: String, backend: ModelBackend = .current) {
-        guard teardownDepth == 0, backend != .custom, ModelBackend.current == backend else { return }
+        guard teardownDepth == 0, backend.hasSubscriptionConnectors, ModelBackend.current == backend else { return }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return }
         let defaults = UserDefaults.standard

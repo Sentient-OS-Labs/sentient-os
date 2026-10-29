@@ -20,7 +20,8 @@ setup=(APP/'Cloud/HostedConnectorSetup.swift').read_text()
 fixture=r'''
 import Foundation
 nonisolated enum ModelBackend: String, Sendable {
-    case chatgpt, claude, custom
+    case chatgpt, claude, custom, sentient
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
     @TaskLocal static var runOverride: Self?
     nonisolated(unsafe) static var current = Self.chatgpt
 }

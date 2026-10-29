@@ -13,7 +13,7 @@ import tempfile
 APP = Path(__file__).resolve().parents[1] / "Sentient OS macOS"
 FIXTURE = r'''
 import Foundation
-nonisolated enum ModelBackend { case claude, chatgpt, custom; nonisolated(unsafe) static var current: Self = .claude }
+nonisolated enum ModelBackend { case claude, chatgpt, custom, sentient; nonisolated(unsafe) static var current: Self = .claude }
 nonisolated enum MCPSource { enum MCPError: Error { case connectorAuth(slug: String), toolFailure(slug: String), clockMovedBackwards, connectionChanged } }
 nonisolated enum DirectMCPError: Error { case reconnectRequired, registrationExpired, accountSetupRequired, authorizationDenied, noTools, http(Int) }
 nonisolated enum CodexCLI {
@@ -125,6 +125,9 @@ import Foundation
         check("codex-native-string-auth", codex("status", "gmail.batch_read_email", failed: true, nativeError: "Unauthenticated"), expectedAuth: true, backend: .chatgpt)
         check("codex-other-native-error", codex("status", "gmail.batch_read_email", failed: true, nativeError: ["message":"A timeout occurred"]), expectedAuth: false, backend: .chatgpt)
         check("custom-has-no-hosted-receipts", authFailure, expectedAuth: false, backend: .custom)
+        check("sentient-cannot-borrow-subscription-source-receipts", authFailure, expectedAuth: false, backend: .sentient)
+        precondition(MCPCallEvidence.receipts(raw: claude("direct", "mcp__sentient_fixture__read", content: "[]"), backend: .sentient).count == 1,
+                     "Sentient direct connector receipts retain the Claude stream dialect")
         // A complete successful empty discovery remains valid; missing discovery still fails.
         ModelBackend.current = .claude
         checked += 1

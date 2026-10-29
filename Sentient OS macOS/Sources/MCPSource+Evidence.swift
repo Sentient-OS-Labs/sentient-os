@@ -22,7 +22,7 @@ extension MCPSource {
             let names = ConnectorRegistry.pack(forSlug: "google-drive")?.codexReadTools ?? []
             reads = Set(names.filter { $0 != "get_profile" }.flatMap { ["google_drive." + $0, "gdrive." + $0] })
             discovery = Set(["search", "recent_documents"].flatMap { ["google_drive." + $0, "gdrive." + $0] })
-        case .custom:
+        case .custom, .sentient:
             return false
         }
         let required = requiresDiscovery ? discovery : reads
@@ -35,7 +35,7 @@ extension MCPSource {
     static func hasDirectReadEvidence(raw: String, connection: DirectMCPConnection, backend: ModelBackend,
                                      requiredNames: Set<String>? = nil) -> Bool {
         let reads = (connection.provider?.reviewedReads ?? []).intersection(requiredNames ?? connection.provider?.reviewedReads ?? [])
-        if backend == .claude {
+        if backend.hasClaudeRuntime {
             return !successfulClaudeMCPToolNames(raw: raw).isDisjoint(with: Set(reads.map { connection.toolPrefix + $0 }))
         }
         return successfulCodexMCPResults(raw: raw).contains {

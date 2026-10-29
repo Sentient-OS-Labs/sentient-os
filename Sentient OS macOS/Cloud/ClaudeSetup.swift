@@ -170,7 +170,7 @@ final class ClaudeSetup {
     /// 24 h. `claude update` resolves the user's release channel and skips downloads when current.
     /// Rides the same idle tick as codex's updater (CodexSetup.startKeepingCurrent calls both).
     func updateIfDue(trigger: String) async {
-        guard ModelBackend.current == .claude else { return }
+        guard ModelBackend.hasClaudeRuntime else { return }
         guard installed, !installing, !preparing else { return }
         guard ClaudeCLI.usingManagedBinary else { return }   // brew/npm claude is the user's to update
         guard Self.sinceLastUpdateAttempt >= 86_400 else { return }
