@@ -98,8 +98,8 @@ actor HostedInferenceClient {
 
     func usage() async throws -> HostedInference.Usage {
         let config = try configured()
-        let data = try await authorized(config, path: "v1/usage", method: "GET")
-        guard let value = try? Self.decoder().decode(HostedInference.Usage.self, from: data),
+        let response = try await authorized(config, path: "v1/usage", method: "GET")
+        guard let value = try? Self.decoder().decode(HostedInference.Usage.self, from: response.data),
               value.dailyLimitSeconds > 0, value.dailyLimitSeconds.isFinite,
               value.remainingSeconds >= 0, value.remainingSeconds <= value.dailyLimitSeconds,
               value.usedSeconds >= 0, value.usedSeconds.isFinite else { throw Failure.invalidResponse }
@@ -109,22 +109,29 @@ actor HostedInferenceClient {
     func start(purpose: HostedInference.Purpose) async throws -> HostedInference.Run {
         try Task.checkCancellation()
         let config = try configured()
-        let sentAt = ProcessInfo.processInfo.systemUptime
-        let data = try await authorized(config, path: "v1/runs", method: "POST", body: ["purpose": purpose.rawValue])
-        guard let result = try? JSONDecoder().decode(RunResponse.self, from: data),
+        let response = try await authorized(config, path: "v1/runs", method: "POST", body: ["purpose": purpose.rawValue])
+        guard let result = try? JSONDecoder().decode(RunResponse.self, from: response.data),
               UUID(uuidString: result.run_id) != nil, result.run_token.count >= 24,
-              result.run_token.count <= 8192, result.phase == "running", result.purpose == purpose.rawValue,
-              result.model.hasPrefix("claude-"), result.model.count <= 100,
-              result.model.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") }),
-              result.remaining_seconds.isFinite, result.remaining_seconds >= 0,
-              (1...128_000).contains(result.maximum_output_tokens) else { throw Failure.invalidResponse }
-        let deadline = try Self.deadline(serverTime: result.server_time, expires: result.lease_expires_at,
-                                         paused: false, sentAt: sentAt)
+              result.run_token.count <= 8192 else { throw Failure.invalidResponse }
+        // Once admission credentials are known, every later validation failure must finish
+        // that run too. Authentication time precedes admission and is not part of its lease.
         let run = HostedInference.Run(id: result.run_id, gatewayURL: config.gatewayURL,
             token: result.run_token, model: result.model, remainingSeconds: result.remaining_seconds,
-            purpose: purpose, client: self, deadline: deadline, maximumOutputTokens: result.maximum_output_tokens)
-        if Task.isCancelled { await run.finish(); throw CancellationError() }
-        return run
+            purpose: purpose, client: self, deadline: 0, maximumOutputTokens: result.maximum_output_tokens)
+        do {
+            guard result.phase == "running", result.purpose == purpose.rawValue,
+                  result.model.hasPrefix("claude-"), result.model.count <= 100,
+                  result.model.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") }),
+                  result.remaining_seconds.isFinite, result.remaining_seconds >= 0,
+                  (1...65_536).contains(result.maximum_output_tokens) else { throw Failure.invalidResponse }
+            run.renew(deadline: try Self.deadline(serverTime: result.server_time,
+                expires: result.lease_expires_at, paused: false, sentAt: response.sentAt), paused: false)
+            try Task.checkCancellation()
+            return run
+        } catch {
+            await run.finish()
+            throw error
+        }
     }
 
     func control(_ run: HostedInference.Run, action: String) async throws {
@@ -171,14 +178,20 @@ actor HostedInferenceClient {
     }
 
     private func authorized(_ config: HostedInferenceConfiguration, path: String, method: String,
-                            body: [String: String]? = nil) async throws -> Data {
+                            body: [String: String]? = nil) async throws -> (data: Data, sentAt: TimeInterval) {
         let first = try await identity(config)
-        do { return try await request(config.gatewayURL, path: path, method: method, token: first.accessToken, body: body) }
+        let sentAt = ProcessInfo.processInfo.systemUptime
+        do {
+            let data = try await request(config.gatewayURL, path: path, method: method, token: first.accessToken, body: body)
+            return (data, sentAt)
+        }
         catch Failure.rejected(let code, _) where ["authentication_required", "invalid_token", "http_401"].contains(code) {
             // A rejected JWT did not authorize work. Refresh the same principal once; never
             // enroll a replacement identity or retry an uncertain admitted request.
             let refreshed = try await identity(config, rejectedAccessToken: first.accessToken)
-            return try await request(config.gatewayURL, path: path, method: method, token: refreshed.accessToken, body: body)
+            let retriedAt = ProcessInfo.processInfo.systemUptime
+            let data = try await request(config.gatewayURL, path: path, method: method, token: refreshed.accessToken, body: body)
+            return (data, retriedAt)
         }
     }
 

@@ -216,6 +216,64 @@ nonisolated final class MemoryCredentials: Sendable {
         check(stopped.withLock { $0 }, "Lease expiry did not drain owned operation")
         check(ProcessInfo.processInfo.systemUptime - began < 2, "Cutoff waited for the eight-second heartbeat")
         check(paths.filter { $0.hasSuffix("/finish") }.count == 1, "Deadline skipped server cleanup")
+
+        // Authentication happens before admission. Its latency must not consume a lease
+        // that the gateway has not issued yet, even near the daily allowance boundary.
+        reset { request in
+            if request.url!.path == "/auth/v1/signup" { Thread.sleep(forTimeInterval: 0.4) }
+            if request.url!.path == "/v1/runs" {
+                var body = try JSONSerialization.jsonObject(with: run) as! [String: Any]
+                body["lease_expires_at"] = "2099-10-30T00:00:00.250Z"
+                return (200, data(body))
+            }
+            return try success(request)
+        }
+        let afterSlowAuthentication = try await client().start(purpose: .sidekick)
+        check(paths.first == "/auth/v1/signup", "Slow-auth admission reused an existing identity fixture")
+        check(paths.filter { $0 == "/v1/runs" }.count == 1, "Slow authentication did not admit exactly once")
+        await afterSlowAuthentication.finish()
+        check(paths.filter { $0.hasSuffix("/finish") }.count == 1, "Slow-auth admitted run did not finish")
+
+        // Gateway latency does consume the issued lease. A decoded admission must still
+        // be finished when its response arrives after the local authorization deadline.
+        reset { request in
+            if request.url!.path == "/v1/runs" {
+                Thread.sleep(forTimeInterval: 0.4)
+                var body = try JSONSerialization.jsonObject(with: run) as! [String: Any]
+                body["lease_expires_at"] = "2099-10-30T00:00:00.100Z"
+                return (200, data(body))
+            }
+            return try success(request)
+        }
+        await failure(.rejected(code: "lease_expired", resetAt: nil)) {
+            _ = try await client(memory).start(purpose: .sidekick)
+        }
+        check(paths.filter { $0 == "/v1/runs" }.count == 1, "Expired admission was retried")
+        check(paths.filter { $0.hasSuffix("/finish") }.count == 1, "Expired admission leaked its known run credential")
+
+        reset { request in
+            if request.url!.path == "/v1/runs" {
+                var body = try JSONSerialization.jsonObject(with: run) as! [String: Any]
+                body["lease_expires_at"] = "not-an-iso-timestamp"
+                return (200, data(body))
+            }
+            return try success(request)
+        }
+        await failure(.invalidResponse) { _ = try await client(memory).start(purpose: .sidekick) }
+        check(paths.filter { $0 == "/v1/runs" }.count == 1, "Malformed admission was retried")
+        check(paths.filter { $0.hasSuffix("/finish") }.count == 1, "Malformed lease skipped cleanup of an admitted run")
+
+        reset { request in
+            if request.url!.path == "/v1/runs" {
+                var body = try JSONSerialization.jsonObject(with: run) as! [String: Any]
+                body["maximum_output_tokens"] = 65_537
+                return (200, data(body))
+            }
+            return try success(request)
+        }
+        await failure(.invalidResponse) { _ = try await client(memory).start(purpose: .sidekick) }
+        check(paths.filter { $0.hasSuffix("/finish") }.count == 1, "Unsupported runtime output limit leaked its admitted run")
+
         reset()
         let bypass = try await ModelBackend.$current.withValue(.claude) { try await HostedInference.withRun(purpose: .sidekick) { 7 } }
         check(bypass == 7 && paths.isEmpty, "Subscription provider consumed hosted allowance")
