@@ -478,6 +478,9 @@ nonisolated enum ConnectorRegistry {
         if backend == .chatgpt {
             return "v2:chatgpt:\(CodexRuntime.sessionScope):\(CodexRuntime.accountIdentity ?? "signed-out"):\(generation)"
         }
+        if backend == .claude {
+            return "v2:claude:\(ClaudeAuth.cachedAccountIdentity ?? "unverified-account"):\(generation)"
+        }
         return "v1:\(backend.rawValue):\(generation)"
     }
 

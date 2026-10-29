@@ -1,6 +1,6 @@
 //
 // ConnectorConnectSheet.swift
-// Hosted connection popups save the user's selection immediately. Direct accounts retain their
+// Hosted connection popups save the user's explicit selection immediately. Direct accounts retain their
 // browser OAuth, account IDs, knowledge toggle and cancellation lifecycle.
 // Doc: Documentation - Settings.md
 //
@@ -111,7 +111,7 @@ struct ConnectorConnectSheet: View {
                 }
 
                 if ConnectorRegistry.kbEligible(selectionSlug) {
-                    if context == .settings {
+                    if context == .settings || direct != nil {
                         ConnectorKnowledgeControl(slug: selectionSlug)
                             .disabled(busy)
                             .padding(.top, 20)
@@ -163,6 +163,13 @@ struct ConnectorConnectSheet: View {
 
     private var hostedControls: some View {
         VStack(spacing: 0) {
+            if hostedSelected && !hostedCanRead {
+                Text("This selected source is unavailable with your current AI. Choose a supported connection or stop reading it here.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).padding(.top, 14)
+                Button("Stop reading \(name)", action: stopHostedReading)
+                    .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 14)
+            }
             if !hostedConnected {
                 Text(hostedInstructions)
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
@@ -180,6 +187,7 @@ struct ConnectorConnectSheet: View {
             ConnectorActionButton(title: hostedConnected ? "Open connector settings" : "Connect \(name)",
                                   action: connect)
                 .padding(.top, 26)
+                .disabled(hostedBackend == .custom || (hostedSelected && !hostedCanRead))
 
             if hostedConnected {
                 if hostedCanRead {
@@ -187,13 +195,14 @@ struct ConnectorConnectSheet: View {
                         .buttonStyle(.plain).font(.system(size: 11))
                         .foregroundStyle(Theme.Ink.deepMuted)
                         .padding(.top, 18)
-                } else {
+                } else if !hostedSelected {
                     taskOnlyNotice
                         .padding(.top, 18)
                 }
-            } else if openedConnectorPage {
+            }
+            if openedConnectorPage {
                 ConnectorActionButton(title: "Done", kind: .done, action: done)
-                    .padding(.top, 14)
+                    .padding(.top, 14).disabled(busy)
             }
         }
     }
@@ -334,8 +343,9 @@ struct ConnectorConnectSheet: View {
     private func done() {
         guard !busy else { return }
         if !usesDirect {
-            _ = HostedConnectorSetup.confirm(slug: source.serviceSlug, backend: hostedBackend,
-                                              reconnected: openedConnectorPage)
+            guard HostedConnectorSetup.confirm(slug: source.serviceSlug, backend: hostedBackend,
+                reconnected: openedConnectorPage) else { dismiss(); return }
+            connectors = ConnectorRegistry.detectedForCurrentBackend()
             dismiss()
             return
         }
@@ -348,7 +358,8 @@ struct ConnectorConnectSheet: View {
 
     private func stopHostedReading() {
         guard ModelBackend.current == hostedBackend else { dismiss(); return }
-        hostedSelected = false
+        operation?.cancel()
+        HostedConnectorSetup.stopReading(slug: source.serviceSlug, backend: hostedBackend)
         dismiss()
     }
 

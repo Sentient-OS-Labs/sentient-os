@@ -80,9 +80,9 @@ operation races its reply/error against a 30-second timeout and resumes its call
 
 ## Setup, enablement, and migration
 
-`enableAfterSetup()` runs at setup completion and launch. Once onboarding is complete, a new
-non-knowledge-base-only installation enables the production schedule immediately. It does not wait
-for initial analysis, install the helper implicitly, or open a login prompt. The one-time
+`enableAfterSetup()` runs after an explicit overnight-analysis choice. Reaching Home or choosing
+Run now does not enable the production schedule. Overnight setup presents the wake helper and
+launch-at-login controls only for that choice; neither is silently installed. The one-time
 `scheduler.enabledAfterSetup` latch preserves existing explicit values of `scheduler.enabled` and
 respects the old `scheduler.autoEnableFired` latch. The obsolete auto-enable delay preference is
 removed; there is no 14-hour timer.
@@ -90,7 +90,8 @@ removed; there is no 14-hour timer.
 The scheduler can run when `dbg.scheduler.enabled` is on, when `scheduler.enabled` is on outside
 knowledge-base-only mode, or when the coordinator has a pending first night. That explicit first-night
 choice works in knowledge-base-only mode without enabling recurring production scheduling.
-Onboarding completion is required, and Reset/Uninstall suspension disables scheduling. A user pause
+Home admission plus completed personal setup (or a pending explicit first-night plan) is required,
+and Reset/Uninstall suspension disables scheduling. A user pause
 cancels the pending wake and is never silently undone by the next overnight trigger.
 
 ## Local time and wake replacement

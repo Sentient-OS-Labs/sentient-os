@@ -263,9 +263,11 @@ actor ProactiveCycle {
     /// knowledge base, which is what lets the first build run it alongside itself. Silent on the
     /// takeover, and best-effort like the welcome gift: a failure never discards a completed
     /// knowledge base; it is logged, and the absent file keeps the home's setup eligible to retry.
-    static func collectWritingStyle() async -> String? {
-        let initial = await MainActor.run { ProcessingPlan.initialCompletedAt() == nil }
+    @MainActor static func collectWritingStyle() async -> String? {
+        let initial = ProcessingPlan.initialCompletedAt() == nil
         guard initial, !WritingStyle.exists() else { return nil }
+        // Samples are optional. Retain their own diagnostics without marking the required
+        // analysis operation failed when this independent enrichment cannot be collected.
         return await Diagnostics.withOperation("writing_style_setup", propagatesFailure: false) {
             do { return try await WritingStyle.collect() }
             catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }

@@ -62,9 +62,9 @@ struct DevToolsView: View {
     private static let modelPath = ModelLocator.resolve()
 
     // The dev source picker (same keys as SourceSelection).
-    @AppStorage("dbg.run.downloads") private var runDownloads = true
-    @AppStorage("dbg.run.desktop")   private var runDesktop = true
-    @AppStorage("dbg.run.documents") private var runDocuments = true
+    @AppStorage("dbg.run.downloads") private var runDownloads = false
+    @AppStorage("dbg.run.desktop")   private var runDesktop = false
+    @AppStorage("dbg.run.documents") private var runDocuments = false
     @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false
     @AppStorage("dbg.whatsapp.chats") private var selectedChatsCSV = ""
     @AppStorage("dbg.run.imessage")  private var runIMessage = false

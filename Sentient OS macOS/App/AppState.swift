@@ -4,12 +4,11 @@
 //
 //  @Observable @MainActor global UI state: onboarding flags + live pipeline
 //  status — the single source of truth the SwiftUI window and MenuBarExtra observe.
-//  Only the onboarding flag is persisted (UserDefaults); everything else is live runtime state.
+//  Home admission and personal-setup milestones are persisted separately in UserDefaults.
 //
 
 import Foundation
 import SwiftUI
-import UserNotifications
 
 @MainActor
 @Observable
@@ -37,6 +36,19 @@ final class AppState {
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
     private var hasStartedInterface = false
+    @ObservationIgnored private var firstTaskObserver: NSObjectProtocol?
+    @ObservationIgnored private var activeObserver: NSObjectProtocol?
+    @ObservationIgnored private var homePreparation: Task<Void, Never>?
+
+    var hasCompletedPersonalSetup: Bool {
+        didSet {
+            UserDefaults.standard.set(hasCompletedPersonalSetup, forKey: PersonalSetupProgress.completedKey)
+            if hasCompletedPersonalSetup && !oldValue { Analytics.signal("Onboarding.completed") }
+        }
+    }
+    var hasCompletedFirstSidekickTask: Bool {
+        didSet { UserDefaults.standard.set(hasCompletedFirstSidekickTask, forKey: PersonalSetupProgress.firstTaskKey) }
+    }
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
     /// the menu bar item is the anchor then).
@@ -46,21 +58,63 @@ final class AppState {
     /// whole object is), never the root wake-helper. Its `model` drives UpdateGateView. (Updates/)
     let update = UpdateController()
 
-    static let onboardingKey = "hasCompletedOnboarding"   // FactoryReset clears it (the rewind)
+    static let onboardingKey = PersonalSetupProgress.homeKey
     var hasCompletedOnboarding: Bool {
         didSet {
-            if !hasCompletedOnboarding { MainNavigation.shared.reset() }
+            if !hasCompletedOnboarding {
+                MainNavigation.shared.reset()
+                homePreparation?.cancel()
+                homePreparation = nil
+            }
             UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
             if hasCompletedOnboarding, !oldValue {
-                Analytics.signal("Onboarding.completed")
-                if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil { startAfterSetup() }
+                Analytics.signal("Onboarding.homeReached")
+                if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil { startAfterHome() }
             }
         }
     }
 
     init() {
+        let isTesting = ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] != nil
+        if !isTesting {
+            let legacySetup = PersonalSetupProgress.migrate()
+            SourceSelection.migrateLegacyFolderDefaults(hadPersonalSetup: legacySetup)
+        }
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingKey)
+        self.hasCompletedPersonalSetup = PersonalSetupProgress.isComplete()
+        self.hasCompletedFirstSidekickTask = UserDefaults.standard.bool(forKey: PersonalSetupProgress.firstTaskKey)
         self.notch = NotchWindowController(coordinator: commandCoordinator)
+
+        SafeAppRelaunch.shared.configure(self)
+        if !isTesting, let saved = PermissionRelaunchDraft.take() {
+            let conversation = commandCoordinator.run.conversation
+            if let generation = conversation.generation, saved.generation == generation,
+               conversation.draft.isEmpty, conversation.replyReference == nil {
+                conversation.draft = saved.text
+                conversation.replyReference = saved.reply
+                PermissionRelaunchDraft.clear()
+            } else if let generation = conversation.generation, let savedGeneration = saved.generation,
+                      generation != savedGeneration {
+                // An explicit history reset invalidates old reply references and old drafts.
+                PermissionRelaunchDraft.clear()
+            }
+            // A transient store-open failure leaves the private handoff intact for recovery.
+        }
+        if !isTesting, let saved = PermissionWaitDraft.read() {
+            let conversation = commandCoordinator.run.conversation
+            if let generation = conversation.generation, saved.generation == generation,
+               conversation.draft.isEmpty, conversation.replyReference == nil {
+                conversation.draft = saved.text
+                conversation.replyReference = saved.reply
+                try? PermissionWaitDraft.clear(matching: saved.runID)
+            } else if let generation = conversation.generation, saved.generation != generation {
+                try? PermissionWaitDraft.clear(matching: saved.runID)
+            }
+        }
+        firstTaskObserver = NotificationCenter.default.addObserver(forName: PersonalSetupProgress.firstTaskCompleted,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.hasCompletedFirstSidekickTask = true }
+            }
 
         // Headless self-tests (SENTIENT_SELFTEST) boot this whole app shell before exiting, and
         // they share the real UserDefaults — so NONE of the launch side effects may fire. Field
@@ -80,14 +134,22 @@ final class AppState {
         // background setup before model selection; login and permission grants remain separate.
         // Register the installation now so Settings, first use and Uninstall share its lifetime.
         ComputerUseSetup.current.prepareForLaunch()
-        scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
-        if hasCompletedOnboarding { startAfterSetup() }
-        // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
-        // the coordinator: the notch experience still plays, the codex run just never fires.
+        if hasCompletedOnboarding { startAfterHome() }
+        else { scheduler.reevaluate() }
+        activeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.hasCompletedOnboarding, !self.isUninstalling,
+                          self.homePreparation == nil, ModelBackend.current == .claude else { return }
+                    self.startAfterHome()
+                }
+            }
+        // The introduction's isolated demo and ordinary post-model Sidekick share the notch.
         startInterfaceIfReady()      // the upgrade must finish before Sidekick or its notch can appear
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        LifetimeUpgradeAnnouncement.shared.start()
         // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
         // the network monitor now so a codex failure right after a wake never reads "unknown", and
         // leave one breadcrumb saying what codex's login looks like at launch.
@@ -98,18 +160,13 @@ final class AppState {
             // lifeline EOF would otherwise hold its screen-capture stream (and CPU) forever.
             await CuaDriverHost.sweepOrphans()
         }
-        // Onboarding model download: the on-device model (3.66 GB) starts pulling 2s after the
-        // launch that follows the Full Disk Access grant — FDA is the one onboarding step that
-        // forces a relaunch, and it lands minutes before Start Analysis needs the model, so the
-        // downloading screen usually only covers the tail. Strictly an onboarding affair, and a
-        // no-op whenever ModelLocator already finds a model (dev checkouts, a finished download).
-        // A quit-and-relaunch mid-download resumes from the finished byte ranges, not from zero.
+        // Model files are ordinary app-owned Application Support data. Prepare them during the
+        // introduction; neither Home nor Sidekick waits for this resumable background transfer.
         if !hasCompletedOnboarding || !processing.initialComplete {
-            Task {
-                try? await Task.sleep(for: .seconds(2))
-                if Permissions.hasFullDiskAccess() {
-                    ModelDownload.shared.kickIfNeeded()
-                }
+            Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard let self, !isUninstalling, !processing.isSuspended else { return }
+                ModelDownload.shared.kickIfNeeded()
             }
         }
 
@@ -124,19 +181,49 @@ final class AppState {
         notch.start()
     }
 
-    /// Start the analysis monitor, overnight clock, idle-only CLI updates and quiet notification
-    /// permission on the first Home visit as well as subsequent launches.
-    private func startAfterSetup() {
-        processing.resumeMonitoring()
-        scheduler.enableAfterSetup()
+    /// Home starts monitoring only persisted analysis intent. Scheduling is explicitly chosen
+    /// later; entering Home never installs wake, enables login, or requests notification access.
+    private func startAfterHome() {
         CodexSetup.shared.startKeepingCurrent { [weak self] in
             self?.commandCoordinator.run.isRunning ?? true
         }
-        Task {
-            let center = UNUserNotificationCenter.current()
-            if await center.notificationSettings().authorizationStatus == .notDetermined {
-                _ = try? await center.requestAuthorization(options: [.provisional])
-            }
+        homePreparation?.cancel()
+        homePreparation = Task { [weak self] in
+            // Claude Code's login is shared and can change while Sentient is closed. Establish
+            // its current local identity before admitting persisted analysis; no model or source
+            // content is requested, and Home/Sidekick remain usable during this status check.
+            if ModelBackend.current == .claude { _ = await ClaudeAuth.refresh() }
+            guard let self, !Task.isCancelled else { return }
+            defer { homePreparation = nil }
+            guard hasCompletedOnboarding, !isUninstalling, !processing.isSuspended else { return }
+            processing.resumeMonitoring()
+            scheduler.reevaluate()
         }
+    }
+
+    /// Complete the live UI handoff only after FactoryReset has successfully cleared data.
+    /// App-owned presentation outlives RootView, so replacing Home with onboarding alone
+    /// cannot discard an old conversation/search/card surface.
+    func didResetPersonalData() {
+        let conversation = commandCoordinator.run.conversation
+        conversation.consumeDestination()
+        sidekickPresentation.didResetApp(generation: conversation.generation)
+        hasCompletedPersonalSetup = false
+        hasCompletedFirstSidekickTask = false
+        hasCompletedOnboarding = false
+    }
+
+    /// Save analysis intent before the milestone, so a crash between writes is recoverable.
+    @discardableResult
+    func finishPersonalSetup(_ timing: ProcessingCoordinator.Timing) -> Bool {
+        guard hasCompletedOnboarding, !isUninstalling, !processing.isBusy, !processing.isSuspended,
+              SourceSelection.selectionCount >= SourceSelection.minimumSelections else { return false }
+        processing.choose(timing)
+        PersonalSetupProgress.finish()
+        hasCompletedPersonalSetup = true
+        if timing == .overnight { scheduler.enableAfterSetup() }
+        processing.resumeMonitoring()
+        scheduler.reevaluate()
+        return true
     }
 }

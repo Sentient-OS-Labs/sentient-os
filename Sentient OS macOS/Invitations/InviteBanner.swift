@@ -29,6 +29,7 @@ struct InviteBanner: View {
 
     private var canPresent: Bool {
         controlActiveState == .key && appState.hasCompletedOnboarding && !appState.isUninstalling
+            && LifetimeUpgradeAnnouncement.shared.pending == nil
             && !ComputerUseUpgrade.shared.isBlockingInterface && appState.update.model.surface != .gate
             && !PipelineActivity.shared.isRunning && !DoubleTap.shared.isDrafting
             && !appState.commandCoordinator.run.isRunning && appState.commandCoordinator.phase == .hidden

@@ -331,7 +331,7 @@ final class CommandCoordinator {
         guard !ShortcutPreferences.isRecording, doubleTapDemoKeyChanged == nil,
               !DoubleTap.shared.isDrafting else { return }
         guard key == ShortcutPreferences.current else { return }
-        if run.recovery.isPending, DoubleTap.initialAnalysisComplete {
+        if run.recovery.isPending, DoubleTap.isReady {
             handleSingleTap(activity: activity, waitForDoubleTap: false)
             return
         }
@@ -345,7 +345,6 @@ final class CommandCoordinator {
             if hotkeyPair.register(key, at: time, activity: activity, window: DoubleTap.window,
                                    lastInputTime: ShortcutActivity.lastInputTime) {
                 pendingSingleTap?.cancel(); pendingSingleTap = nil
-                guard DoubleTap.initialAnalysisComplete else { interruptHotkeyGesture(); return }
                 guard !interceptForOnboarding() else { return }
                 fireDoubleTap()
                 return
@@ -354,8 +353,8 @@ final class CommandCoordinator {
             hotkeyPair.reset()
         }
         pendingSingleTap?.cancel(); pendingSingleTap = nil
-        if DoubleTap.isEnabled && !DoubleTap.initialAnalysisComplete {
-            // Wait before any notch reveal, notice or setup check. Two early taps do nothing;
+        if DoubleTap.isEnabled && !DoubleTap.isReady {
+            // Wait before any notch reveal or setup check. Two early taps show cursor feedback;
             // one still opens Sidekick after the same gesture window as a completed install.
             let token = phaseToken
             pendingSingleTap = Task { [weak self] in
@@ -474,10 +473,10 @@ final class CommandCoordinator {
 
     // MARK: Double Tap (DoubleTap.swift)
 
-    /// The second press landed: draft the reply, silently. Double Tap never shows on the notch and
+    /// The second press landed: draft the reply or explain missing setup at the cursor. Double Tap never shows on the notch and
     /// never takes the one-task lock, so it runs beside computer use and beside whatever the notch
-    /// is doing; its only outcome is the paste (or nothing), and the log and Dev Tools' timing
-    /// readout carry the rest. From `.opening` (the idle path, where the first press already passed
+    /// is doing; drafting ends with the paste (or nothing), and the log and Dev Tools' timing
+    /// readout carry failures. From `.opening` (the idle path, where the first press already passed
     /// the onboarding, plan, and permission doors) the reveal retracts first; from a running task
     /// the notch is left exactly as it was.
     private func fireDoubleTap() {
@@ -485,7 +484,7 @@ final class CommandCoordinator {
         // Never paste into the Sidekick field or disturb an active voice capture.
         guard phase != .typing, phase != .listening, phase != .transcribing else { return }
         if phase == .opening { setPhase(.hidden) }
-        Log("⌘⌘ double tap → drafting a reply" + (run.isRunning ? " (beside the running task)" : ""))
+        Log("⌘⌘ double tap → checking readiness" + (run.isRunning ? " (beside the running task)" : ""))
         DoubleTap.shared.start { result in
             switch result {
             case .pasted:          Log("⌘⌘ reply pasted")
@@ -697,7 +696,7 @@ final class CommandCoordinator {
     // MARK: The onboarding notch demo (the film step's invitation beat — click or hotkey)
 
     /// Arm the one-shot demo. `onFired` is the film step's cue to resume the webview ride the
-    /// moment the demo "presses ⏎" — the film's browser windows play the shopping run while the
+    /// moment the demo "presses ⏎" — the film's windows play the restaurant booking while the
     /// real notch narrates.
     func armOnboardingNotchDemo(onFired: @escaping () -> Void) {
         onboardingDemoArmed = true
@@ -706,8 +705,9 @@ final class CommandCoordinator {
     }
 
     /// Disarm + cancel any in-flight typing script (the film step left, or SKIP). A demo RUN
-    /// already in flight is left to finish on its own — it's pure theater and self-retracts.
+    /// already in flight also ends: the film no longer owns narration after step exit.
     func disarmOnboardingNotchDemo() {
+        if run.isDemo && run.isRunning { run.stop() }
         guard onboardingDemoArmed || demoTask != nil else { return }
         onboardingDemoArmed = false
         onboardingDemoFired = nil
@@ -727,7 +727,7 @@ final class CommandCoordinator {
         demoTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(0.7))          // the field's bloom + focus settle
-                let task = "order this stuff"
+                let task = OnboardingRestaurantStory.command
                 for i in 1...task.count {
                     guard let self, self.phase == .typing else { self?.demoDraft = nil; return }
                     self.demoDraft = String(task.prefix(i))

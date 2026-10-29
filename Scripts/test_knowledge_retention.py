@@ -113,6 +113,58 @@ import Foundation
         await preview.load(vault: nil)
         check(preview.graph == nil && preview.sim == nil, "preview exemption ends after real vault data commits")
 
+        let exampleGraph = SkyGraph.onboardingExample()
+        check(exampleGraph.nodes.count >= 30 && exampleGraph.domains.count >= 4 && exampleGraph.edges.count > exampleGraph.nodes.count,
+              "onboarding uses a connected multi-constellation sample rather than three placeholder points")
+        check(exampleGraph.nodes.allSatisfy { $0.url.scheme == "sentient-example" && !$0.url.isFileURL },
+              "sample note identities cannot name real vault files")
+        let example = NightSkyModel.preview(graph: exampleGraph, minimumZoom: 0.1)
+        example.animates = false
+        let sampleIndex = exampleGraph.nodes.firstIndex { $0.title == "Northstar pilot" }!
+        for size in [CGSize(width: 318, height: 188), CGSize(width: 518, height: 275), CGSize(width: 720, height: 320)] {
+            example.fitToContent(in: size)
+            example.tick(now: 0, size: size)
+            let bounds = CGRect(origin: .zero, size: size)
+            check(example.sim!.pos.allSatisfy { bounds.contains(example.toScreen($0, size: size)) },
+                  "every sample star fits its embedded viewport")
+            let star = example.toScreen(example.sim!.pos[sampleIndex], size: size)
+            check(example.hitTest(star, size: size) == sampleIndex && example.nodeURL(sampleIndex) == exampleGraph.nodes[sampleIndex].url,
+                  "production hit testing opens the same sample note represented by its star")
+            example.updateHover(star, size: size)
+            example.tick(now: 1, size: size)
+            check(example.hoverInfo?.title == "Northstar pilot" && example.focusBlend == 1 && example.glow[sampleIndex] == 1,
+                  "static constellation retains immediate hover and connection highlighting")
+            check(example.hoverCardRect(in: size).map(bounds.contains) == true,
+                  "production hover card stays within the compact graph")
+            let beforeZoom = example.toWorld(star, size: size)
+            example.zoom(by: 1.15, at: star, size: size)
+            check((example.toWorld(star, size: size) - beforeZoom).length < 0.001,
+                  "embedded zoom keeps the star under the cursor")
+            let beforePan = example.camera.pan
+            example.panBy(dx: 8, dy: 6)
+            check(example.camera.pan != beforePan, "static constellation still pans")
+            let positions = example.sim!.pos
+            example.tick(now: 10_000, size: size)
+            check(example.sim!.pos == positions && example.pulses.isEmpty,
+                  "paused constellation does not animate or catch up hidden time")
+        }
+        await example.load(vault: nil)
+        check(example.graph?.nodes.map { $0.url } == exampleGraph.nodes.map { $0.url },
+              "embedded real renderer retains only its in-memory sample when no vault is supplied")
+        let dragSize = CGSize(width: 720, height: 320)
+        example.fitToContent(in: dragSize)
+        let destination = example.toScreen(example.sim!.pos[sampleIndex], size: dragSize) + CGPoint(x: 12, y: 8)
+        example.beginDrag(sampleIndex)
+        example.dragStar(to: destination, size: dragSize)
+        example.tick(now: 1, size: dragSize)
+        check((example.toScreen(example.sim!.pos[sampleIndex], size: dragSize) - destination).length < 0.001,
+              "static constellation still supports actual star dragging")
+        example.endDrag(); example.tick(now: 2, size: dragSize)
+        let settledPositions = example.sim!.pos
+        example.tick(now: 5_000, size: dragSize)
+        check(example.sim!.pos == settledPositions && example.pulses.isEmpty,
+              "static constellation settles once after a drag without ambient animation")
+
         // Start an older real graph refresh, then publish an authoritative absent snapshot.
         // The detached reader may finish before or after the second load; both orderings
         // must leave the newer nil snapshot authoritative, without fake provider callbacks.

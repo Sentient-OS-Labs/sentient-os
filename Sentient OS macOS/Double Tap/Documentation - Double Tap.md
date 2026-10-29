@@ -12,11 +12,18 @@ help the reply sound like you. It should use supported facts, not invent an answ
 ## Finding Double Tap
 
 Home keeps a **Double Tap** button beside Analysis. It opens a short lesson showing the currently
-configured key; it does not capture or draft anything. Before initial analysis completes, the lesson
-explains the requirement and links to analysis progress. Once that milestone is saved, a gentle ready
+configured key; it does not capture or draft anything. Double Tap is ready after initial analysis or
+when a populated knowledge base already exists, including one copied from another Mac. Without either,
+the lesson explains setup and links to analysis progress. Once the analysis milestone is saved, a gentle ready
 hint waits for the next visible Home visit and is acknowledged once per initial-analysis completion.
 If the user leaves before seeing the full hint, it stays pending. The demonstration uses two small
 key presses, with a static equivalent for Reduce Motion and Low Power Mode.
+
+An imported vault belongs at `~/Sentient OS - Knowledge Base/`. A readable, nonempty Markdown note
+within the draft size budget is enough; an empty folder or writing samples alone are not. Readiness
+is checked on each gesture, and Home refreshes while visible, so importing does not require a restart.
+This never marks analysis or personal setup as completed. Onboarding must still admit the user to Home,
+and the normal Accessibility, Screen Recording and provider checks still apply.
 
 ## Your drafting provider
 
@@ -42,15 +49,29 @@ Data Retention arrangement. See the in-app privacy policy for the service's data
 ## A one-time snapshot of your voice
 
 `Vault/WritingStyle.swift` prepares `writingstyle.md` inside `~/Sentient OS - Knowledge Base/`.
-It saves selected examples of your own sent messages from available one-to-one iMessage and WhatsApp
-conversations and supported connected sent email, with recipient or conversation context to help
-match your tone. This setup is separate from the chats selected for regular knowledge analysis.
-Apple Mail's local analysis does not currently supply this writing-style collector.
+It saves examples of your own sent messages only from explicitly selected one-to-one iMessage and
+WhatsApp chats and enabled, connected supported sent-email sources. A connected account that is off
+for analysis does not supply writing samples. The collector does not discover unrelated local
+databases or Contacts; a cloud-only selection never requires Full Disk Access. Recipient labels come
+from the selected source, with raw handles retained when no name is available. Apple Mail's local
+analysis does not currently supply this writing-style collector.
+
+Unavailable sources are omitted from the setup selection. No eligible sent examples leaves the
+snapshot absent; automatic setup never publishes an empty file that would prevent later collection.
+A read failure or changed selection never publishes a partial file. While no snapshot exists, a new
+source/consent identity can trigger another idle attempt; Settings → Double Tap → Collect examples
+provides an explicit retry using only the currently selected, connected sources.
 
 **Sentient does not continuously collect new writing-style examples.** If the file already exists,
 setup leaves it alone, and knowledge updates preserve your edits. Use **Show writing examples in
 Finder** in Settings → Double Tap to inspect or edit the snapshot anytime. It is not listed as an
-ordinary note in the Knowledge window's tree. Removing the file can trigger setup again.
+ordinary note in the Knowledge window's tree. Existing empty files are preserved too, because Sentient
+cannot infer whether the user intentionally emptied them. Removing the file allows setup again.
+
+Writing examples are optional: Double Tap can draft from the visible conversation, knowledge and
+custom instructions when the snapshot is absent or empty. The hotkey never collects new sources on
+demand. An existing unreadable or oversized snapshot still reports its own error rather than silently
+changing or shortening user-authored examples.
 
 The snapshot is included in Double Tap requests. It also belongs to the knowledge folder uploaded if
 you enable optional cloud MCP sharing. Explicit custom reply instructions take priority over inferred
@@ -60,7 +81,11 @@ style; writing samples are examples of voice, not instructions or current facts.
 
 1. The hotkey monitor recognizes two presses of the selected Sidekick key within 0.35 seconds.
    The first press waits for the double-tap window before opening Sidekick; the second starts drafting
-   only after initial analysis completes. Early double taps are consumed without starting a draft.
+   after initial analysis or with populated knowledge. Otherwise the caret swirl gathers and fades,
+   followed by “Finish Sentient setup and analysis to use Double Tap.” beside the mouse for three
+   seconds. The message follows the pointer across displays, never takes focus or intercepts clicks,
+   and dismisses automatically. Reduce Motion skips the swirl. This path makes no capture or model
+   request, and repeated taps cannot stack feedback or open Sidekick during it.
 2. The app checks setup, Accessibility for paste, Screen Recording, and provider configuration.
 3. `ScreenCapture.grabDisplayUnderCursor()` captures the display under the pointer as a temporary JPEG,
    bounded to a 2,000-pixel long edge. This is one display, not the all-display Sidekick capture.
@@ -85,6 +110,8 @@ The current interface uses feedback at the caret, not a separate notch task with
 |---|---|
 | `DoubleTap.swift` | Hotkey coordination, setup gates, screenshot, deadline, feedback and paste. |
 | `DoubleTapInference.swift` | Context packing, prompt, streaming API calls, response validation and relay identity. |
+| `DoubleTapKnowledge.swift` | Readiness from readable, nonempty imported notes without changing analysis history. |
+| `DoubleTapSetupNotice.swift` | Three-second, click-through setup explanation that follows the mouse. |
 | `DoubleTapProvider.swift` | Independent provider, endpoint, API format, model and Keychain preferences. |
 | `WritingStyleSetupView.swift` | The setup surface when writing examples are needed. |
 | `../Vault/WritingStyle.swift` | One-time sample collection and snapshot preservation. |

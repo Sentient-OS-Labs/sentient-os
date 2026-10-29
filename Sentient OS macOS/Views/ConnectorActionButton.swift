@@ -16,12 +16,12 @@ struct ConnectorActionButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                if kind == .done {
+                if isLoading {
+                    ProgressView().controlSize(.mini)
+                } else if kind == .done {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .semibold))
                         .accessibilityHidden(true)
-                } else if isLoading {
-                    ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "arrow.up.right")
                         .font(.system(size: 10, weight: .bold))

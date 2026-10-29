@@ -185,6 +185,7 @@ struct NotchView: View {
                      activity: coordinator.run.isRunning && !coordinator.run.isOffline
                          ? coordinator.run.conversation.latestActivity.flatMap { SidekickActivityPresentation.steps([$0]).first } : nil,
                      remembering: coordinator.run.remembering,
+                     rememberingLabel: coordinator.run.isDemo ? "Remembering…" : "Remembering",
                      personalizing: coordinator.run.isPersonalizing,
                      hovering: coordinator.notchHovering,
                      demoText: coordinator.demoDraft,
@@ -228,6 +229,7 @@ struct NotchContent: View {
     let statusLine: String
     var activity: SidekickActivityPresentation.Step? = nil
     var remembering: String? = nil
+    var rememberingLabel = "Remembering"
     var personalizing = false
     /// The cursor is over the IDLE notch (the click-to-type affordance): the shell swells with a
     /// drop shadow — no glow, no content — and a click opens the type field. Honored only while
@@ -665,7 +667,7 @@ struct NotchContent: View {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
                 let bloom = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 1.5) + 1) / 2   // a 1.5s breathing glow
-                Text("Remembering")
+                Text(rememberingLabel)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Self.rememberingGradient)
                     .opacity(0.78 + 0.22 * bloom)                                   // breathe via opacity only — no scale bounce

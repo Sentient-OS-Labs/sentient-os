@@ -3,9 +3,9 @@
 //  Sentient OS macOS
 //
 //  The home's LIVE health banner — the sibling of OvernightCaution (which records a past event,
-//  this probes CURRENT state). One ladder, most severe first: ① an essential permission is off
-//  (Full Disk Access · the overnight wake helper · launch at login — all gated green in
-//  onboarding, so any red here is drift) → ② codex is gone, signed out, or out of date (a run
+//  this probes CURRENT state). One ladder, most severe first: ① access to a selected protected
+//  source has failed, or explicitly enabled overnight work needs its wake/login setup
+//  → ② codex is gone, signed out, or out of date (a run
 //  failed on the stale-client signature and the update hasn't landed) → ③ computer use broke
 //  AFTER it was once seen working (the everReady latch, so a user who never set it up is never
 //  nagged). The home renders the top un-muted rung as a red capsule (HomeView.cautionBanner) and
@@ -25,8 +25,9 @@ enum HealthCaution {
 
     // MARK: The issues
 
-    enum EssentialPermission {
+    enum EssentialPermission: Equatable {
         case fullDiskAccess, overnightWake, launchAtLogin
+        case protectedSources([String])
     }
 
     enum Issue {
@@ -43,25 +44,27 @@ enum HealthCaution {
             switch self {
             case .permissions(let missing):
                 guard missing.count == 1, let one = missing.first else {
-                    return "A few permissions I rely on are off. Overnight runs are paused."
+                    return "Some selected sources or overnight settings need attention. Check Permissions & Health."
                 }
                 switch one {
-                case .fullDiskAccess: return "Full Disk Access is off. I can't read anything new without it."
+                case .fullDiskAccess: return "A selected protected source needs access. Your other sources remain available."
+                case .protectedSources(let names):
+                    return "I can't read \(names.joined(separator: ", ")). Check access for these selected sources; your other sources remain available."
                 case .overnightWake:  return "The overnight wake helper is off, so I can't work while you sleep."
-                case .launchAtLogin:  return "Launch at login is off, so I won't be awake for the 3 AM run."
+                case .launchAtLogin:  return "Launch at login is off. Turn it on so Sentient can resume your overnight schedule after login."
                 }
             case .codexMissing:
                 return ModelBackend.current == .claude
                     ? "Computer use needs Codex CLI. A quick setup in Permissions & Health fixes it."
                     : "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .codexSignedOut:
-                return "Codex is signed out, so proactive work is paused. Log back in and I'll catch up tonight."
+                return "ChatGPT is signed out. Sign back in to use Sidekick and resume any scheduled work."
             case .codexOutdated:
                 return "Codex needs attention. Open Settings to repair it or check for a Sentient update."
             case .claudeMissing:
                 return "Claude Code is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .claudeSignedOut:
-                return "Claude Code is signed out, so proactive work is paused. Sign back in and I'll catch up tonight."
+                return "Claude Code is signed out. Sign back in to use Sidekick and resume any scheduled work."
             case .computerUseBroken(let payloadGone):
                 return payloadGone
                     ? "Computer use needs setting up again. One click in Settings fixes it."
@@ -112,6 +115,50 @@ enum HealthCaution {
     /// `codex login status` shells out — cache the verdict so foreground flurries can't spam it.
     private static var codexLogin: (verdict: Bool, at: Date)?
 
+    /// Optional background requirements follow saved intent, never Home admission. A pending
+    /// scheduled first analysis is an explicit choice even when recurring overnight work is off.
+    static func overnightRequested(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: OvernightScheduler.enabledKey)
+            || defaults.bool(forKey: OvernightScheduler.prodEnabledKey)
+            || ProcessingPlan.read(defaults).status == .scheduled
+    }
+
+    /// Read only selected sources, and only after setup or a known successful read. This pure
+    /// policy seam lets regression tests supply synthetic availability without touching TCC.
+    static func unreadableProtectedSources(personalSetupComplete: Bool,
+                                           selected: [ProtectedLocalSource],
+                                           readStatuses: [String: String],
+                                           isReadable: (ProtectedLocalSource) -> Bool) -> [ProtectedLocalSource] {
+        selected.filter { source in
+            let statusKey = source == .mail ? "apple_mail" : source.rawValue
+            guard personalSetupComplete || readStatuses[statusKey] == "ok" else { return false }
+            return !isReadable(source)
+        }
+    }
+
+    static func permissionRequirements(unreadableSources: [ProtectedLocalSource], overnightRequested: Bool,
+                                       wakeReady: Bool, loginEnabled: Bool) -> [EssentialPermission] {
+        var missing: [EssentialPermission] = []
+        if !unreadableSources.isEmpty { missing.append(.protectedSources(unreadableSources.map(\.title))) }
+        if overnightRequested {
+            if !wakeReady { missing.append(.overnightWake) }
+            if !loginEnabled { missing.append(.launchAtLogin) }
+        }
+        return missing
+    }
+
+    /// A session starts with unknown helper evidence. Only a confirmed loss can be regression;
+    /// pending proof, an unavailable helper, or a generic check error never fabricate denial.
+    static func hasConfirmedComputerPermissionLoss(everReady: Bool, nativeBackend: Bool,
+                                                   sentientScreen: Bool, sentientAccessibility: Bool,
+                                                   automation: Permissions.AutomationState,
+                                                   helper: NativePermissionReadiness.Snapshot) -> Bool {
+        guard everReady else { return false }
+        guard sentientScreen else { return true }
+        if !nativeBackend { return !sentientAccessibility }
+        return automation == .denied || helper.accessibility == .denied || helper.screenRecording == .denied
+    }
+
     /// The ladder, most severe first. Returns the worst LIVE issue the user hasn't muted, or nil.
     /// `forceCodexRecheck` bypasses the login cache — the home passes it while a codex banner is
     /// showing, so logging back in clears the capsule on the very next foreground.
@@ -120,17 +167,20 @@ enum HealthCaution {
         // so nothing this ladder checks is worth interrupting that home for.
         guard !CodexAuth.knowledgeBaseOnly else { return nil }
 
-        // ① Essential permissions (cheap sync probes: file reads + SMAppService status).
-        let fda = Permissions.hasFullDiskAccess()
-        var missing: [EssentialPermission] = []
-        if !fda { missing.append(.fullDiskAccess) }
-        // The same ground truth the scheduler gates on: the daemon ANSWERS over XPC. A file
-        // check reads green even when the System Settings background toggle has booted the
-        // daemon out of launchd (field-found 2026-07-11).
-        if await !WakeHelperClient.shared.isReachable() {
-            missing.append(.overnightWake)
+        // ① Only capabilities the user chose. No broad FDA probe or unrelated database reads.
+        let unreadable = unreadableProtectedSources(personalSetupComplete: PersonalSetupProgress.isComplete(),
+            selected: SourceSelection.selectedProtectedSources, readStatuses: SourceHealth.readStatuses(),
+            isReadable: { $0.isReadable })
+        let overnight = overnightRequested()
+        var wakeReady = true
+        var loginEnabled = true
+        if overnight {
+            // Actual reachability is the scheduler's ground truth, rather than a file existing.
+            wakeReady = await WakeHelperClient.shared.isReachable()
+            loginEnabled = LoginItem.isEnabled
         }
-        if !LoginItem.isEnabled { missing.append(.launchAtLogin) }
+        let missing = permissionRequirements(unreadableSources: unreadable, overnightRequested: overnight,
+                                             wakeReady: wakeReady, loginEnabled: loginEnabled)
         if !missing.isEmpty, !dismissed.contains("permissions") { return .permissions(missing) }
 
         // ② The frontier engine — gone, signed out, or (codex) out of date. Engine-aware: the
@@ -156,10 +206,8 @@ enum HealthCaution {
             }
         }
 
-        // ③ Computer use — only once latched. The cua driver runs inside Sentient's own TCC chain,
-        // so its hands and eyes are Sentient's own grants: probed directly, no FDA needed
-        // (AXIsProcessTrusted answers live; the Screen Recording preflight is this process's view,
-        // so the FDA-backed TCC read rides along as the live truth when it's available).
+        // ③ Computer use — only once latched, and only confirmed failures. Passive refresh
+        // never opens the synthetic capability-check window or requests a system grant.
         if engineBinaryPresent, !dismissed.contains("computerUse") {
             if !ComputerUseBackend.current.isInstalled || !ComputerUseSetup.current.ready {
                 // The update-migration window (ComputerUseUpgrade) presents on this exact state at
@@ -175,11 +223,15 @@ enum HealthCaution {
                     return .computerUseBroken(payloadGone: true)
                 }
             } else {
-                ComputerUseGate.shared.refresh()
-                await ComputerUseGate.shared.awaitAutomationRefresh()
-                if ComputerUseGate.shared.allRequiredGranted {
+                let gate = ComputerUseGate.shared
+                gate.refresh()
+                await gate.awaitAutomationRefresh()
+                if gate.allRequiredGranted {
                     latchComputerUse()   // healthy — arm the latch so future drift banners
-                } else if computerUseEverReady {
+                } else if hasConfirmedComputerPermissionLoss(everReady: computerUseEverReady,
+                    nativeBackend: ComputerUseBackend.current == .openAI,
+                    sentientScreen: gate.sentientScreen, sentientAccessibility: gate.sentientAccessibility,
+                    automation: gate.automation, helper: gate.helperPermissionState) {
                     return .computerUseBroken(payloadGone: false)
                 }
             }

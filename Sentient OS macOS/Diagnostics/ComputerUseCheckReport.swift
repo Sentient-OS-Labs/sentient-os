@@ -153,7 +153,7 @@ nonisolated struct ComputerUseCheckReport: Codable, Sendable, Identifiable {
         if [.senderNotAuthenticated, .approvalDenied, .blockedByPolicy].contains(failure.detail) { return .needsAttention }
         if failure.kind == .permission { return .permissionsNeeded }
         if failure.kind == .noWindows || [.focusChanged, .inputInterrupted, .elementUnavailable,
-            .staleState, .testWindowNotObserved].contains(failure.detail) { return .interrupted }
+            .staleState].contains(failure.detail) || failure.isReadinessInterruption { return .interrupted }
         return .needsAttention
     }
 }

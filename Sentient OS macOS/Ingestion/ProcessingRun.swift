@@ -12,16 +12,27 @@ struct ProcessingRequest {
     var runCalendar = false
     var mcpSlugs: [String] = []
     var fullCycle = true
+    /// Nil belongs to an explicit developer/fixture request. Production entry points capture
+    /// the source count before connectors combine multiple folders into one local adapter.
+    var readySelectionCount: Int?
+    var unavailableSources: [String: String] = [:]
+    var unavailableConnectorSlugs: Set<String> = []
+    var readinessAccountIdentity: String?
 
     var hasSources: Bool { !connectors.isEmpty || runGmail || runCalendar || !mcpSlugs.isEmpty }
 
     static func current() -> ProcessingRequest {
-        let d = UserDefaults.standard
-        return ProcessingRequest(modelPath: ModelLocator.resolve(),
-            connectors: RunSource.connectors(from: SourceSelection.current(fdaGranted: Permissions.hasFullDiskAccess())),
-            runGmail: ModelBackend.connectorsAvailable && d.bool(forKey: "dbg.run.gmail"),
-            runCalendar: ModelBackend.connectorsAvailable && d.bool(forKey: "dbg.run.calendar"),
-            mcpSlugs: MCPSource.kbSlugs())
+        let local = SourceSelection.current()
+        let gmail = SourceSelection.hostedSourceCanAttempt("gmail")
+        let calendar = SourceSelection.hostedSourceCanAttempt("calendar")
+        let mcp = SourceSelection.connectorsToAttempt.map(\.slug)
+        return ProcessingRequest(modelPath: local.isEmpty ? nil : ModelLocator.resolve(),
+            connectors: RunSource.connectors(from: local),
+            runGmail: gmail, runCalendar: calendar, mcpSlugs: mcp,
+            readySelectionCount: SourceSelection.selectionCount,
+            unavailableSources: SourceSelection.unavailableSourceMessages,
+            unavailableConnectorSlugs: SourceSelection.unavailableConnectorSlugs,
+            readinessAccountIdentity: ConnectorCensus.readinessAccountIdentity(for: ModelBackend.current))
     }
 }
 
@@ -33,7 +44,7 @@ final class ProcessingRun {
         var hadDiagnostics = false
         var complete: Bool {
             failure == nil && !progress.diskFull && progress.sourceReadFailures.isEmpty
-                && progress.failed == 0 && progress.extractionFailed == 0
+                && progress.failed == 0 && progress.extractionFailed == 0 && progress.parseFailures == 0
                 && !progress.mailIncomplete && progress.mailDeferred == 0 && !hadDiagnostics
         }
     }
@@ -42,16 +53,27 @@ final class ProcessingRun {
     let scheduled: Bool
     private var unavailableConnectors: Set<String> = []
     private var mode: IterativeRun.Mode { request.mode }
-    init(request: ProcessingRequest, scheduled: Bool) { self.request = request; self.scheduled = scheduled }
+    init(request: ProcessingRequest, scheduled: Bool) {
+        self.request = request; self.scheduled = scheduled
+        unavailableConnectors = request.unavailableConnectorSlugs
+    }
 
     func execute(progress: @escaping @Sendable (RunProgress) -> Void,
                  phase: @escaping @Sendable (ProactiveCyclePhase) -> Void,
                  onLine: @escaping @Sendable (String) -> Void) async -> Result {
         await Diagnostics.withOperation("processing") {
             var p = RunProgress()
-            if !request.connectors.isEmpty, let path = request.modelPath {
-                p = await IterativeRun(modelPath: path).run(request.connectors, mode: mode, onProgress: progress)
+            if !request.connectors.isEmpty {
+                if let path = request.modelPath {
+                    p = await IterativeRun(modelPath: path).run(request.connectors, mode: mode, onProgress: progress)
+                } else {
+                    p.failSourceRead(name: "On-device sources", message: "The on-device model is unavailable. Retry when its download finishes.")
+                }
             }
+            for (name, message) in request.unavailableSources.sorted(by: { $0.key < $1.key }) {
+                p.failSourceRead(name: name, message: message)
+            }
+            progress(p)
             // Cancellation is checked at EVERY leg boundary. Stopping a read must never launch
             // another cloud request or publish the knowledge base while the old task drains.
             if Task.isCancelled || p.diskFull { return Result(progress: p) }
@@ -69,6 +91,18 @@ final class ProcessingRun {
             }
             return Result(progress: p, failure: failure, hadDiagnostics: Diagnostics.current?.hasFailure == true)
         }
+    }
+
+    private func recordConnectionOutcome(slug: String, connected: Bool) {
+        // Explicit fixture/developer requests never certify production connection state. A
+        // provider account switch during a run cannot certify the replacement account either.
+        guard request.readySelectionCount != nil else { return }
+        let backend = ModelBackend.current
+        if backend == .chatgpt || backend == .claude {
+            guard let account = request.readinessAccountIdentity,
+                  account == ConnectorCensus.readinessAccountIdentity(for: backend) else { return }
+        }
+        ConnectorCensus.recordReadOutcome(slug: slug, backend: backend, connected: connected)
     }
 
     /// Cloud Gmail leg — each weekly window maps onto the SAME bar/card: its prompt → the prompt
@@ -112,10 +146,12 @@ final class ProcessingRun {
             // yet. (Same auto behavior the scheduler relies on; keeps every entry point in agreement.)
             _ = mode == .initial ? try await GmailConnect.runInitial(onProgress: onProgress)
                                  : try await GmailConnect.runIterative(onProgress: onProgress)
+            recordConnectionOutcome(slug: "gmail", connected: true)
         } catch {
             if Task.isCancelled || error is CancellationError { return box.value }
             if ConnectorReadFailure.isConnectionFailure(error) {
                 unavailableConnectors.insert("gmail")
+                recordConnectionOutcome(slug: "gmail", connected: false)
                 var p = box.value
                 p.failSourceRead(name: "Gmail", message: "Reconnect Gmail to retry this source.")
                 return p
@@ -174,10 +210,12 @@ final class ProcessingRun {
             // to a full initial read when Calendar has no mark yet). Matches the Gmail leg + scheduler.
             _ = mode == .initial ? try await CalendarConnect.runInitial(onProgress: onProgress)
                                  : try await CalendarConnect.runIterative(onProgress: onProgress)
+            recordConnectionOutcome(slug: "google-calendar", connected: true)
         } catch {
             if Task.isCancelled || error is CancellationError { return box.value }
             if ConnectorReadFailure.isConnectionFailure(error) {
                 unavailableConnectors.insert("google-calendar")
+                recordConnectionOutcome(slug: "google-calendar", connected: false)
                 var p = box.value
                 p.failSourceRead(name: "Calendar", message: "Reconnect Calendar to retry this source.")
                 return p
@@ -235,6 +273,9 @@ final class ProcessingRun {
         }
         let (outcomes, limited) = await MCPSource.runAll(selectedSlugs: request.mcpSlugs, onEvent: onEvent)
         unavailableConnectors.formUnion(outcomes.filter { $0.result == "connector_auth" }.map(\.slug))
+        for outcome in outcomes where outcome.result == "ok" || outcome.result == "connector_auth" {
+            recordConnectionOutcome(slug: outcome.slug, connected: outcome.result == "ok")
+        }
         var final = box.value
         final.done = max(final.done, baseDone + outcomes.count)
         final.total = max(final.total, baseTotal + outcomes.count)

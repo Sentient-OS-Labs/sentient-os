@@ -20,6 +20,12 @@ nonisolated enum ModelBackend: String, Sendable {
     @TaskLocal static var runOverride: Self?
     static var current: Self { runOverride ?? .claude }
 }
+@MainActor enum PersonalSetupProgress { static func recordSuccessfulTask() {} }
+nonisolated enum CodexAuth {
+    struct Plan { let raw: String }
+    static func currentPlan() -> Plan? { nil }
+    static var assertedPlus: Bool { false }
+}
 nonisolated enum AgentMode: Sendable { case computer; var label: String { "computer" }; var promptPhrase: String { "computer tools" } }
 nonisolated struct PreparedAction: Sendable { }
 nonisolated enum SidekickCardContext { static func promptBlock(for cards: [PreparedAction]) -> String { "" } }
@@ -29,7 +35,8 @@ nonisolated enum SidekickCardContext { static func promptBlock(for cards: [Prepa
     static var response = "Fixture answer\nSTATUS: DONE — fixture complete"
     static var provider: (@MainActor (String) async throws -> String)?
 }
-extension URL { nonisolated static var sentientSupport: URL { fatalError("Production support directory must not be used") } }
+extension URL { nonisolated static var sentientSupport: URL { URL(fileURLWithPath: ProcessInfo.processInfo.environment["FIXTURE_PERMISSION_SUPPORT"]!) } }
+@MainActor final class SafeAppRelaunch { static let shared = SafeAppRelaunch(); var isApplicationTerminating = false }
 @MainActor final class ComputerUseGate {
     static let shared = ComputerUseGate()
     nonisolated struct SetupCancelled: Error { }
@@ -320,8 +327,80 @@ import SQLite3
         try check(try !model.isClearingChat && store.latestSequence == 0, "UI fixture can clear chat while execution remains blocked")
         model.preventsTaskExecutionForUIFixture = false
         #endif
+        let beforeDemo = try store.latestSequence
+        model.startOnboardingDemo()
+        try check(model.isRunning && model.isDemo && model.onboardingDemoBeat == .read, "film demo starts without a provider or conversation task")
+        model.advanceOnboardingDemo(.remember)
+        try check(model.remembering == "Weekend plan", "real notch shows the remembered plan")
+        model.advanceOnboardingDemo(.open)
+        model.advanceOnboardingDemo(.remember)
+        try check(model.remembering == nil && model.onboardingDemoBeat == .open, "late or reversed frame cannot rewind native narration")
+        model.advanceOnboardingDemo(.confirmed)
+        model.advanceOnboardingDemo(.reply)
+        model.advanceOnboardingDemo(.done)
+        try check(!model.isRunning && model.statusLine == "✓ done" && model.remembering == nil, "confirmed film completion ends and clears the memory bloom")
+        model.advanceOnboardingDemo(.read)
+        try check(try !model.isRunning && store.latestSequence == beforeDemo, "late film events never restart a run or enter chat history")
+        try check(OnboardingRestaurantStory.beat(from: ["story": "restaurant-v2", "beat": "remember"]) == .remember, "known versioned film beat decodes")
+        for body: Any in [["story": "recipe", "beat": "done"], ["story": "restaurant-v2", "beat": "execute"], ["story": "restaurant-v2", "beat": 4], "done"] {
+            try check(OnboardingRestaurantStory.beat(from: body) == nil, "unrecognized film payload is inert")
+        }
+        model.startOnboardingDemo(); model.advanceOnboardingDemo(.remember); model.stop()
+        try await eventually { !model.isRunning }
+        model.advanceOnboardingDemo(.done)
+        try check(model.onboardingDemoBeat == .remember && model.remembering == nil, "cancelled film cannot become a success")
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
+    static func stoppedRunReadReceipts(root: URL, defaults: UserDefaults) async throws {
+        for fullReset in [false, true] {
+            let conversation = SidekickConversation(url: root.appendingPathComponent("stopped-receipts-\(fullReset).sqlite"), defaults: defaults)
+            let model = CommandRunModel(conversation: conversation)
+            let store = conversation.store!
+            model.adoptExternal(caption: "A task stopped midway", onStopRequest: {
+                model.completeExternal(.stopped, line: "Stopped", runID: model.runID)
+            })
+            let oldGeneration = try store.generation
+            let visibleMessage = try model.interaction!.conversationRun!.message("Synthetic in-progress update", kind: .update, priority: .normal)
+            conversation.refresh()
+            try check(conversation.replyReference == nil, "stopped-receipt fixture never selects text or starts a reply")
+            model.stop()
+            let stopped = await model.stopAndDrain()
+            try check(stopped, "stopped-receipt task drains before reset")
+            if fullReset {
+                // FactoryReset uses this production history reset under maintenance. Its
+                // unrelated destructive services are covered by the reset orchestration suite.
+                try check(conversation.beginMaintenance(), "full-reset receipt fixture owns maintenance")
+                try conversation.reset(defaults: defaults)
+                await conversation.drainBackgroundWork()
+                conversation.endMaintenance()
+            } else { try await model.clearChat(defaults: defaults) }
+            let freshGeneration = try store.generation
+            try check(oldGeneration != freshGeneration && conversation.replyReference == nil,
+                      "reset replaces history without creating an explicit reply")
+            // Reproduce an old row's delayed visibility callback borrowing the refreshed
+            // conversation generation. This is read-receipt work, never a user submission.
+            conversation.markRead(messageIDs: [visibleMessage], generation: freshGeneration)
+            try check(conversation.storageError == nil,
+                      "stopped run then reset must not show a reply warning for a late read receipt")
+            conversation.markRead(messageIDs: [visibleMessage], generation: oldGeneration)
+            let freshMessage = try store.append(Event(taskID: UUID(), kind: .assistantMessage, text: "New conversation answer"))
+            conversation.refresh()
+            conversation.markRead(messageIDs: [freshMessage.event.id], generation: oldGeneration)
+            try check(try store.unreadCount == 1, "old-generation receipts cannot mark fresh messages read")
+            conversation.markRead(messageIDs: [freshMessage.event.id], generation: freshGeneration)
+            try check(try store.unreadCount == 0 && conversation.storageError == nil, "valid new-generation receipts still work")
+            do {
+                _ = try store.append(Event(taskID: UUID(), kind: .userMessage, text: "Explicit stale reply",
+                                           reply: .init(messageID: visibleMessage)))
+                fatalError("explicit stale reply was accepted")
+            } catch Store.Failure.invalidReply { checks += 1 }
+            store.close()
+            conversation.markRead(messageIDs: [freshMessage.event.id], generation: freshGeneration)
+            try check(conversation.storageError != nil, "actual storage failure is not swallowed as a stale receipt")
+            conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+        }
+    }
+
     static func recoveryPresentation(root: URL, defaults: UserDefaults) async throws {
         // Existing failure-notice timing keeps its original 8-second visible / 7-second
         // return window. Clarifications deliberately persist when their notch hides.
@@ -533,6 +612,7 @@ import SQLite3
         try await networkRecovery(root: root, defaults: defaults)
         try await recoveryPresentation(root: root, defaults: defaults)
         try await clearChat(root: root, defaults: defaults)
+        try await stoppedRunReadReceipts(root: root, defaults: defaults)
         defer { defaults.removePersistentDomain(forName: suite) }
         let conversation = SidekickConversation(url: root.appendingPathComponent("main.sqlite"), defaults: defaults)
         defer { conversation.beginMaintenance() }
@@ -876,7 +956,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
     names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
-    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift"]
+    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)
-    subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault")})
+    subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault"), "FIXTURE_PERMISSION_SUPPORT": str(tmp / "permission-support")})

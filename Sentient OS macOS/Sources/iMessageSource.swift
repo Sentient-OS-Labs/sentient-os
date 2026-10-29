@@ -150,6 +150,7 @@ struct iMessageSource: Sendable {
         let reader = try SQLiteReader(path: dbURL.path)
 
         let chats = try Self.chats(reader)
+        try ChatSelectionReadError.validate(selected: chatGUIDs, available: Set(chats.values.map(\.guid)))
         let contacts = AddressBookNames.loadMap()
         let analyzedROWIDs = chats.values.filter { chatGUIDs == nil || chatGUIDs!.contains($0.guid) }.map(\.rowid)
         guard !analyzedROWIDs.isEmpty else { return [] }

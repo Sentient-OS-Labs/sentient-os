@@ -81,14 +81,15 @@ enum Permissions {
 
     /// Read whether a TCC grant is currently ALLOWED (auth_value == 2) for a client bundle id — from the
     /// correct database for the service (system DB for Accessibility/ScreenCapture, else the user DB).
-    /// Requires Full Disk Access to read; any failure ⇒ false (treated as not-granted).
+    /// Requires Full Disk Access to read. Diagnostic convenience only, never feature admission:
+    /// an unreadable database is not evidence that the helper lacks an effective grant.
     static func isTCCGranted(service: String, clientBundleID: String) -> Bool {
         tccState(service: service, clientBundleID: clientBundleID) == .granted
     }
 
     enum TCCState: String { case granted, denied, notAsked, unavailable }
     /// Diagnostic reads distinguish a denied grant from a database we cannot inspect.
-    /// The existing admission check above retains its conservative Boolean behavior.
+    /// These observations are diagnostic only; native readiness uses an app-owned capability check.
     static func tccState(service: String, clientBundleID: String) -> TCCState {
         var db: OpaquePointer?
         guard sqlite3_open_v2(tccDBPath(for: service), &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { sqlite3_close(db); return .unavailable }
@@ -204,14 +205,10 @@ enum Permissions {
         if let url = URL(string: legacy) { NSWorkspace.shared.open(url) }
     }
 
-    /// Re-exec the app — an FDA grant only takes effect in a fresh process. Launches a new
-    /// instance via `open -n`, then terminates this one.
+    /// A permission restart preserves the composer and waits for the old process to exit.
+    /// Context-specific source setup uses relaunchForPersonalSetup() to reopen its wizard too.
     @MainActor
     static func relaunch() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-n", Bundle.main.bundleURL.path]
-        try? task.run()
-        NSApp.terminate(nil)
+        _ = SafeAppRelaunch.shared.relaunchPreservingDraft()
     }
 }

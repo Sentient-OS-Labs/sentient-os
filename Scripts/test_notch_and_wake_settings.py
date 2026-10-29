@@ -67,13 +67,17 @@ final class WakeHelperClient {
     }
 }
 struct ProcessingRequest { static func current() -> Self { Self() } }
+enum PersonalSetupProgress {
+    static var completed = true
+    static func isComplete() -> Bool { completed }
+}
 struct RunProgress {}
 final class ProcessingCoordinator {
     static let shared = ProcessingCoordinator()
     enum Timing { case now, overnight }
     enum State { case idle, scheduled }
     enum Block: String { case battery }
-    enum Wait { case power(Block), model, sources }
+    enum Wait: Equatable { case power(Block), model, sources }
     var record = ProcessingPlan.Record() { didSet { ProcessingPlan.save(record, to: Fixture.defaults) } }
     var state = State.idle
     var initialComplete = true
@@ -89,6 +93,7 @@ final class ProcessingCoordinator {
     static func scheduleLabel(_ date: Date) -> String { "fixture schedule" }
     private func admission(_ request: ProcessingRequest, scheduled: Bool) -> Wait? { nil }
     private func detail(for wait: Wait) -> String { "fixture admission" }
+    private func sourceAdmissionNotice(_ request: ProcessingRequest) -> String { "fixture sources unavailable" }
     private func begin(_ request: ProcessingRequest) {
         isBusy = true; record.status = .running; record.due = nil
         WakeHelperClient.shared.awakeHeld = true

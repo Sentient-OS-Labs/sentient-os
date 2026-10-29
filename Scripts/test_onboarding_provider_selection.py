@@ -55,6 +55,8 @@ methods = "\n".join(declaration(view, signature) for signature in (
 fixture = r'''
 import Foundation
 
+@MainActor enum CodexAuth { static var knowledgeBaseOnly = true }
+
 // The production custom-provider implementation reads UserDefaults and Keychain.
 // Its readiness result is injected here; tab/preset identity uses its actual cases.
 @MainActor struct CustomProvider {
@@ -125,6 +127,7 @@ __METHODS__
         initial.tapContinue(); initial.tapContinue()
         await initial.continueTask?.value
         check(initial.advances == 1 && initial.codex.preparationCalls == 1, "Default Continue did not advance exactly once")
+        check(!CodexAuth.knowledgeBaseOnly, "A connected provider must not put Home into the retired knowledge-only mode")
 
         // Claude can be committed by Continue once signed in. Other choices
         // still require their own active identity, including custom presets.

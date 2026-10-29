@@ -141,6 +141,11 @@ final class SidekickConversation {
         guard !maintenance, let store else { return }
         do { try store.markRead(messageIDs: messageIDs, expectedGeneration: generation) }
         catch SidekickConversationStore.Failure.staleGeneration { }
+        catch SidekickConversationStore.Failure.invalidReadReceipt {
+            // A disappearing row can finish its visibility callback after Clear chat.
+            // Losing that receipt is harmless; it is not a failed user reply or submission.
+            SidekickDiagnostics.event(.attention, outcome: .skipped, reason: .unavailable)
+        }
         catch { report(error, stage: .storeWrite) }
     }
     func markRead(through sequence: Int64, generation: UUID) {

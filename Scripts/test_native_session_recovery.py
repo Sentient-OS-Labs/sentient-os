@@ -62,6 +62,17 @@ nonisolated enum Permissions {
     }
 }
 '''
+SUPPORT += r'''
+@MainActor final class NativePermissionCheck {
+    static let shared = NativePermissionCheck()
+    var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
+    var invalidations = 0
+    func refresh() {}
+    func invalidate(failure: NativeComputerUseFailure? = nil) {
+        invalidations += 1; snapshot = NativePermissionReadiness.afterFailure(failure)
+    }
+}
+'''
 PEER = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys, time
 p = pathlib.Path(os.environ['TEST_RPC_STATE'])
@@ -199,7 +210,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-session-recovery-") as 
                     f"{platform.machine()}-apple-macos15.0", str(root / "Support.swift"), str(root / "Tests.swift"),
                     *[str(APP / p) for p in ["Diagnostics/NativeComputerUseFailure.swift",
                         "Diagnostics/ComputerUseDiagnosticConsent.swift", "Diagnostics/ComputerUseDiagnosticPolicy.swift",
-                        "Driver/NativeAppStateRetry.swift", "Driver/OpenAIComputerUseProbe.swift",
+                        "Driver/NativeAppStateRetry.swift", "Driver/OpenAIComputerUseProbe.swift", "Driver/NativePermissionReadiness.swift",
                         "Driver/OpenAIComputerUseSession.swift", "Driver/NativeComputerUseServer.swift"]],
                     "-o", str(executable)], check=True, env=env, timeout=60)
     subprocess.run([str(executable)], check=True, env=env, timeout=45)

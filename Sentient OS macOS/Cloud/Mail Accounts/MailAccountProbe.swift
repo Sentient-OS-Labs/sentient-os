@@ -147,7 +147,7 @@ nonisolated enum MailAccountProbe {
 }
 
 /// A bounded control channel. No model prompts or arbitrary tool calls are accepted.
-private nonisolated final class MailProbeProcess: @unchecked Sendable {
+nonisolated final class MailProbeProcess: @unchecked Sendable {
     private let condition = NSCondition()
     private let cancellation = OSAllocatedUnfairLock(initialState: false)
     private let process = Process()

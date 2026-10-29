@@ -32,7 +32,9 @@ struct OnboardingResetChecks {
         try check(defaults.bool(forKey: "onboarding.emailSubmitted"), "Failed reset lost email completion")
         try check(defaults.integer(forKey: "onboarding.step") == 4, "Failed reset rewound setup")
         try check(app.hasCompletedOnboarding, "Failed reset changed the live screen")
+        try check(app.completedResets == 0, "Failed reset rewound retained Home presentation")
         try check(HostedConnectorSetup.active == false, "Failed reset left teardown active")
+        try check(!ComputerUseGate.shared.active && !NativePermissionCheck.shared.active, "Failed reset left permission teardown active")
         print("PASS: failed reset preserves onboarding state")
 
         DirectMCPConnections.shared.fail = false
@@ -42,8 +44,11 @@ struct OnboardingResetChecks {
         try check(defaults.integer(forKey: "onboarding.step") == 0, "Reset must restart setup")
         try check(!defaults.bool(forKey: AppState.onboardingKey), "Persisted onboarding is still complete")
         try check(!app.hasCompletedOnboarding, "Live app was not rewound")
+        try check(app.completedResets == 1 && !app.hasCompletedPersonalSetup && !app.hasCompletedFirstSidekickTask,
+                  "Successful reset did not use the complete live UI handoff")
         try check(defaults.bool(forKey: "mcp.mirror.enabled"), "Reset lost the mirror opt-in")
         try check(HostedConnectorSetup.active == false, "Successful reset left teardown active")
+        try check(!ComputerUseGate.shared.active && !NativePermissionCheck.shared.active, "Successful reset left permission teardown active")
         print("PASS: successful reset re-arms email and company welcome")
 
         let reopened = UserDefaults(suiteName: suite)!
@@ -62,7 +67,7 @@ struct OnboardingResetChecks {
 enum SidekickInstructionStore { static func resetLearning() {} }
 @MainActor final class ComputerUseDoctor {
     static let shared = ComputerUseDoctor()
-    func clear(defaults: UserDefaults) async { defaults.removeObject(forKey: "computerUse.lastDiagnostic.v1") }
+    func clear(defaults: UserDefaults) async { precondition(ComputerUseGate.shared.active && NativePermissionCheck.shared.active); defaults.removeObject(forKey: "computerUse.lastDiagnostic.v1") }
 }
 @MainActor enum HostedConnectorSetup {
     static var active = false
@@ -72,7 +77,7 @@ enum SidekickInstructionStore { static func resetLearning() {} }
 @MainActor final class DirectMCPConnections {
     static let shared = DirectMCPConnections()
     var fail = false
-    func removeAll() async throws { if fail { throw TestFailure.credentials } }
+    func removeAll() async throws { precondition(ComputerUseGate.shared.active && NativePermissionCheck.shared.active); if fail { throw TestFailure.credentials } }
 }
 @MainActor final class CycleStore {
     static let shared = CycleStore()
@@ -99,6 +104,15 @@ enum CodexAuth {
 @MainActor final class AppState {
     static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding = true
+    var hasCompletedPersonalSetup = true
+    var hasCompletedFirstSidekickTask = true
+    var completedResets = 0
+    func didResetPersonalData() {
+        completedResets += 1
+        hasCompletedPersonalSetup = false
+        hasCompletedFirstSidekickTask = false
+        hasCompletedOnboarding = false
+    }
     let scheduler = Scheduler()
     let commandCoordinator = Coordinator()
     let processing = ProcessingCoordinator.shared
@@ -115,7 +129,13 @@ enum CodexAuth {
         func reevaluate() {}
     }
 }
-enum ComputerUseGate { static let micSpeechOfferedKey = "test.micSpeechOffered" }
+@MainActor final class ComputerUseGate {
+    static let micSpeechOfferedKey = "test.micSpeechOffered"
+    static let shared = ComputerUseGate()
+    var active = false
+    func beginTeardown() async { active = true }
+    func endTeardown() { active = false }
+}
 enum HealthCaution {
     static let nativeComputerUseEverReadyKey = "test.nativeComputerUseEverReady"
     static let computerUseEverReadyKey = "test.computerUseEverReady"
@@ -154,3 +174,19 @@ enum SourceHealth { static let readStatusKey = "test.sourceHealth" }
 enum AppleMailHealth { static let key = "test.mail"; static let needsRetryKey = "test.mailRetry" }
 enum AppleCalendarSource { static let issueKey = "test.calendar" }
 enum ProcessingPlan { static let key = "test.processing" }
+enum PersonalSetupProgress {
+    static func reset(defaults: UserDefaults) {
+        defaults.removeObject(forKey: "onboarding.personalSetupCompleted")
+        defaults.removeObject(forKey: "onboarding.firstSuccessfulSidekickTask")
+    }
+}
+enum PermissionRelaunchDraft { static func clear() {} }
+enum PermissionWaitDraft { static func clear() {} }
+@MainActor final class NativePermissionCheck {
+    static let shared = NativePermissionCheck()
+    var active = false
+    func beginTeardown() async { active = true }
+    func endTeardown() { active = false }
+    func close() async {}
+}
+enum SourceSelection { static let pendingProtectedSourceKey = "test.pendingProtectedSource" }

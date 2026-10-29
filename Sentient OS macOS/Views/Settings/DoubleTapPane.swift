@@ -4,6 +4,7 @@
 // Doc: Documentation - Settings.md
 
 import SwiftUI
+import Combine
 import AppKit
 
 struct DoubleTapPane: View {
@@ -11,6 +12,9 @@ struct DoubleTapPane: View {
     @AppStorage(DoubleTapProvider.key) private var providerRaw = DoubleTapProvider.sentient.rawValue
     @State private var activity = PipelineActivity.shared
     @State private var hasWritingExamples = WritingStyle.exists()
+    @State private var hasWritingSources = WritingStyle.hasSources
+    @State private var collectingExamples = false
+    @State private var writingStatus: String?
 
     private var provider: DoubleTapProvider { DoubleTapProvider(rawValue: providerRaw) ?? .sentient }
 
@@ -36,13 +40,24 @@ struct DoubleTapPane: View {
                     VStack(alignment: .leading, spacing: 0) {
                         SettingsRow(title: "Your writing examples", subtitle: hasWritingExamples
                                     ? "A one-time snapshot you can inspect and edit."
-                                    : "Available after Double Tap setup finishes.") {
-                            SettingsPillButton(title: "Show in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([
-                                    VaultGenerator.vaultRoot.appendingPathComponent(WritingStyle.fileName)
-                                ])
+                                    : "Optional. Double Tap can use your instructions and visible conversation.") {
+                            if hasWritingExamples {
+                                SettingsPillButton(title: "Show in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([
+                                        VaultGenerator.vaultRoot.appendingPathComponent(WritingStyle.fileName)
+                                    ])
+                                }
+                            } else {
+                                SettingsPillButton(title: collectingExamples ? "Collecting…" : "Collect examples", action: collectExamples)
+                                    .disabled(collectingExamples || activity.isRunning || !hasWritingSources
+                                        || !FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.appendingPathComponent("README.md").path))
                             }
-                            .disabled(!hasWritingExamples)
+                        }
+                        if let writingStatus {
+                            SettingsProse(writingStatus).padding(.horizontal, 20).padding(.bottom, 12)
+                        } else if !hasWritingExamples && !hasWritingSources {
+                            SettingsProse("Choose chats or an email source in Knowledge Sources to add examples of your own writing.")
+                                .padding(.horizontal, 20).padding(.bottom, 12)
                         }
                         SettingsDetails(title: "How writing examples are used") {
                             SettingsProse(PrivacyCopy.writingSamples)
@@ -83,10 +98,31 @@ struct DoubleTapPane: View {
                 }
             }
         }
-        .onAppear { hasWritingExamples = WritingStyle.exists() }
-        .onChange(of: activity.isRunning) { _, _ in hasWritingExamples = WritingStyle.exists() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            hasWritingExamples = WritingStyle.exists()
+        .onAppear(perform: refreshWritingState)
+        .onChange(of: activity.isRunning) { _, _ in refreshWritingState() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshWritingState() }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)) { _ in refreshWritingState() }
+    }
+
+    private func refreshWritingState() {
+        hasWritingExamples = WritingStyle.exists()
+        hasWritingSources = WritingStyle.hasSources
+    }
+
+    private func collectExamples() {
+        guard !collectingExamples, !activity.isRunning, !WritingStyle.exists(), WritingStyle.hasSources else { return }
+        collectingExamples = true; writingStatus = nil
+        Task { @MainActor in
+            defer { collectingExamples = false; refreshWritingState() }
+            do {
+                try await WritingStyle.generateIfNeeded()
+                writingStatus = WritingStyle.exists() ? "Writing examples are ready."
+                    : "No sent examples were found in your selected sources. Double Tap still works with your conversation and instructions."
+            } catch is CancellationError { }
+            catch {
+                writingStatus = "Examples could not be collected. Check your selected sources and try again. Double Tap remains available."
+            }
         }
     }
 }

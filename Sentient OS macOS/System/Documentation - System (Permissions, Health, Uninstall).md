@@ -23,7 +23,12 @@ Safari's bookmarks, the user TCC.db) and treats `EPERM` / `EACCES` as denied (`E
 next probe). `hasFullDiskAccess()` is the bool; `reportProbe()` emits the `fda.probe` diagnostic once
 per run when a database source is selected and FDA is not cleanly granted (the top "empty morning"
 signal). Granting = open the pane (`openFullDiskAccessSettings`) and, since a grant only applies to a
-fresh process, `relaunch()` (`open -n` the bundle, then terminate). FDA can read false when the app is
+fresh process, the guarded restart handoff. It preserves the unsent composer, resolves Knowledge
+leave consent, and drains the owned permission-check client. A ready child of the same signed
+executable waits at most 15 seconds for final commit and actual parent exit before opening the same
+bundle. Failed preparation or cancelled quit keeps the current app open; no second instance starts
+first. Generic Health restarts retain Home, while a source-setup restart resumes that setup.
+FDA can read false when the app is
 launched from Terminal (TCC attribution). Onboarding's Grant… uses the floating drag panel with Sentient
 itself as the card (see the Permission Gate doc).
 
@@ -31,24 +36,29 @@ itself as the card (see the Permission Gate doc).
 
 Sentient's own Screen Recording grant supplies Sidekick's screen snapshots. `hasScreenRecording()`
 uses a non-prompting system preflight; the floating guide carries the Sentient app into System
-Settings. The FDA-backed read supplements a preflight that can remain stale until relaunch.
+Settings. This preflight does not require Full Disk Access.
 Sentient's Accessibility grant is also used by Double Tap to paste the unsent draft. Its old
 CUA action path remains only for legacy migration/cleanup.
 Active computer tasks use the native helper's action grants for every model backend.
 
 `isTCCGranted(service:clientBundleID:)` reads `auth_value == 2` from the right database for the
 service (the SIP-protected system database for Accessibility, ScreenCapture, AllFiles, ListenEvent,
-PostEvent; the user database otherwise).
+PostEvent; the user database otherwise). These are optional diagnostic observations, never feature
+admission: unreadable or stale signing-identity rows do not establish effective capability.
 
 ## Native computer-use grants
 
 Every active model backend runs computer use through OpenAI's signed helper. Sentient carries the Apple Events
 entitlement and uses `AEDeterminePermissionToAutomateTarget` off the main thread to check or request
 Automation access. The helper is started through LaunchServices before querying, so a stopped target
-is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, with no redundant Automation row; the user chooses Allow in that dialog.
+is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, and the user chooses Allow in that dialog.
 
-The helper's Accessibility and Screen Recording status is read from the system TCC database when
-Full Disk Access is available. Its grant rows carry the helper bundle to System Settings. Sentient's
+The helper's Accessibility and Screen Recording readiness comes from a bounded, read-only check of
+a temporary Sentient-owned window: unique AX marker plus decoded screenshot. Full Disk Access is
+not needed. `NativePermissionCheck` retains process/configuration-scoped evidence in memory and
+invalidates it on helper exit/change, dead connection or native permission failure. Passive Health
+only observes that state; explicit setup or a user-started computer task can open the check window.
+Unknown stays unverified rather than denied. Its grant rows carry the helper bundle to System Settings. Sentient's
 own Screen Recording remains required for screen context; native actions do not require Sentient's
 CUA-specific Accessibility grant. Native permission rows are shared by setup, upgrade and Health.
 
@@ -61,12 +71,15 @@ permissions. The shared native helper and the user's Codex home remain intact.
 The sibling of `OvernightCaution` (which records a past event): this probes CURRENT state, on the home's
 appear and every app foreground, and returns the worst un-muted issue:
 
-1. **Essential permissions off:** Full Disk Access; the overnight wake helper (`WakeHelperClient.isReachable()`, the XPC ground truth a file check cannot fake); launch at login. All three were green in onboarding, so any red here is drift.
+1. **Chosen capabilities need attention:** only selected protected sources are checked for readability, after personal setup completes or that source has a previous successful read. No global Full Disk Access verdict blocks cloud or ordinary-folder sources. The overnight wake helper (`WakeHelperClient.isReachable()`) and launch at login are checked only when recurring overnight work is enabled or a scheduled analysis is pending.
 2. **Codex gone or signed out** (the login check shells out, so its verdict is cached ~5 min; the home passes `forceCodexRecheck` while a codex banner is up so a fix clears on the next foreground). Signed-out is ChatGPT-backend only.
-3. **Computer use regressed:** the selected runtime became unavailable, or its required grants did — but ONLY once the selected runtime's readiness latch is set (`computerUse.nativeEverReady` for OpenAI; the existing `computerUse.everReady` for CUA) (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged. The binary-missing case stays quiet while the `ComputerUseUpgrade` window is presenting on that exact state (the same message twice helps no one) and still covers the window-less case (the driver vanishing mid-session).
+3. **Computer use regressed:** the selected runtime became unavailable, or a required grant has a confirmed failure, but only once its readiness latch is set (`computerUse.nativeEverReady` for OpenAI; `computerUse.everReady` for CUA). Unknown helper proof at launch, unavailable Automation checks, and generic probe errors are not permission denials. Passive refresh never opens the synthetic capability-check window. Confirmed Sentient capture loss, Automation denial, or helper capability denial can raise the banner; first-use setup remains deferred to an actual task. The binary-missing case stays quiet while the `ComputerUseUpgrade` window presents that same state.
 
 Shared startup installation and verification do not count as a broken runtime while in progress.
 Home rechecks health when installation finishes, including after a failure.
+`Scripts/test_health_requirements.py` compiles this production ladder against wholly in-memory
+preferences and synthetic capabilities, covering fresh Home, cloud-only setup, selected-source loss,
+overnight-off/scheduled intent, unknown helper proof, and confirmed regressions.
 
 Nothing persists; broken shows, fixed melts away. ✕ mutes an issue KIND for the session (a lower rung may
 then surface). Nothing at all on the free-plan home. The banner's Open Settings lands on Permissions &
@@ -109,9 +122,17 @@ Support and caches sweeps.
 
 - Managed data lives in `URL.sentientSupport`, app caches, the knowledge base and temporary staging. The native helper has the explicit shared location in the existing Codex home; computer-use setup never rewrites Codex configuration or login.
 - Permission writes belong to macOS. Requests use its APIs; uninstall resets only Sentient's Apple Events access through `tccutil`.
-- Health verdicts must come from ground truth (an XPC probe, a TCC read), never a cached file check.
+- Health verdicts distinguish verified capability, explicit denial and unknown. A TCC row or installation file alone is not effective helper capability.
 - Two destructive sequences (`FactoryReset`, `Uninstall`) live in exactly one place each; never duplicate them.
 
 ## Related docs
 
 `Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Driver/Documentation - Native Computer Use.md` (the active helper and its grants), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup.md`.
+
+## Permission restart validation
+
+`Scripts/test_permission_relaunch_handoff.py` exercises the actual subprocess protocol with an
+inert launch callback: parent lifetime, uncommitted/cancelled requests, expiry and launch failure.
+`test_safe_relaunch.py` covers final termination approval, retained-client drainage, update rechecks,
+active setup windows and private draft/reply persistence. `test_personal_setup_flow.py` compiles the
+coordinator with in-memory preferences and inert services. None launches the real app or changes grants.

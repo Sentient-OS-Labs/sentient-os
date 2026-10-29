@@ -104,6 +104,7 @@ nonisolated final class SidekickConversationStore: @unchecked Sendable {
         case duplicateTaskStart(UUID)
         case staleGeneration
         case invalidReply
+        case invalidReadReceipt
         case invalidWatermark
         case staleSummary
         case incompleteSummaryPrefix
@@ -121,6 +122,7 @@ nonisolated final class SidekickConversationStore: @unchecked Sendable {
             case .duplicateTaskStart: "This Sidekick task has already started."
             case .staleGeneration: "Sidekick history was reset while this work was running."
             case .invalidReply: "The message or selected text being replied to is unavailable."
+            case .invalidReadReceipt: "That message is no longer available to mark as read."
             case .invalidWatermark: "The requested Sidekick history position is unavailable."
             case .staleSummary: "A newer Sidekick conversation summary is already saved."
             case .incompleteSummaryPrefix: "Sidekick cannot summarize a task that is still in progress."
@@ -651,11 +653,11 @@ nonisolated final class SidekickConversationStore: @unchecked Sendable {
                 try checkGeneration(expectedGeneration)
                 let ids = Array(Set(messageIDs)).sorted()
                 guard ids.count <= Self.maximumTranscriptPageSize,
-                      ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }) else { throw Failure.invalidReply }
+                      ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }) else { throw Failure.invalidReadReceipt }
                 var changed = false
                 for id in ids {
                     guard let record = try queryRecords("SELECT sequence, payload FROM events WHERE id = ?", [.text(id)]).first,
-                          [.assistantMessage, .question].contains(record.event.kind) else { throw Failure.invalidReply }
+                          [.assistantMessage, .question].contains(record.event.kind) else { throw Failure.invalidReadReceipt }
                     try execute("INSERT OR IGNORE INTO read_events(sequence) VALUES(?)", [.integer(record.sequence)])
                     if sqlite3_changes(database) > 0 { changed = true }
                 }

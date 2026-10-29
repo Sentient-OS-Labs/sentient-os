@@ -7,7 +7,7 @@
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → appears after Connect opens the browser; saves the user's selection.
+//    Done       → saves the user's selection immediately; actual reads establish connection health.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -69,10 +69,17 @@ struct CloudConnectSheet: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
 
+            if selected && (backend == .custom || CodexAuth.connectorsLocked) {
+                Text("This selected source is unavailable with your current AI. You can stop reading it here or choose a supported connection.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).padding(.top, 14)
+            }
             connectButton.padding(.top, 26)
+                .disabled(backend == .custom || CodexAuth.connectorsLocked)
             if selected {
                 stopLink.padding(.top, 18)
-            } else if openedConnectorPage {
+            }
+            if openedConnectorPage {
                 doneButton.padding(.top, 14)
             }
         }
@@ -108,11 +115,7 @@ struct CloudConnectSheet: View {
 
     /// Reading remains an explicit opt-in.
     private var stopLink: some View {
-        Button(service.stopLine) {
-            guard ModelBackend.current == backend else { dismiss(); return }
-            selected = false
-            dismiss()
-        }
+        Button(service.stopLine, action: stopReading)
             .buttonStyle(.plain)
             .font(.system(size: 11))
             .foregroundStyle(Theme.Ink.deepMuted)
@@ -120,10 +123,16 @@ struct CloudConnectSheet: View {
 
     // MARK: - Done: trust the user's declaration without waiting for provider discovery
 
+    private func stopReading() {
+        guard ModelBackend.current == backend else { dismiss(); return }
+        HostedConnectorSetup.stopReading(slug: service.slug, backend: backend)
+        dismiss()
+    }
+
     private func done() {
         let firstConnection = !connected
         guard HostedConnectorSetup.confirm(slug: service.slug, backend: backend,
-                                           reconnected: openedConnectorPage) else { dismiss(); return }
+            reconnected: openedConnectorPage) else { dismiss(); return }
         if firstConnection { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
         dismiss()
     }

@@ -106,6 +106,8 @@ struct PermissionsView: View {
                 .buttonStyle(.bordered).tint(Theme.accent)
             Button("Restart app") { Permissions.relaunch() }
                 .buttonStyle(.bordered).tint(.white)
+                .disabled(!SafeAppRelaunch.shared.canRelaunch)
+                .help(SafeAppRelaunch.shared.statusReason ?? "Relaunch Sentient safely")
             Spacer()
             Button("Re-check") { refreshAll() }
                 .buttonStyle(.borderless).controlSize(.small).tint(Theme.accent)
@@ -145,6 +147,8 @@ struct PermissionsView: View {
             Spacer()
             Button("Restart app") { Permissions.relaunch() }
                 .buttonStyle(.borderless).controlSize(.small).tint(Theme.accent)
+                .disabled(!SafeAppRelaunch.shared.canRelaunch)
+                .help(SafeAppRelaunch.shared.statusReason ?? "Relaunch Sentient safely")
         }
     }
 

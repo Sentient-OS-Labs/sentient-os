@@ -42,6 +42,18 @@ struct ChatInfo: Sendable, Identifiable {
     var isSaved: Bool = true
 }
 
+/// A saved opt-in that no longer resolves is an unavailable source, not an empty conversation.
+/// No identifiers belong in this error: it can be rendered or recorded by the run controller.
+nonisolated enum ChatSelectionReadError: LocalizedError {
+    case missingSelectedChats
+    var errorDescription: String? {
+        "Some selected conversations are no longer available. Review this source's selected chats in Knowledge Sources, then retry."
+    }
+    static func validate(selected: Set<String>?, available: Set<String>) throws {
+        if let selected, !selected.isSubset(of: available) { throw Self.missingSelectedChats }
+    }
+}
+
 enum ChatWindowing {
     // MARK: Limits — shared by every chat connector
     static let lookbackDays = 90

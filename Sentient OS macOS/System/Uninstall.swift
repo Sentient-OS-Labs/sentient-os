@@ -71,6 +71,16 @@ enum Uninstall {
             appState?.isUninstalling = false
             return false
         }
+        await ComputerUseGate.shared.beginTeardown()
+        await NativePermissionCheck.shared.beginTeardown()
+        defer {
+            // The success sheet stays alive until Quit. Keep all permission producers closed
+            // after removal; only a failed/cancelled uninstall returns to the working app.
+            if !completedTeardown {
+                NativePermissionCheck.shared.endTeardown()
+                ComputerUseGate.shared.endTeardown()
+            }
+        }
         let processing = appState?.processing ?? ProcessingCoordinator.shared
         progress(.stopping)
         await processing.suspend()
@@ -95,6 +105,7 @@ enum Uninstall {
         }
         await conversation.drainBackgroundWork()
         await ComputerUseDoctor.shared.clear()
+        await NativePermissionCheck.shared.close()
 
         // Quiet the scheduler FIRST so nothing re-arms a wake while the daemon comes down. The
         // flags are snapshotted so a cancellation restores them untouched.

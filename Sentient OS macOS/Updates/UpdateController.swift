@@ -47,6 +47,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     private var pendingInstallHandler: (() -> Void)?
     /// Polls for an idle-safe moment while an install is pending. Invalidated the instant we install.
     private var idleTimer: Timer?
+    private var preparingIdleInstall = false
 
     override init() {
         let model = self.model
@@ -183,20 +184,32 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     }
 
     private func installIfSafe() {
-        guard Self.appUpdatesEnabled, let install = pendingInstallHandler, isSafeToRelaunch else { return }
-        pendingInstallHandler = nil
-        idleTimer?.invalidate()
-        idleTimer = nil
-        Log("Sparkle: idle-safe — installing staged update and relaunching silently")
-        // The user wasn't in the app — the new version must come back windowless (UpdateNotice's
-        // flag suppresses the home WindowGroup at the relaunch). Gate installs never stamp this.
-        UpdateNotice.recordSilentRelaunch()
-        install()   // Sparkle terminates, installs, and relaunches us — zero UI.
+        guard Self.appUpdatesEnabled, !preparingIdleInstall, pendingInstallHandler != nil, isSafeToRelaunch else { return }
+        preparingIdleInstall = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { preparingIdleInstall = false }
+            await NativePermissionCheck.shared.close()
+            // New work or a setup window may appear while the owned client drains.
+            guard isSafeToRelaunch, let install = pendingInstallHandler else { return }
+            pendingInstallHandler = nil
+            idleTimer?.invalidate(); idleTimer = nil
+            Log("Sparkle: idle-safe — installing staged update and relaunching silently")
+            UpdateNotice.recordSilentRelaunch()
+            install()
+        }
     }
 
     /// Never relaunch during processing or an open Knowledge edit, even if the user has been
     /// away for a while. Otherwise wait until Sentient is not frontmost or idle for 5+ minutes.
     private var isSafeToRelaunch: Bool {
-        !PipelineActivity.shared.isRunning && !VaultActivity.shared.editorBusy && UserPresence.isAwayFromApp
+        SafeAppRelaunch.shared.allowsAutomaticRelaunch
+            && !VaultActivity.shared.editorBusy && UserPresence.isAwayFromApp
+            && !ComputerUseGate.shared.isPresenting
+            && !NSApp.windows.contains { window in
+                let id = window.identifier?.rawValue ?? ""
+                return (window.isVisible || window.isMiniaturized)
+                    && (id == PersonalSetupView.windowID || id.hasPrefix(PersonalSetupView.windowID + "-"))
+            }
     }
 }

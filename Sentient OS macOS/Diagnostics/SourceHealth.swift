@@ -50,7 +50,9 @@ nonisolated enum SourceHealth {
     /// Compare this run's listing count to the last, emit a `<source>.listing_collapsed` event if a
     /// previously-healthy source cratered to zero, then record the new count. The clearest, lowest-
     /// noise silent-breakage signal; a partial drop is deliberately NOT alarmed (too noisy without a
-    /// baseline model). `minPrevious` keeps small accounts from false-firing.
+    /// baseline model). `minPrevious` keeps small accounts from false-firing. A count change is a
+    /// heuristic, not a failed read: emptying a folder must not mark analysis incomplete. Actual
+    /// enumeration/access failures report separately through the source-read diagnostics.
     static func checkListingCollapse(source: String, bucketKey: String, count: Int, minPrevious: Int = 20) {
         let previous: Int? = lock.withLock { _ in
             var d = dict()
@@ -63,7 +65,8 @@ nonisolated enum SourceHealth {
         if let previous, previous >= minPrevious, count == 0 {
             CrashReporting.captureEvent("\(Diagnostics.source(source)).listing_collapsed", level: .error,
                 tags: ["source": Diagnostics.source(source)], extra: ["previous": String(previous), "now": "0"],
-                fingerprint: [Diagnostics.source(source), "listing_collapsed"], cooldown: 86400)
+                fingerprint: [Diagnostics.source(source), "listing_collapsed"], cooldown: 86400,
+                affectsOperation: false)
         }
     }
 

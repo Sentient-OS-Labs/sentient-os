@@ -17,23 +17,23 @@ nonisolated enum ComputerUseCheckProbe {
         let textMatches: @MainActor @Sendable () -> Bool
     }
 
-    static func run(target: Target, call: Call, update: Update) async throws {
+    @discardableResult
+    static func run(target: Target, call: Call, update: Update) async throws -> NativePermissionReadiness.Evidence {
         func invoke(_ tool: String, _ args: [String: Any]) async throws -> [String: Any] {
             try Task.checkCancellation()
-            guard await target.isCurrent() else { throw interrupted() }
+            guard await target.isCurrent() else { throw interrupted(.testWindowNotCurrentBeforeRead) }
             let data = try await call(tool, JSONSerialization.data(withJSONObject: args))
             try Task.checkCancellation()
             guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .probe)
             }
             if NativeComputerUseFailure.isError(result) { throw NativeComputerUseFailure.classify(result, stage: .probe) }
-            guard await target.isCurrent() else { throw interrupted() }
+            guard await target.isCurrent() else { throw interrupted(.testWindowNotCurrentAfterRead) }
             return result
         }
         func read() async throws -> (String, [String: Any]) {
             let result = try await invoke("get_app_state", ["app": target.app])
-            let text = (result["content"] as? [[String: Any]] ?? []).compactMap { $0["text"] as? String }.joined(separator: "\n")
-            guard text.contains(target.marker) else { throw interrupted() }
+            let text = try NativePermissionReadiness.accessibilityText(in: result, marker: target.marker)
             return (text, result)
         }
         var stage = ComputerUseCheckReport.Check.accessibility
@@ -42,7 +42,7 @@ nonisolated enum ComputerUseCheckProbe {
             let (_, initial) = try await read()
             await update(stage, .passed, nil)
             stage = .capture; await update(stage, .running, nil)
-            try OpenAIComputerUseProbe.validateResult(initial, requiresCapture: true)
+            let evidence = try NativePermissionReadiness.evidence(in: initial, marker: target.marker)
             await update(stage, .passed, nil)
 
             stage = .click; await update(stage, .running, nil)
@@ -60,6 +60,7 @@ nonisolated enum ComputerUseCheckProbe {
             _ = try await read()
             guard await target.textMatches() else { throw interrupted() }
             await update(stage, .passed, nil)
+            return evidence
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             let failure = error as? NativeComputerUseFailure
@@ -83,7 +84,7 @@ nonisolated enum ComputerUseCheckProbe {
         guard ids.count == 1 else { throw interrupted() }
         return ids[0]
     }
-    private static func interrupted() -> NativeComputerUseFailure {
-        .init(kind: .unknown, code: nil, detail: .testWindowNotObserved, stage: .probe)
+    private static func interrupted(_ detail: NativeComputerUseFailure.Detail = .testWindowNotObserved) -> NativeComputerUseFailure {
+        .init(kind: .unknown, code: nil, detail: detail, stage: .probe)
     }
 }

@@ -27,7 +27,8 @@ struct HealthPane: View {
     private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
 
     // Sentient's own grants
-    @State private var fdaGranted = Permissions.hasFullDiskAccess()
+    @State private var selectedProtectedSources: [ProtectedLocalSource] = []
+    @State private var unreadableProtectedSources: [ProtectedLocalSource] = []
     @State private var wakeSetup = OvernightWakeSetup()
     @State private var loginOn = LoginItem.isEnabled
     @State private var micSpeech: MicSpeechState = .notAsked
@@ -49,14 +50,15 @@ struct HealthPane: View {
     private enum MicSpeechState { case granted, notAsked, denied }
 
     /// The live engine's whole stack, healthy — what the group's collapse and the pane's
-    /// all-clear whisper judge. Per engine: ChatGPT = CLI + login + a non-limited plan;
+    /// all-clear whisper judge. Per engine: ChatGPT = CLI + login; provider limits are enforced
+    /// when a task runs, not by a local plan label.
     /// Claude = Claude Code + its login + Codex for computer tasks; custom = CLI + a proven endpoint (codex is the
     /// harness there too). The computer-use driver rides every engine.
     private var engineAllGreen: Bool {
         guard ComputerUseSetup.current.ready, computerGate.allRequiredGranted else { return false }
         switch backend {
         case .chatgpt: return codex.installed && !codex.outdated
-                           && codex.loggedIn && plan?.tier != .limited
+                           && codex.loggedIn
         case .claude:  return claude.installed && claude.loggedIn && codex.installed && !codex.outdated
         case .custom:  return codex.installed && !codex.outdated
                            && CustomProvider.current.isUsable
@@ -64,17 +66,23 @@ struct HealthPane: View {
     }
 
     private var allGreen: Bool {
-        fdaGranted && wakeSetup.ready && loginOn && micSpeech == .granted
-            && screenRec
-            && (notifStatus == .authorized || notifStatus == .provisional)
+        unreadableProtectedSources.isEmpty
+            && (!requiresOvernightSetup || (wakeSetup.ready && loginOn))
             && engineAllGreen
             && sourceIssues.isEmpty
     }
 
+    private var requiresOvernightSetup: Bool { HealthCaution.overnightRequested() }
+
+    private var protectedAccessNote: String {
+        if selectedProtectedSources.isEmpty { return "not needed for your selected sources" }
+        return unreadableProtectedSources.isEmpty ? "selected sources are readable" : "selected sources need access"
+    }
+
     var body: some View {
         SettingsPane(title: "Permissions & Health",
-                     whisper: allGreen ? "Your permissions and account checks have passed."
-                                       : "Manage access and check that everything is ready.") {
+                     whisper: allGreen ? "Your selected features and account checks are ready."
+                                       : "Manage access for the features you choose.") {
             if !checked {
                 checkingLine
             } else {
@@ -108,10 +116,8 @@ struct HealthPane: View {
         .environment(\.settingsCompactLayout, true)
         .task { await refresh() }
         .onChange(of: wakeSetup.ready) { _, ready in
-            if ready {
-                let needsSetup = appState?.scheduler.needsSchedulerSetup == true
-                appState?.scheduler.enableAfterSetup()
-                if needsSetup { appState?.scheduler.reevaluate() }
+            if ready && requiresOvernightSetup {
+                appState?.scheduler.reevaluate()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -161,7 +167,7 @@ struct HealthPane: View {
         }
         let defaults = UserDefaults.standard
         let filesEnabled = !CustomRoots.urls.isEmpty || ["desktop", "documents", "downloads"].contains {
-            (defaults.object(forKey: "dbg.run." + $0) as? Bool) ?? true
+            defaults.bool(forKey: "dbg.run." + $0)
         }
         for (source, name, enabled) in [("file", "Files", filesEnabled),
             ("whatsapp", "WhatsApp", defaults.bool(forKey: "dbg.run.whatsapp")),
@@ -191,15 +197,15 @@ struct HealthPane: View {
             VStack(alignment: .leading, spacing: 2) {
                 VStack(alignment: .leading, spacing: 2) {
                     StatusLine(title: "Full Disk Access",
-                               health: fdaGranted ? .ok : .bad,
-                               note: fdaGranted ? "granted" : "not granted",
+                               health: unreadableProtectedSources.isEmpty ? .ok : .bad,
+                               note: protectedAccessNote,
                                tip: PrivacyCopy.fullDiskAccess,
                                fixTitle: "Grant…") {
                         PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
                     }
-                    if !fdaGranted {
+                    if !unreadableProtectedSources.isEmpty {
                         HStack(spacing: 6) {
-                            SettingsProse("WhatsApp, iMessage & Notes stay unreadable without it. After granting:")
+                            SettingsProse("Check access for \(unreadableProtectedSources.map(\.title).joined(separator: ", ")). After changing Full Disk Access:")
                             Button { Permissions.relaunch() } label: {
                                 Text("Relaunch Sentient")
                                     .font(.system(size: 13, weight: .medium))
@@ -207,18 +213,28 @@ struct HealthPane: View {
                                     .underline(true, color: Theme.Ink.deepMuted)
                             }
                             .buttonStyle(PressScaleStyle())
+                            .disabled(!SafeAppRelaunch.shared.canRelaunch)
                         }
                         .padding(.bottom, 6)
+                        if let reason = SafeAppRelaunch.shared.statusReason {
+                            SettingsProse(reason).padding(.bottom, 6)
+                        }
                     }
                 }
                 .rise(0, revealed: revealed)
                 SettingsHairline(opacity: 0.10)
-                OvernightWakeRow(setup: wakeSetup)
-                .rise(1, revealed: revealed)
+                Group {
+                    if requiresOvernightSetup {
+                        OvernightWakeRow(setup: wakeSetup)
+                    } else {
+                        SettingsProse("Overnight analysis is off. Wake setup is optional.")
+                            .padding(.vertical, 9)
+                    }
+                }.rise(1, revealed: revealed)
                 SettingsHairline(opacity: 0.10)
                 StatusLine(title: "Launch at login",
-                           health: loginOn ? .ok : .warn,
-                           note: loginOn ? "on" : (LoginItem.needsApproval ? "approve in system settings" : "off"),
+                           health: loginOn || !requiresOvernightSetup ? .ok : .warn,
+                           note: loginOn ? "on" : (!requiresOvernightSetup ? "off; optional" : (LoginItem.needsApproval ? "approve in system settings" : "off")),
                            tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
                            fixTitle: LoginItem.needsApproval ? "Approve…" : "Turn On") {
                     LoginItem.enableOrRequestApproval()
@@ -235,7 +251,7 @@ struct HealthPane: View {
     private var sidekickGroup: some View {
         SettingsGroup(label: "Sidekick & Double Tap") {
             VStack(alignment: .leading, spacing: 2) {
-                StatusLine(title: "Microphone & Speech",
+                StatusLine(title: "Microphone & Speech (optional)",
                            health: micSpeech == .granted ? .ok : .warn,   // optional — Sidekick's voice; tap-to-type works without it
                            note: micSpeechNote,
                            tip: ComputerUseGate.micSpeechTip,
@@ -253,7 +269,7 @@ struct HealthPane: View {
                 }
                 .rise(5, revealed: revealed)
                 SettingsHairline(opacity: 0.10)
-                StatusLine(title: "Notifications",
+                StatusLine(title: "Notifications (optional)",
                            health: notifHealth,
                            note: notifNote,
                            tip: "Lets Sentient send a morning note when new suggestions are ready. Optional; everything works without it.",
@@ -415,11 +431,11 @@ struct HealthPane: View {
                     failureLine(codex.loginStatusLine)
                     if codex.loggedIn, let plan {
                         StatusLine(title: "ChatGPT plan",
-                                   health: plan.tier == .limited ? .warn : .ok,
+                                   health: planChecking ? .warn : .ok,
                                    note: planChecking ? "checking…"
-                                       : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
+                                       : plan.tier == .limited ? "\(plan.displayName.lowercased()) · provider usage limits apply"
                                                                : plan.displayName.lowercased(),
-                                   tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.\n\nPrefer no ChatGPT at all? Frontier Model Choice can point Sentient at your own model instead.",
+                                   tip: "Try Sidekick with your connected ChatGPT account. Your provider determines which models and usage are available. A confirmed limit on Free or Go offers an upgrade to Plus.\n\nYour knowledge and source choices stay in place when your plan changes. Re-check refreshes the account claim. You can also choose another provider in Frontier Model Choice.",
                                    fixTitle: "Re-check") { recheckPlan() }
                     }
                 }
@@ -513,9 +529,10 @@ struct HealthPane: View {
 
     private func refresh() async {
         computerGate.refresh()
-        fdaGranted = Permissions.hasFullDiskAccess()
+        selectedProtectedSources = SourceSelection.selectedProtectedSources
+        unreadableProtectedSources = selectedProtectedSources.filter { !$0.isReadable }
         loginOn = LoginItem.isEnabled
-        await wakeSetup.refresh()
+        if requiresOvernightSetup { await wakeSetup.refresh() }
         refreshMicSpeech()
         // Match the effective permission used by capture and the setup gates.
         screenRec = Permissions.hasScreenRecording()

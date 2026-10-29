@@ -1,5 +1,6 @@
 // Validates native tool replies and checks service readiness through a model-free session.
-// Real tasks share the image validator; setup probes only list available apps.
+// Real tasks share the image validator. The list_apps check proves service connectivity only;
+// helper permission admission separately requires NativePermissionReadiness's AX/capture proof.
 // Doc: Documentation - Native Computer Use.md
 
 import Foundation

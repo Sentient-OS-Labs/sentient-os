@@ -12,6 +12,11 @@ import Foundation
 import AppKit
 import SwiftUI
 
+// The restart waiter never creates AppState, accesses conversations or joins ordinary startup.
+if CommandLine.arguments.dropFirst().first == PermissionRelaunchHandoff.argument {
+    exit(PermissionRelaunchHandoff.run(arguments: CommandLine.arguments))
+}
+
 // Browser helper arguments contain an OAuth URL. Handle them before any diagnostics or UI.
 if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument {
     exit(ClaudeLoginBrowser.runHelper(arguments: CommandLine.arguments))

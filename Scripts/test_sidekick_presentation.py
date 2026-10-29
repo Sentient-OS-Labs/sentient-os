@@ -16,7 +16,10 @@ APP = ROOT / "Sentient OS macOS"
 SUPPORT = r'''
 import Foundation
 
-@MainActor final class ForYouModel { }
+@MainActor final class ForYouModel {
+    var clearCount = 0
+    func clear() { clearCount += 1 }
+}
 @MainActor final class SidekickConversation {
     var store: SidekickConversationStore?
     var generation: UUID?
@@ -683,6 +686,48 @@ typealias Presentation = SidekickPresentation
         try check(try store.unreadCount == 1, "visits never fabricate message read receipts")
     }
 
+    static func resetOnboarding(_ directory: URL) async throws {
+        let store = try seed(directory, name: "reset-onboarding", tasks: 6)
+        let conversation = try SidekickConversation(store)
+        let model = Presentation()
+        let today = Date()
+        briefing(nil)
+        model.visit(conversation: conversation, running: false, pending: false, now: today)
+        model.surface = .conversation
+        await model.load(.latest, conversation: conversation)
+        model.searchShown = true; model.clearChatConfirmationShown = true
+        model.setSelection(true, messageID: "old-selected-message")
+        try store.reset(); conversation.generation = try store.generation
+        conversation.navigationRequest = nil; conversation.draft = ""
+        // A mounted transcript has already reacted to the cleared SQLite generation. This
+        // alone must not pretend that full app reset/navigation has occurred.
+        model.resetForGeneration(conversation.generation)
+        model.visit(conversation: conversation, running: false, pending: false, now: today)
+        try check(model.surface == .conversation,
+                  "regression prerequisite: clearing data alone retains this process's conversation surface")
+        model.search = "old-query"
+        let oldSearch = Task { await model.find(conversation: conversation) }
+        try await Task.sleep(for: .milliseconds(30))
+        model.didResetApp(generation: conversation.generation)
+        await oldSearch.value
+        try check(model.surface == .suggestions && model.cards.clearCount == 1,
+                  "full reset returns to the first-Home invitation and discards old cards")
+        try check(model.rows.isEmpty && model.searchResults.isEmpty && model.search.isEmpty
+                    && !model.searchShown && !model.clearChatConfirmationShown && !model.textSelected,
+                  "full reset clears conversation overlays even when generation was already observed")
+        try check(model.error == nil && !model.loading && !model.composerFocused && model.atLatest,
+                  "late search and old focus cannot restore the cleared conversation surface")
+        model.visit(conversation: conversation, running: false, pending: false, now: today)
+        try check(model.surface == .suggestions, "completing onboarding in the same process keeps first-Home invitation")
+        model.surface = .conversation
+        model.visit(conversation: conversation, running: false, pending: false, now: today)
+        try check(model.surface == .conversation, "ordinary reopen still preserves explicitly chosen conversation")
+        conversation.navigationRequest = UUID()
+        model.didResetApp(generation: conversation.generation)
+        model.visit(conversation: conversation, running: true, pending: false, now: today)
+        try check(model.surface == .conversation, "genuine new work and navigation still take priority after reset")
+    }
+
     static func main() async throws {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         let previous = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
@@ -695,6 +740,7 @@ typealias Presentation = SidekickPresentation
         try await workMetadata(directory)
         try await searchAndReset(directory, store: store)
         try visits(directory)
+        try await resetOnboarding(directory)
         print("PASS: \(checks) Sidekick presentation checks")
     }
 }

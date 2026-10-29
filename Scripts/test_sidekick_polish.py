@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five focused, own-window UI captures using the existing signed-app isolation fixture.
+"""Focused, own-window UI captures using the existing signed-app isolation fixture.
 No providers, computer-use helper, real preference changes, or other-app screenshots.
 """
 import argparse
@@ -15,6 +15,8 @@ def main() -> int:
     parser.add_argument("--artifacts", type=Path, default=Path(tempfile.gettempdir()) / "sentient-sidekick-polish")
     parser.add_argument("--runtime-root", type=Path, default=Path.home() / "Library/Application Support/SentientOS/Private Codex")
     parser.add_argument("--discovery", action="store_true", help="Run the focused Home discovery controls and hint lifecycle checks")
+    parser.add_argument("--offscreen-render", action="store_true", help="Explicitly render the owned film window on a headless/occluded desktop; never changes production visibility")
+    parser.add_argument("--film-origin", help="Owned local preview server for the invitation fixture")
     parser.add_argument("--invitation", action="store_true", help="Check the native onboarding invitation and physical-notch pointer")
     parser.add_argument("--small-onboarding", action="store_true", help="Check scaled onboarding and bottom controls on small display sizes")
     parser.add_argument("--late-gift", action="store_true", help="Check the late FINAL_1000 gift animation without redeeming a real code")
@@ -29,6 +31,17 @@ def main() -> int:
         (root / app.MARKER).write_bytes(b"1\n")
         (root / "vault").mkdir(mode=0o700)
         fixture = app.fixture(root, "chatgpt")
+        if args.offscreen_render:
+            app.require(args.invitation, "Offscreen rendering is scoped to the film fixture")
+            (root / "onboarding-offscreen-render").write_text("1\n")
+        if args.film_origin:
+            from urllib.parse import urlparse
+            parsed = urlparse(args.film_origin)
+            app.require(args.invitation and parsed.hostname in ("localhost", "127.0.0.1", "sentient-os.ai")
+                        and parsed.scheme in ("http", "https") and not parsed.username and not parsed.password
+                        and parsed.path in ("", "/") and not parsed.query and not parsed.fragment,
+                        "Expected a local or production film origin")
+            (root / "onboarding-film-origin.txt").write_text(args.film_origin.rstrip("/"))
         runtime = args.runtime_root.expanduser().resolve()
         print(f"Polish fixture: {root}", flush=True)
         app.run_stage(executable, root, fixture, runtime, "seed", 60)
@@ -36,13 +49,13 @@ def main() -> int:
         receipt = app.run_stage(executable, root, fixture, runtime, stage, 90)
         manifest = app.read_json(root / ("late-gift-manifest.json" if args.late_gift else "small-onboarding-manifest.json" if args.small_onboarding else "invitation-manifest.json" if args.invitation else "discovery-manifest.json" if args.discovery else "polish-manifest.json"))
         captures = manifest.get("captures", [])
-        app.require(len(captures) == (2 if args.late_gift else 4 if args.small_onboarding else 4 if args.invitation else 6 if args.discovery else 5) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
+        app.require(len(captures) == (2 if args.late_gift else 4 if args.small_onboarding else 11 if args.invitation else 6 if args.discovery else 5) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
         for capture in captures:
             path = (root / capture["file"]).resolve()
             app.require(path.parent == root / "polish-snapshots", "Capture escaped owned fixture")
             app.require(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") and path.stat().st_size > 4096, "Missing/empty UI image")
         result = {"passed": True, "stage": stage, "root": str(root), "checks": len(receipt["checks"]),
-                  "captures": [str(root / capture["file"]) for capture in captures], "provider_calls": 0}
+                  "captures": [str(root / capture["file"]) for capture in captures], "provider_calls": 0, "render_mode": manifest.get("render_mode", "onscreen")}
         app.save_json(root / "polish-runner-result.json", result)
         print(json.dumps(result, indent=2))
         return 0

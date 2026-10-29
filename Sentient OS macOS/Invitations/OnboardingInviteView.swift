@@ -1,4 +1,4 @@
-// Onboarding's corner invitation: verified redemption or late-code use, then the gift overlay.
+// Onboarding's corner invitation: verified lifetime redemption, then the gift overlay.
 // Only a verified submission presents the gift; restored receipts show the corresponding saved pass.
 // Doc: ../Views/Onboarding/Documentation - Onboarding.md
 
@@ -8,7 +8,6 @@ struct OnboardingInviteView: View {
     @Binding var isPresentingGift: Bool
     @State private var program = InviteProgram.shared
     @State private var code = ""
-    @State private var email = ""
     @State private var expanded = true
     @State private var hovering = false
     @State private var redemption: Task<Void, Never>?
@@ -66,7 +65,7 @@ struct OnboardingInviteView: View {
             }
 
             if isPresentingGift {
-                InviteCelebration(ticketNamespace: ticket, lateGift: program.lastGiftWasLate) {
+                InviteCelebration(ticketNamespace: ticket) {
                     withAnimation(motion) { isPresentingGift = false; expanded = false }
                 }
                 .transition(.opacity)
@@ -78,7 +77,6 @@ struct OnboardingInviteView: View {
             await program.refresh(createIfNeeded: false)
             if program.snapshot?.showsLateGift == true, code.isEmpty {
                 expanded = false
-                email = program.snapshot?.lateUse?.email ?? ""
             }
         }
         .onDisappear {
@@ -144,24 +142,12 @@ struct OnboardingInviteView: View {
                 }
                 .disabled(program.isRedeeming)
 
-                if InviteLateUse.matches(code) {
-                    TextField("Your email", text: $email)
-                        .textFieldStyle(.plain).textContentType(.emailAddress)
-                        .autocorrectionDisabled().privacySensitive()
-                        .font(.system(size: 13)).padding(12)
-                        .background(.black.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
-                        .accessibilityLabel("Email for your Sidekick gift")
-                        .onSubmit(redeem).onChange(of: email) { program.clearError() }
-                        .disabled(program.isRedeeming)
-                    Text("Saved with your gift code.").font(.system(size: 10)).opacity(0.6)
-                }
-
                 if let error = program.errorMessage {
                     Text(error).font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color(red: 0.55, green: 0.16, blue: 0.12))
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(program.isRedeeming ? "Checking your invitation…" : InviteLateUse.matches(code) ? "A little gift from us." : "Redeem your invitation.")
+                    Text(program.isRedeeming ? "Checking your invitation…" : "Redeem your invitation.")
                         .font(.system(size: 10)).opacity(0.6)
                 }
             }
@@ -176,10 +162,9 @@ struct OnboardingInviteView: View {
         guard redemption == nil, !program.isBusy, InviteSnapshot.isValidCode(code) else { return }
         codeFocused = false
         let submittedCode = code
-        let submittedEmail = email
         redemption = Task {
             defer { redemption = nil }
-            let redeemed = await program.redeem(submittedCode, email: submittedEmail)
+            let redeemed = await program.redeem(submittedCode)
             guard !Task.isCancelled else { return }
             if redeemed {
                 withAnimation(motion) {

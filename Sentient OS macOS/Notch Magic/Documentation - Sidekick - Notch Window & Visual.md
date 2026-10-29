@@ -99,3 +99,12 @@ spring can never interpolate the gradient angle and reverse-spin the logo.
 ## Related docs
 
 `Notch Magic/Documentation - Sidekick - General.md`, `Views/Documentation - Views - Home, Processing & Shared UI.md` (`GlowHalo`, the design language), `Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md` (the logo as the sun). The original inspiration was the open-source DynamicNotch app (its `notchSize` extension, fixed-canvas panel, corner-radius match, and SkyLight space delegation were the pieces used or adapted).
+
+## Provider-plan recovery actions
+
+An evidence-backed ChatGPT Free/Go limit can add `SidekickUpgradeActions` to the existing recovery
+panel. Home's composer uses the same component. Its explanation and compact button row are included in
+`SidekickRecoveryLayout` measurement, leaving the guidance field fixed while overflowing content
+scrolls. Upgrade opens pricing only on click; Change AI opens provider settings. Try again and Stop
+remain available. This recovery stays pending while hidden, preserving the guidance during an
+external visit; generic failure timing and clarification behavior keep their existing rules.

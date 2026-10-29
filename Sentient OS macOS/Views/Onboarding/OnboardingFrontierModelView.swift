@@ -24,6 +24,8 @@ struct OnboardingFrontierModelView: View {
     @State private var continueAttempt: UUID?
     @State private var continueTask: Task<Void, Never>?
     @State private var continueStatus: String?
+    @State private var limitedPlan = false
+    private var limitedChatGPT: Bool { tab == .chatgpt && codex.loggedIn && limitedPlan }
     private var continuing: Bool { continueAttempt != nil }
     private var enginePreparing: Bool {
         tab == .claude
@@ -88,6 +90,15 @@ struct OnboardingFrontierModelView: View {
 
                     OnboardingStatusText(continueStatus)
 
+                    if limitedChatGPT {
+                        VStack(spacing: 10) {
+                            Text("Your ChatGPT plan has limited usage. Try Sidekick now; Sentient will offer an upgrade if your provider reaches a limit.")
+                                .font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                                .multilineTextAlignment(.center).frame(maxWidth: 520)
+                        }
+                        .accessibilityIdentifier("onboarding.limitedPlan")
+                    }
+
                     // The quiet reward: the halo lights only once an engine is actually
                     // ready (GlowHalo's `active` rides `enabled`), at the armed-CTA subtlety.
                     OnboardingNextButton(title: "Continue",
@@ -106,11 +117,13 @@ struct OnboardingFrontierModelView: View {
         }
         .overlay { OnboardingTelemetryConsent() }
         .onAppear {
+            tab = activeTab
             // Join launch preparation, including adoption of a portable existing login into
             // the private runtime. A legacy CLI's login alone cannot make this screen ready.
             Task {
                 _ = await codex.ensureCurrent()
                 await codex.refreshLoginStatus()
+                limitedPlan = CodexAuth.isLimited()
             }
             Task {
                 await claude.refreshInstalled()
@@ -123,6 +136,7 @@ struct OnboardingFrontierModelView: View {
             Task {
                 await codex.refreshInstalled()
                 await codex.refreshLoginStatus()
+                limitedPlan = CodexAuth.isLimited()
             }
             Task {
                 await claude.refreshInstalled()
@@ -175,6 +189,9 @@ struct OnboardingFrontierModelView: View {
             // Commit only after preparation and a fresh login check succeed, immediately
             // before navigation so the next step sees the selected provider.
             if selectedTab == .claude { backendRaw = ModelBackend.claude.rawValue }
+            // Let the provider enforce access and usage. A Free/Go account may try Sidekick;
+            // only a real provider limit should offer an upgrade, never this local plan label.
+            CodexAuth.knowledgeBaseOnly = false
             onContinue()
         }
     }

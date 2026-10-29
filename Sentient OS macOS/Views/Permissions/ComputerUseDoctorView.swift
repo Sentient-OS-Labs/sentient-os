@@ -131,7 +131,7 @@ struct ComputerUseCheckRow: View {
             return "Test reading, screenshots, clicks and text entry in a small Sentient window."
         }
         if report.outcome == .passed || report.outcome == .repaired {
-            return "Last check passed " + ended.formatted(date: .abbreviated, time: .shortened) + ". Permissions are checked separately."
+            return "Last check passed " + ended.formatted(date: .abbreviated, time: .shortened) + "."
         }
         return report.explanation
     }

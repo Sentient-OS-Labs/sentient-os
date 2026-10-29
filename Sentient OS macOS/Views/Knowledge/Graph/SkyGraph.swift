@@ -162,6 +162,108 @@ struct SkyGraph {
                         maxDegree: max(nodes.map(\.degree).max() ?? 1, 1))
     }
 
+    // MARK: Onboarding example (memory only; these URLs are identities, never files)
+
+    static func onboardingExample() -> SkyGraph {
+        let groups: [(String, [(String, String)])] = [
+            ("Projects", [
+                ("Northstar pilot", "Northstar wants to expand from 20 to 80 seats. SSO is the last blocker before the wider rollout."),
+                ("Website launch", "The new site leads with the customer outcome, then shows the product in action."),
+                ("Product roadmap", "Onboarding and the Northstar rollout are the team's priorities this week."),
+                ("Customer feedback", "Pilot users value faster follow-ups and less time preparing for meetings."),
+                ("Onboarding funnel", "Help new users reach a useful first result before asking them to connect more sources."),
+                ("Analytics trial", "Pulse wasn't a fit for the pilot. Review its renewal before the trial ends."),
+                ("Release checklist", "Finish the security review, confirm the rollout owner, and prepare the customer announcement."),
+                ("Rollout plan", "Security review Thursday, followed by the wider Northstar team on Friday.")]),
+            ("People", [
+                ("Alex Chen", "Alex owns the Northstar pilot and coordinates the security review. He wants a clear rollout plan."),
+                ("Maya Patel", "Maya is collecting pilot feedback and turning recurring requests into product decisions."),
+                ("Jordan Lee", "Jordan handles the implementation questions and will join Thursday's security review."),
+                ("Design partners", "Keep the pilot group small enough to hear detailed feedback and follow up personally."),
+                ("Product team", "The team is focused on activation, reliable first results, and the next rollout."),
+                ("Customer champions", "Give each champion a concise summary they can share with their wider team."),
+                ("Advisors", "Bring concrete customer feedback and the current open decisions to the next check-in."),
+                ("Design team", "The next review should cover the first-run experience and the updated website.")]),
+            ("Commitments", [
+                ("Friday rollout", "Send Alex the SSO checklist before Thursday's review. The wider team is scheduled to start Friday."),
+                ("SSO checklist", "Confirm the identity provider, rollout owner, and security-review requirements."),
+                ("Thursday review", "Alex and Jordan need the implementation checklist before the security call."),
+                ("Pilot follow-up", "Send Alex the rollout plan and ask who should join from the wider team."),
+                ("Renewal decision", "Review Pulse's trial before it changes to a paid subscription."),
+                ("Launch notes", "Prepare a short announcement explaining what changed and who it helps."),
+                ("Review pricing", "Compare pilot feedback with the proposed pricing before making a decision."),
+                ("Send the demo", "Share the updated product demo once the onboarding changes are ready.")]),
+            ("Research", [
+                ("SSO requirements", "Northstar's security questions are the remaining dependency for the wider rollout."),
+                ("Pricing research", "Compare what teams value, their expected usage, and the alternatives they considered."),
+                ("Competitive landscape", "Focus the comparison on workflow fit and the customer's existing process."),
+                ("Trial notes", "Pulse added more setup than the pilot needed. Keep the cancellation decision visible."),
+                ("Interview themes", "Customers want a useful first result, clear controls, and fewer repeated explanations."),
+                ("Activation metrics", "Track whether someone reaches a useful result and returns to use it again."),
+                ("Launch channels", "Start with the communities and customer groups already interested in the product."),
+                ("Support patterns", "Turn recurring setup questions into clearer defaults and better in-product guidance.")]),
+            ("Meetings", [
+                ("Northstar call", "Bring the pilot feedback, SSO questions, and Friday rollout plan to the next customer call."),
+                ("Weekly team review", "Review the week's customer outcomes and decide which blockers need an owner."),
+                ("Customer interviews", "Ask what changed in the customer's workflow and where they still lose time."),
+                ("Design review", "Walk through the first-run experience and check that the next useful action is clear.")]),
+            ("Writing", [
+                ("Launch announcement", "Lead with the customer outcome, show what changed, and give readers one clear next step."),
+                ("Customer updates", "Keep updates short, specific, and tied to the commitments made on the last call."),
+                ("Product story", "Explain the product through a useful result someone can recognize in their own day."),
+                ("Support replies", "Answer the question directly, then give the smallest next step that helps.")]),
+            ("Workflows", [
+                ("Call preparation", "Bring together recent feedback, open commitments, and the decisions needed on the call."),
+                ("Feedback review", "Group recurring requests and separate blockers from useful future improvements."),
+                ("Security handoff", "Give Alex and Jordan the checklist and identify what still needs confirmation."),
+                ("Release coordination", "Keep the release checklist and customer rollout plan in sync.")]),
+            ("Decisions", [
+                ("Pilot expansion", "Northstar wants the wider team to join once the SSO review is complete."),
+                ("SSO approach", "Choose the implementation path after confirming Northstar's identity provider."),
+                ("Pulse subscription", "Decide whether to continue the trial before the paid renewal."),
+                ("Pricing direction", "Use customer feedback and expected team usage to choose the next pricing experiment.")])
+        ]
+        var nodes: [SkyNode] = []
+        var pairs = Set<EdgePair>()
+        var indices: [String: Int] = [:]
+        func add(_ title: String, _ preview: String, domain: Int, root: Bool = false) -> Int {
+            let index = nodes.count
+            let url = URL(string: "sentient-example://knowledge/\(index)")!
+            let hash = stableHash(title)
+            nodes.append(SkyNode(url: url, title: title, domain: domain, degree: 0, isRoot: root,
+                recentlyChanged: ["Northstar pilot", "Friday rollout"].contains(title), preview: preview,
+                twinklePhase: Double(hash % 6283) / 1000, twinkleSpeed: 1.1 + Double((hash >> 16) % 1000) / 1000 * 2.1))
+            indices[title] = index
+            return index
+        }
+        func link(_ a: Int, _ b: Int) { if a != b { pairs.insert(EdgePair(a: min(a, b), b: max(a, b))) } }
+        let root = add("Overview", "A connected view of your projects, people, commitments, and research.", domain: -1, root: true)
+        for (domain, group) in groups.enumerated() {
+            let hub = add(group.0, "Explore the notes and connections in \(group.0.lowercased()).", domain: domain)
+            link(root, hub)
+            var previous: Int?
+            for note in group.1 {
+                let node = add(note.0, note.1, domain: domain)
+                link(hub, node)
+                if let previous { link(previous, node) }
+                previous = node
+            }
+        }
+        for (a, b) in [("Northstar pilot", "Alex Chen"), ("Northstar pilot", "Friday rollout"),
+                       ("Northstar pilot", "SSO requirements"), ("Alex Chen", "Thursday review"),
+                       ("Rollout plan", "Pilot follow-up"), ("Analytics trial", "Trial notes"),
+                       ("Trial notes", "Renewal decision"), ("Customer feedback", "Interview themes"),
+                       ("Product roadmap", "Product team"), ("Website launch", "Launch notes"),
+                       ("Maya Patel", "Customer feedback"), ("Jordan Lee", "SSO checklist"),
+                       ("Northstar call", "Northstar pilot"), ("Call preparation", "Northstar call"),
+                       ("Pilot expansion", "Northstar pilot"), ("Security handoff", "SSO checklist"),
+                       ("Launch announcement", "Website launch"), ("Customer updates", "Pilot follow-up"),
+                       ("Pulse subscription", "Renewal decision"), ("Pricing direction", "Pricing research")] {
+            link(indices[a]!, indices[b]!)
+        }
+        return finish(nodes: nodes, pairs: pairs, domains: groups.map(\.0))
+    }
+
     // MARK: Mock (previews only — seeded, deterministic)
 
     static func mock() -> SkyGraph {

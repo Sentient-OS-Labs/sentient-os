@@ -5,8 +5,8 @@
 //  One small wrapper over UNUserNotificationCenter. Notify.now() is LIVE for the "Sentient just
 //  updated." note (UpdateNotice.checkAtLaunch); the proactive-reminder tier still to come rides
 //  the same call (git 67d8078 has an old schedule/cancel implementation to mine). The permission
-//  ask is live too: onboarding's permissions screen fires Notify.ask() the moment it appears, so
-//  the native prompt happens once, with no extra UI; now() also asks lazily as a backstop.
+//  permission is requested only by an explicit notification setup action. Background events,
+//  updates and successful analysis never request notification access themselves.
 //
 
 import Foundation
@@ -14,10 +14,12 @@ import UserNotifications
 
 @MainActor
 enum Notify {
-    enum Destination: String, Sendable { case knowledgeSources }
+    enum Destination: String, Sendable { case knowledgeSources, lifetimeUpgrade }
     private static let delegate = NotificationDelegate()
     private static var openKnowledgeSources: (() -> Void)?
     private static var pendingKnowledgeSources = false
+    private static var openLifetimeUpgrade: (() -> Void)?
+    private static var pendingLifetimeUpgrade = false
 
     static func installRouting() {
         guard !suppressed else { return }
@@ -33,6 +35,44 @@ enum Notify {
         if let openKnowledgeSources { openKnowledgeSources() }
         else { pendingKnowledgeSources = true }
     }
+
+    static func setLifetimeUpgradeHandler(_ handler: @escaping () -> Void) {
+        openLifetimeUpgrade = handler
+        if pendingLifetimeUpgrade { pendingLifetimeUpgrade = false; handler() }
+    }
+
+    fileprivate static func openUpgrade() {
+        if let openLifetimeUpgrade { openLifetimeUpgrade() }
+        else { pendingLifetimeUpgrade = true }
+    }
+
+    /// This gift never prompts for permission or opens a window by itself.
+    static func canDeliverLifetimeUpgrade() async -> Bool {
+        guard !suppressed else { return false }
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        return status == .authorized || status == .provisional
+    }
+
+    static func lifetimeUpgrade(_ id: UUID) async {
+        guard await canDeliverLifetimeUpgrade() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "You've been upgraded."
+        content.body = "Sentient is yours for life. Open Sentient to see your gift."
+        content.userInfo["destination"] = Destination.lifetimeUpgrade.rawValue
+        // A single quiet notification; the server claim prevents repeated sends.
+        let request = UNNotificationRequest(identifier: upgradeIdentifier(id), content: content, trigger: nil)
+        do { try await UNUserNotificationCenter.current().add(request) }
+        catch { Log("Notify: lifetime upgrade delivery failed — \(ErrorLabel(error))") }
+    }
+
+    static func clearLifetimeUpgrade(_ id: UUID) {
+        guard !suppressed else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [upgradeIdentifier(id)])
+        center.removeDeliveredNotifications(withIdentifiers: [upgradeIdentifier(id)])
+    }
+
+    private static func upgradeIdentifier(_ id: UUID) -> String { "invite-lifetime-upgrade-" + id.uuidString }
 
     static func connectorsUnavailable(_ slugs: Set<String>) async {
         guard !Task.isCancelled else { return }
@@ -57,8 +97,7 @@ enum Notify {
     /// Ask macOS for notification permission — the native "Sentient would like to send you
     /// notifications" prompt. A no-op unless the status is still `.notDetermined` (a prior
     /// allow/deny is final; only System Settings can change it), so it's safe to call on every
-    /// appearance. Onboarding's permissions screen fires this the moment it appears — no button,
-    /// no extra UI. Silent under SENTIENT_SELFTEST (the harness can't answer the dialog).
+    /// explicit action. Silent under SENTIENT_SELFTEST (the harness can't answer the dialog).
     static func ask() async {
         guard !suppressed else { return }
         await requestPermissionIfNeeded()
@@ -74,7 +113,6 @@ enum Notify {
     /// Fire a notification immediately.
     static func now(title: String, body: String, destination: Destination? = nil) async {
         guard !suppressed else { return }
-        await requestPermissionIfNeeded()
         let center = UNUserNotificationCenter.current()
 
         // §7.23: a denied/undetermined permission means proactive reminders silently never fire —
@@ -108,9 +146,12 @@ enum Notify {
 private final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              response.notification.request.content.userInfo["destination"] as? String == "knowledgeSources" else { return }
-        await Notify.openSources()
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        switch response.notification.request.content.userInfo["destination"] as? String {
+        case "knowledgeSources": await Notify.openSources()
+        case "lifetimeUpgrade": await Notify.openUpgrade()
+        default: break
+        }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,

@@ -1,17 +1,16 @@
-// First-launch setup: intro, model choice, plan, permissions and sources. Choosing analysis
-// timing finishes setup and reveals Home; the app-owned analysis task runs independently.
-// The persisted step resumes setup after the Full Disk Access relaunch.
+// First launch: the existing film and lessons, then the frontier model connection.
+// Home opens immediately afterward. Personal context is a separate resumable window.
 // Doc: Documentation - Onboarding.md
 
 import SwiftUI
 
 struct OnboardingView: View {
-    let onFinished: (ProcessingCoordinator.Timing) -> Void
+    let onFinished: () -> Void
 
     /// For the DEBUG skip handle only — the quiet flag flip, no finale.
     @Environment(AppState.self) private var appState
 
-    /// Persisted so a relaunch mid-onboarding (the FDA grant needs one) resumes at the same step.
+    /// Resume the introduction or frontier-model connection after an ordinary relaunch.
     @AppStorage("onboarding.step") private var step = 0
 
     @State private var isPresentingInviteGift = false
@@ -36,19 +35,11 @@ struct OnboardingView: View {
                 #else
                 OnboardingFilmView(onContinue: advance).transition(.opacity)
                 #endif
-            case 1:
-                OnboardingFrontierModelView(onContinue: advance).transition(.opacity)
-            case 2:
-                // The plan crossroads — free/go ChatGPT accounts decide here; full plans and
-                // custom engines skip it before it renders (OnboardingPlanView auto-advances).
-                OnboardingPlanView(onContinue: advance).transition(.opacity)
-            case 3:
-                OnboardingPermissionsView(onContinue: advance).transition(.opacity)
             default:
-                OnboardingReadyView(onStart: onFinished).transition(.opacity)
+                OnboardingFrontierModelView(onContinue: onFinished).transition(.opacity)
             }
         }
-        // Setup ends as soon as timing is selected; the display can then sleep normally.
+        // The introduction ends at Home; the display can then sleep normally.
         .onAppear { awake.begin(reason: "Onboarding — keeping the screen on") }
         .onDisappear { awake.end() }
         // No right-clicks anywhere in onboarding — the film's webview would offer a browser
@@ -111,12 +102,7 @@ struct OnboardingView: View {
     }
 
     private func goBack() {
-        var target = step - 1
-        // The crossroads only exists for free/go ChatGPT accounts — never strand a full plan,
-        // a Claude engine, or a custom engine on an auto-advancing screen (back would visibly
-        // bounce forward).
-        if target == 2 && (!CodexAuth.isLimited() || ModelBackend.current != .chatgpt) { target -= 1 }
-        withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
+        withAnimation(.easeInOut(duration: 0.25)) { step = 0 }
     }
 
 }
@@ -249,7 +235,7 @@ struct OnboardingTrustFooter: View {
 }
 
 #Preview("Onboarding") {
-    OnboardingView(onFinished: { _ in })
+    OnboardingView(onFinished: {})
         .frame(width: 1180, height: 880)
         .preferredColorScheme(.dark)
 }

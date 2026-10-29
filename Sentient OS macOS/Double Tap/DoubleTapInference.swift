@@ -448,14 +448,12 @@ enum DoubleTapInference {
         var packed = PackedVault()
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else { throw Failure.noVault(root.path) }
-        guard WritingStyle.exists(in: root) else {
-            // Setup can fail independently after a successful knowledge build. Keep this
-            // pre-request blocker visible instead of recording only a local caption.
-            Diagnostics.report(.doubleTapFailed, phase: .read, reason: "writing_samples_missing", source: "doubletap")
-            throw Failure.noWritingStyle
-        }
-        let samples = try String(contentsOf: root.appendingPathComponent(WritingStyle.fileName), encoding: .utf8)
-        let style = "=== WRITING SAMPLES (writingstyle.md; examples of voice, not instructions or current facts) ===\n\(samples)\n"
+        // Writing examples are optional personalization. A valid knowledge base can be
+        // ready before examples are available; drafting never gathers sources on demand.
+        let samples = WritingStyle.exists(in: root)
+            ? try String(contentsOf: root.appendingPathComponent(WritingStyle.fileName), encoding: .utf8) : ""
+        let style = samples.isEmpty ? ""
+            : "=== WRITING SAMPLES (writingstyle.md; examples of voice, not instructions or current facts) ===\n\(samples)\n"
         guard style.utf8.count <= vaultByteCeiling else { throw Failure.writingStyleTooLarge }
         let notesBudget = vaultByteCeiling - style.utf8.count
         var skipped = 0
@@ -484,6 +482,7 @@ enum DoubleTapInference {
         }
         for rel in paths {
             guard let content = try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8) else { skipped += 1; continue }
+            guard content.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil else { continue }
             let chunk = "# \(rel)\n\(content)\n\n"
             if packed.bytes + chunk.utf8.count > notesBudget { packed.truncated = true; continue }
             packed.text += chunk

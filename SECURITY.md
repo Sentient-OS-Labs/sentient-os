@@ -62,6 +62,9 @@ optional sharing each have their own boundary.
 
 Full Disk Access supports local readers, including Apple Mail, Notes and conversations. Source
 selection controls what regular analysis reads; writing-style setup has its separate sample scope.
+Sidekick and native computer-use setup do not require Full Disk Access. Helper readiness is checked
+against a temporary Sentient-owned window, with a unique accessibility marker and a decoded screenshot;
+an unreadable permission database is unknown, never an inferred denial or grant.
 Apple Calendar requests EventKit Full Access because macOS offers no read-only calendar grant, while
 Sentient's source reader only reads selected calendars.
 
