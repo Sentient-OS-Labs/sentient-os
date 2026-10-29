@@ -155,7 +155,19 @@ Prices are nonnegative integer **micro-US-dollars per million tokens**. For exam
 $3/million token price is 3,000,000 in this configuration; this is an arithmetic example, not a
 claim about the selected model's current price. Set the model to a verified Anthropic model ID.
 The application integration has selected `claude-sonnet-5-5`; the server deliberately supplies
-no unpriced default. Configure the upstream request deadline and lease checks so a check occurs
+no unpriced default. Claude Code 2.1.293 was verified with this operator-owned beta configuration:
+
+```text
+ANTHROPIC_BETAS=context-management-2025-06-27,mid-conversation-output-config-2026-07-01,dangerous-tool-use-2026-09-03
+```
+
+The first two enable [context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)
+and [per-message effort](https://platform.claude.com/docs/en/build-with-claude/effort). The third is
+used by the installed CLI's dangerous-tool-use safeguard and was accepted in the bounded live
+probe. The gateway preserves that safeguard context; it does not disable provider safeguards.
+The synthetic live check returned structured output through the actual gateway and SQL ledger,
+and then passed pause, resume, finish, and active-time accounting. Provider feature requirements
+can change with CLI upgrades, so repeat this check before changing the pinned runtime. Configure the upstream request deadline and lease checks so a check occurs
 well before lease expiry. Keep Supabase gateway RPC access restricted to `service_role`.
 
 Apply the migration only through the team's approved deployment process. Fund and enable the
