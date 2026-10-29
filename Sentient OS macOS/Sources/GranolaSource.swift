@@ -129,10 +129,12 @@ enum GranolaSource {
         var lastError: Error = DirectMCPError.invalidResponse
         for attempt in 1...2 {
             var envelope: CodexCLI.Envelope?
-            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous answer failed validation. Check the supplied item count, source markers on every paragraph/action, third person, privacy, and the word budget. Lead with the substantive fact, not the act of recording notes. Use the structured-output formatter with all five properties at its root, not a wrapper, JSON string or schema. Return only valid JSON grounded in the same evidence.")
+            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous answer could not be decoded. Use the structured-output formatter with all five properties at its root, with their correct types and a consistent notable result. Report an explicit tool_failure if the read failed. Return valid JSON grounded in the supplied notes.")
             do {
-                let result = try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
-                    slug: connection.slug, claudeModel: claudeModel)
+                let result = try await Diagnostics.withOperation("mcp_read_attempt", propagatesFailure: false) {
+                    try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
+                        slug: connection.slug, claudeModel: claudeModel)
+                }
                 envelope = result
                 let outcome = try parseSummary(result, meetings: notes, mode: mode, slug: connection.slug)
                 guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
@@ -385,14 +387,8 @@ enum GranolaSource {
 
     static func parseSummary(_ envelope: CodexCLI.Envelope, meetings: [Meeting], mode: MCPSource.ReadMode,
                              slug: String) throws -> MCPSource.ReadOutcome {
-        guard let bytes = envelope.jsonResult.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              integer(object["item_count"]) == meetings.count, object["tool_failure"] as? String == "" else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "item_count")
-        }
         let outcome = try MCPSource.parse(envelope.result, slug: slug)
-        guard let result = outcome.result else { return outcome }
-        try validateSummary(result.summary, meetings: meetings, mode: mode, slug: slug)
+        guard let result = outcome.result else { return .quiet(itemCount: meetings.count) }
         var summary = result.summary
         for (index, note) in meetings.enumerated() {
             let day = String(note.date.prefix(10))
@@ -401,33 +397,7 @@ enum GranolaSource {
         }
         // MCPSource.parse already screened the prose. Validated UUID source references are
         // identifiers, and must not be misread as payment-card numbers by a second prose scan.
-        return .notable(.init(summary: summary, hasActionItems: result.hasActionItems, itemCount: result.itemCount))
-    }
-
-    static func validateSummary(_ summary: String, meetings: [Meeting], mode: MCPSource.ReadMode, slug: String) throws {
-        guard summary.range(of: #"^The user (?:recorded|noted|captured) that\b"#, options: .regularExpression) == nil else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "note_taking_lead")
-        }
-        let markerPattern = try NSRegularExpression(pattern: #"\[M(\d+)\]"#)
-        let matches = markerPattern.matches(in: summary, range: NSRange(summary.startIndex..., in: summary))
-        let indexes = matches.compactMap { match in Range(match.range(at: 1), in: summary).flatMap { Int(summary[$0]) } }
-        let exactMarkers = matches.compactMap { Range($0.range, in: summary).map { String(summary[$0]) } }
-        let permitted = Set(meetings.indices.map { "[M\($0 + 1)]" })
-        let remaining = permitted.reduce(summary) { $0.replacingOccurrences(of: $1, with: "") }
-        guard !indexes.isEmpty, exactMarkers.allSatisfy(permitted.contains),
-              !remaining.contains("[M"),
-              summary.utf8.count <= 4_000,
-              summary.split(whereSeparator: \.isWhitespace).count <= (mode == .initial ? 200 : 150),
-              summary.range(of: #"https?://|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#, options: [.regularExpression, .caseInsensitive]) == nil else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "summary_evidence")
-        }
-        for line in summary.split(separator: "\n") {
-            let clean = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if clean.trimmingCharacters(in: CharacterSet(charactersIn: "#* ")).uppercased() == "ACTION ITEMS" { continue }
-            guard markerPattern.firstMatch(in: clean, range: NSRange(clean.startIndex..., in: clean)) != nil else {
-                throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "source_reference")
-            }
-        }
+        return .notable(.init(summary: summary, hasActionItems: result.hasActionItems, itemCount: meetings.count))
     }
 
     static func identifier(_ object: [String: Any]) -> String? {

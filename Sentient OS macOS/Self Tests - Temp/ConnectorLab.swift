@@ -43,51 +43,10 @@ enum ConnectorLab {
             return
         }
         let backend = requested.map { $0 == "claude" ? ModelBackend.claude : .chatgpt } ?? ModelBackend.current
-        if ProcessInfo.processInfo.environment["LAB_CMD"] == "connectionreadiness" {
-            // This restricted route bypasses classifier/version refresh and every older lab
-            // command. It cannot persist selection/readiness or dispatch a model/content read.
-            guard backend == ModelBackend.current, backend != .custom else {
-                Log("READINESS_REFUSED: requested backend must match the current hosted provider")
-                return
-            }
-            await connectionReadiness()
-            return
-        }
         await ModelBackend.$runOverride.withValue(backend) {
             await ConnectorClassifier.refreshCLIVersion()
             await runCommand()
         }
-    }
-
-    private static func connectionReadiness() async {
-        guard let slug = ProcessInfo.processInfo.environment["LAB_SLUG"],
-              let pack = ConnectorRegistry.pack(forSlug: slug), pack.directProvider == nil else {
-            Log("READINESS_REFUSED: LAB_SLUG must name one curated hosted source")
-            return
-        }
-        let audit = ReadinessAudit()
-        let success: Bool
-        do {
-            let result = try await HostedConnectorReadinessProbe.$onMetadataShape.withValue({ audit.record($0) }) {
-                try await HostedConnectorReadinessProbe.verify(slug: slug, backend: ModelBackend.current)
-            }
-            success = result.isReady
-        } catch { success = false }
-        var values = audit.snapshot()
-        values["verified"] = success
-        values["selection_write_performed"] = false
-        values["model_turn_started"] = false
-        values["content_tool_called"] = false
-        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else { return }
-        Log("READINESS_SHAPE: \(text)")
-    }
-
-    private nonisolated final class ReadinessAudit: @unchecked Sendable {
-        private let lock = NSLock()
-        private var values: [String: Bool] = [:]
-        func record(_ value: [String: Bool]) { lock.lock(); values = value; lock.unlock() }
-        func snapshot() -> [String: Bool] { lock.lock(); defer { lock.unlock() }; return values }
     }
 
     private static func runCommand() async {
@@ -191,7 +150,6 @@ enum ConnectorLab {
                 Log("Slack identity failed: \(ErrorLabel(error))"); exit(1)
             }
         case "prompts": await ConnectorReadAudit.exportPrompts()
-        case "probes":   await probes()
         case "routereval": await routereval()
         case "seedcard":
             if OutlookMailConnector.isMail(labSlug) { await OutlookCurationTests.seedCard() } else { seedcard() }
@@ -202,7 +160,7 @@ enum ConnectorLab {
         case "kbread":   await ConnectorReadAudit.read()
         default:
             Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify"
-                + " | cache | read | act | denycheck | argv | probes | routereval"
+                + " | cache | read | act | denycheck | argv | routereval"
                 + " | seedcard | firecard | decodecheck | research | kbread)")
         }
     }
@@ -869,17 +827,6 @@ enum ConnectorLab {
             }
         }
         return false
-    }
-
-    /// `LAB_CMD=probes`: the REAL Gmail/Calendar connection probes, unchanged production code
-    /// on the live backend — the 1.4 regression check that the migrated read recipe still
-    /// answers YES on a linked account.
-    private static func probes() async {
-        guard requireConnectorBackend("the probes") else { return }
-        let gmail = await ConnectorCensus.checkConnection(slug: "gmail")
-        Log("Gmail census → \(gmail)")
-        let calendar = await ConnectorCensus.checkConnection(slug: "google-calendar")
-        Log("Calendar census → \(calendar)")
     }
 
     // MARK: routereval (the 1.5 router eval — canned commands through the LIVE router)

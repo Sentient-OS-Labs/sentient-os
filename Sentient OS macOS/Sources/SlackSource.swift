@@ -1,6 +1,6 @@
 //
 // SlackSource.swift
-// Bounded hosted Slack prompts and read-receipt validation. MCPSource owns orchestration,
+// Bounded hosted Slack prompts and link parsing for action evidence. MCPSource owns orchestration,
 // account checks, retries, filtering, and atomic checkpoints; this file owns Slack semantics.
 // Doc: Documentation - Sources - Cloud (Gmail, Calendar).md
 //
@@ -145,94 +145,6 @@ enum SlackSource {
         """
     }
 
-    static func validate(raw: String, backend: ModelBackend, mode: MCPSource.ReadMode,
-                         window: MCPSource.Window, outcome: MCPSource.ReadOutcome) throws {
-        func reject(_ rule: String) throws -> Never {
-            throw MCPSource.MCPError.invalidResponse(slug: "slack", rule: rule)
-        }
-        let calls = MCPCallEvidence.receipts(raw: raw, backend: backend).filter {
-            SlackConnector.bareName($0, backend: backend) != nil
-        }
-        guard !calls.isEmpty else { try reject("slack_read_evidence") }
-        let bounds = searchBounds(window)
-        var searches = 0, threads = 0
-        var candidateBudget = 0
-        var successfulSearches = 0
-        var emptySearches = 0
-        var lanes = Set<String>()
-        var evidenceText = ""
-        for call in calls {
-            guard let name = SlackConnector.bareName(call, backend: backend),
-                  SlackConnector.knowledgeTools.contains(name), let args = SlackConnector.object(call.arguments) else {
-                try reject("slack_read_surface")
-            }
-            if name == "slack_search_public_and_private" {
-                searches += 1
-                guard let query = args["query"] as? String, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      let limit = args["limit"] as? Int, (1...pageSize).contains(limit),
-                      args["after"] as? String == bounds.after, args["before"] as? String == bounds.before,
-                      args["content_types"] as? String == "messages",
-                      args["channel_types"] as? String == "public_channel,private_channel,mpim,im",
-                      args["include_bots"] as? Bool == false, args["include_context"] as? Bool == false,
-                      args["sort"] as? String == "timestamp", args["sort_dir"] as? String == "desc",
-                      args["response_format"] as? String == "detailed",
-                      args["context_channel_id"] == nil || args["context_channel_id"] is NSNull,
-                      args["only_my_channels"] == nil || args["only_my_channels"] as? Bool == false else {
-                    try reject("slack_discovery_arguments")
-                }
-                guard args["filters"] == nil || args["filters"] is NSNull || args["filters"] as? String == "",
-                      args["natural_language_query"] == nil || args["natural_language_query"] is NSNull || args["natural_language_query"] as? String == "",
-                      args["keywords"] == nil || args["keywords"] is NSNull || (args["keywords"] as? [String])?.isEmpty == true else {
-                    try reject("slack_search_scope")
-                }
-                candidateBudget += limit
-                if let identity = SlackConnector.runIdentity {
-                    guard ["to:me", "from:<@\(identity.userID)>", broadQuery(window)].contains(query) else {
-                        try reject("slack_search_scope")
-                    }
-                }
-                if call.status == .succeeded, let body = SlackConnector.text(call), body.hasPrefix("# Search Results for:") {
-                    successfulSearches += 1
-                    lanes.insert(query)
-                    if isEmptySearch(body) { emptySearches += 1 }
-                }
-            } else {
-                threads += 1
-                guard successfulSearches > 0, let limit = args["limit"] as? Int,
-                      (1...threadPageSize).contains(limit), args["response_format"] as? String == "concise",
-                      args["latest"] as? String == threadEnd(window),
-                      let channel = args["channel_id"] as? String,
-                      channel.range(of: "^[CDG][A-Z0-9]+\\z", options: .regularExpression) != nil,
-                      let timestamp = args["message_ts"] as? String,
-                      timestamp.range(of: "^[0-9]+\\.[0-9]{6}\\z", options: .regularExpression) != nil,
-                      threadReferences(evidenceText).contains(channel + ":" + timestamp) else {
-                    try reject("slack_thread_arguments")
-                }
-            }
-            guard call.status == .succeeded else { try reject("slack_incomplete_read") }
-            if let body = SlackConnector.text(call) { evidenceText += body + "\n" }
-        }
-        guard searches <= discoveryCap(mode), threads <= threadCap(mode), successfulSearches > 0,
-              candidateBudget <= candidateCap(mode), outcome.itemCount <= candidateCap(mode) else { try reject("slack_read_budget") }
-        if emptySearches == successfulSearches, outcome.itemCount != 0 { try reject("slack_empty_count") }
-        guard let result = outcome.result else {
-            guard successfulSearches == 3, lanes.count == 3 else { try reject("slack_quiet_coverage") }
-            return
-        }
-        guard result.summary.split(whereSeparator: \.isWhitespace).count <= wordCap(mode) else { try reject("slack_summary_budget") }
-        let links = sourceLinks(result.summary)
-        guard !links.isEmpty, links.isSubset(of: sourceLinks(evidenceText)) else { try reject("slack_sources") }
-        for paragraph in result.summary.components(separatedBy: "\n\n") {
-            let content = paragraph.split(separator: "\n").filter {
-                $0.trimmingCharacters(in: CharacterSet(charactersIn: " #*:\t")).uppercased() != "ACTION ITEMS"
-            }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !content.isEmpty, sourceLinks(content).isEmpty { try reject("slack_paragraph_source") }
-            for line in content.split(separator: "\n") where line.hasPrefix("- ") || line.hasPrefix("* ") {
-                if sourceLinks(String(line)).isEmpty { try reject("slack_bullet_source") }
-            }
-        }
-    }
-
     static func sourceLinks(_ text: String) -> Set<String> {
         let pattern = #"https://[^\s<>\"\)\]]+"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -248,62 +160,4 @@ enum SlackSource {
         })
     }
 
-    static func threadReferences(_ text: String) -> Set<String> {
-        var references = Set<String>()
-        for link in sourceLinks(text) {
-            guard let url = URLComponents(string: link) else { continue }
-            let parts = url.path.split(separator: "/")
-            guard parts.count == 3, parts[0] == "archives", parts[2].hasPrefix("p") else { continue }
-            let digits = parts[2].dropFirst()
-            guard digits.count > 6 else { continue }
-            let timestamp = digits.dropLast(6) + "." + digits.suffix(6)
-            references.insert(String(parts[1]) + ":" + timestamp)
-            if let parent = url.queryItems?.first(where: { $0.name == "thread_ts" })?.value,
-               parent.range(of: "^[0-9]+\\.[0-9]{6}\\z", options: .regularExpression) != nil {
-                references.insert(String(parts[1]) + ":" + parent)
-            }
-        }
-        return references
-    }
-
-    /// An empty page contains only its search heading and the provider's empty-result line.
-    /// The same words inside a message body are content, never discovery metadata.
-    private static func isEmptySearch(_ body: String) -> Bool {
-        let lines = body.split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        return lines.count == 2 && lines[0].hasPrefix("# Search Results for:")
-            && lines[1] == "No results found."
-    }
-
-    static func discoveredThreadCount(raw: String, backend: ModelBackend) throws -> Int {
-        var threads = Set<String>()
-        for call in MCPCallEvidence.receipts(raw: raw, backend: backend)
-            where SlackConnector.bareName(call, backend: backend) == "slack_search_public_and_private" && call.status == .succeeded {
-            guard let body = SlackConnector.text(call) else { continue }
-            if isEmptySearch(body) { continue }
-            let pattern = #"(?m)^Message_ts: [0-9]+\.[0-9]{6}\nPermalink: ([^\n]+)\nText:"#
-            let regex = try NSRegularExpression(pattern: pattern)
-            let records = regex.matches(in: body, range: NSRange(body.startIndex..., in: body))
-            guard !records.isEmpty else { throw MCPSource.MCPError.invalidResponse(slug: "slack", rule: "slack_discovery_shape") }
-            for record in records {
-                guard let range = Range(record.range(at: 1), in: body),
-                      let link = sourceLinks(String(body[range])).first, let url = URLComponents(string: link) else {
-                    throw MCPSource.MCPError.invalidResponse(slug: "slack", rule: "slack_discovery_reference")
-                }
-                let parts = url.path.split(separator: "/")
-                guard parts.count == 3, parts[0] == "archives", parts[2].hasPrefix("p") else {
-                    throw MCPSource.MCPError.invalidResponse(slug: "slack", rule: "slack_discovery_reference")
-                }
-                let digits = parts[2].dropFirst()
-                guard digits.count > 6 else { throw MCPSource.MCPError.invalidResponse(slug: "slack", rule: "slack_discovery_reference") }
-                let timestamp = url.queryItems?.first(where: { $0.name == "thread_ts" })?.value
-                    ?? String(digits.dropLast(6) + "." + digits.suffix(6))
-                guard timestamp.range(of: "^[0-9]+\\.[0-9]{6}\\z", options: .regularExpression) != nil else {
-                    throw MCPSource.MCPError.invalidResponse(slug: "slack", rule: "slack_discovery_reference")
-                }
-                threads.insert(String(parts[1]) + ":" + timestamp)
-            }
-        }
-        return threads.count
-    }
 }

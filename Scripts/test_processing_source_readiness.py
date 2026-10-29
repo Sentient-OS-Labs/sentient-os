@@ -25,6 +25,8 @@ coordinator = (APP / 'Ingestion/ProcessingCoordinator.swift').read_text()
 progress = (APP / 'Ingestion/RunProgress.swift').read_text()
 plan = (APP / 'Ingestion/ProcessingPlan.swift').read_text()
 chats = (APP / 'Sources/ChatWindowing.swift').read_text()
+gmail = (APP / 'Sources/GmailConnect.swift').read_text()
+connector_failure = (APP / 'Sources/ConnectorReadFailure.swift').read_text()
 
 fixture = r'''
 import Foundation
@@ -44,7 +46,6 @@ struct RunSource {
     static func connectors(from sources: [RunSource]) -> [any Connector] { sources.isEmpty ? [] : [FixtureConnector()] }
 }
 enum ModelBackend { case chatgpt, claude, custom, sentient; static var current: Self = .chatgpt }
-enum CodexFailureReason { case notLoggedIn }
 enum ClaudeAuth {
     static var requiresVerification = false
     static var rejectDuringGmail = false
@@ -77,9 +78,59 @@ enum SourceSelection {
     static var selectionCount: Int { local.count + (gmail ? 1 : 0) + (calendar ? 1 : 0) + readyConnectors.count }
 }
 enum Diagnostics {
+    enum Event { case sourceReadFailed }
+    enum Phase { case read }
     final class Operation { var hasFailure = false }
     static var current: Operation? = nil
     static func withOperation<T>(_ name: String, _ work: () async -> T) async -> T { await work() }
+    static func report(_ event: Event, phase: Phase, reason: String, error: Error, source: String) {}
+}
+enum SourceHealth {
+    static var outcomes: [(String, String)] = []
+    static func recordReadOutcome(source: String, outcome: String) { outcomes.append((source, outcome)) }
+}
+enum CodexFailureReason {
+    case usageLimit, other, notLoggedIn
+    static func classify(_ error: Error) -> Self { error is ProviderLimit ? .usageLimit : .other }
+}
+struct ProviderLimit: Error {}
+struct AuthenticationFailure: Error {}
+struct UnsafeProviderFailure: LocalizedError {
+    var errorDescription: String? { "provider-secret user@example.invalid /private/mail/thread-123" }
+}
+enum ConnectorReadFailure {
+    // GMAIL_FAILURE
+    static func isConnectionFailure(_ error: Error) -> Bool { error is AuthenticationFailure }
+}
+enum DiskSpace {
+    static func isDiskFull(_ error: Error) -> Bool { (error as NSError).code == NSFileWriteOutOfSpaceError }
+}
+func Log(_ message: String) {}
+func ErrorLabel(_ error: Error) -> String { String(describing: type(of: error)) }
+enum GmailConnect {
+    // GMAIL_PROGRESS
+    // GMAIL_ERROR
+    static var events: [Progress] = []
+    static var failure: Error?
+    static var modes: [String] = []
+    static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        modes.append("initial"); return try await read(onProgress)
+    }
+    static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        modes.append("iterative"); return try await read(onProgress)
+    }
+    private static func read(_ yield: @Sendable (Progress) -> Void) async throws -> Int {
+        for event in events { yield(event) }
+        if ClaudeAuth.rejectDuringGmail { ClaudeAuth.requiresVerification = true }
+        if let failure { throw failure }
+        return 0
+    }
+}
+final class ProgressCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [RunProgress] = []
+    func append(_ value: RunProgress) { lock.lock(); defer { lock.unlock() }; values.append(value) }
+    var snapshots: [RunProgress] { lock.lock(); defer { lock.unlock() }; return values }
 }
 enum ProactiveCyclePhase { case done, failed(CycleFailure) }
 final class ProactiveCycle {
@@ -110,31 +161,31 @@ enum PowerState {
 enum OvernightScheduler { static let allowBatteryKey = "battery" }
 enum OvernightCaution { enum Kind { case diskFull, loggedOut }; static func record(_ value: Kind) {} }
 enum VaultGenerator { static var vaultRoot = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("Knowledge") }
-'''
+'''.replace('// GMAIL_FAILURE', member(connector_failure, 'enum GmailFailure:')).replace(
+    '// GMAIL_PROGRESS', member(gmail, 'enum Progress:')).replace('// GMAIL_ERROR', member(gmail, 'enum GmailError:'))
 
 run_class = '\n'.join(member(run, signature) for signature in (
     'struct Result',
     'func execute(progress:',
     'private func recordConnectionOutcome(',
     'private func claudeLoginFailure(',
+    'private func runGmailLeg(',
 ))
 run_fixture = r'''
 @MainActor final class ProcessingRun {
     let request: ProcessingRequest
     let scheduled: Bool
     var unavailableConnectors: Set<String>
+    static var calendarCalls = 0, mcpCalls = 0
     var mode: IterativeRun.Mode { request.mode }
     init(request: ProcessingRequest, scheduled: Bool) {
         self.request = request; self.scheduled = scheduled; unavailableConnectors = request.unavailableConnectorSlugs
     }
-    func runGmailLeg(base: RunProgress, yield: (RunProgress) -> Void) async -> RunProgress {
-        if ClaudeAuth.rejectDuringGmail { ClaudeAuth.requiresVerification = true }
-        var p = base; p.finishSourceRead(name: "Gmail", label: "fixture", summary: "safe summary", items: 1); return p
-    }
     func runCalendarLeg(base: RunProgress, yield: (RunProgress) -> Void) async -> RunProgress {
+        Self.calendarCalls += 1
         var p = base; p.finishSourceRead(name: "Calendar", label: "fixture", summary: nil, items: 0); return p
     }
-    func runMCPLeg(base: RunProgress, yield: (RunProgress) -> Void) async -> RunProgress { base }
+    func runMCPLeg(base: RunProgress, yield: (RunProgress) -> Void) async -> RunProgress { Self.mcpCalls += 1; return base }
     func recordOutcomeForTest(slug: String, connected: Bool) { recordConnectionOutcome(slug: slug, connected: connected) }
 // RUN_MEMBERS
 }
@@ -294,13 +345,105 @@ checks = r'''
         do { try ChatSelectionReadError.validate(selected: ["kept", "gone"], available: ["kept"]) }
         catch { missing = true; check(!error.localizedDescription.contains("gone"), "missing-chat error does not expose identifiers") }
         check(missing, "stale selected chat IDs fail rather than returning a false empty source")
+
+        // These are committed-window notifications, not successful model responses.
+        // test_gmail_import_recovery verifies the real disk transaction precedes notification;
+        // here the actual ProcessingRun consumer and RunProgress decide counts and presentation.
+        func scenario(_ events: [GmailConnect.Progress], error: Error? = nil,
+                      request: ProcessingRequest) async -> (ProcessingRun.Result, [RunProgress]) {
+            GmailConnect.events = events; GmailConnect.failure = error; GmailConnect.modes = []
+            SourceHealth.outcomes = []; ConnectorCensus.outcomes = []
+            ProactiveCycle.shared.calls = 0; ProactiveCycle.shared.excluded = []
+            ProcessingRun.calendarCalls = 0; ProcessingRun.mcpCalls = 0
+            let capture = ProgressCapture()
+            let result = await ProcessingRun(request: request, scheduled: false).execute(
+                progress: { capture.append($0) }, phase: { _ in }, onLine: { _ in })
+            return (result, capture.snapshots)
+        }
+        var gmailOnly = cloud; gmailOnly.runCalendar = false; gmailOnly.mcpSlugs = []
+        let saved: GmailConnect.Progress = .windowDone(total: 4, label: "week 1", summary: "Saved weekly context",
+                                                       threads: 3, completed: 1, keptSoFar: 1)
+        let started: GmailConnect.Progress = .windowStart(total: 4, label: "week 1", prompt: "bounded week 1")
+        let later: GmailConnect.Progress = .windowStart(total: 4, label: "week 2", prompt: "bounded week 2")
+        let quiet: GmailConnect.Progress = .windowDone(total: 4, label: "week 2", summary: nil,
+                                                       threads: 0, completed: 2, keptSoFar: 1)
+        let anotherSaved: GmailConnect.Progress = .windowDone(total: 4, label: "week 3", summary: "Another saved context",
+                                                              threads: 2, completed: 3, keptSoFar: 2)
+        var withLocal = gmailOnly; withLocal.connectors = [FixtureConnector()]; withLocal.modelPath = "synthetic"
+        withLocal.mode = .initial
+        IterativeRun.next = RunProgress(); IterativeRun.next.total = 5; IterativeRun.next.done = 5
+        IterativeRun.next.survivors = 2; IterativeRun.next.quietReads = 1; IterativeRun.next.junk = 1
+        let (partialGmail, partialUpdates) = await scenario([started, saved, later, quiet, anotherSaved],
+            error: GmailConnect.GmailError.incomplete(failed: 1, saved: 2), request: withLocal)
+        check(partialGmail.progress.total == 9 && partialGmail.progress.done == 8
+            && partialGmail.progress.survivors == 4 && partialGmail.progress.quietReads == 2
+            && partialGmail.progress.junk == 1 && partialGmail.progress.failed == 1,
+              "partial Gmail counts only persisted windows, adds quiet coverage, and preserves local counts")
+        check(!partialGmail.complete && !partialGmail.progress.successfulSources.contains("Gmail")
+            && partialGmail.progress.sourceReadFailures["Gmail"]?.contains("saved 2 email summaries") == true,
+              "partial Gmail preserves saved count while keeping the source retryable")
+        check(partialUpdates.contains { $0.lastPrompt == "bounded week 2" && $0.done == 6
+            && $0.lastSummary == "Saved weekly context" && $0.sourceRead?.status == .summarized },
+              "starting another Gmail worker retains the previously saved summary card")
+        check(partialUpdates.contains { $0.done == 7 && $0.quietReads == 2
+            && $0.lastSummary == "Saved weekly context" && $0.sourceRead?.status == .summarized },
+              "a quiet Gmail window cannot erase the preceding useful summary")
+        check(ProactiveCycle.shared.calls == 1 && SourceHealth.outcomes.last?.1 == "incomplete"
+            && GmailConnect.modes == ["initial"],
+              "partial Gmail still reaches knowledge publication and records incomplete source health")
+        let (quietGmail, _) = await scenario([
+            .windowStart(total: 2, label: "quiet 1", prompt: "quiet first"),
+            .windowDone(total: 2, label: "quiet 1", summary: nil, threads: 0, completed: 1, keptSoFar: 0),
+            .windowStart(total: 2, label: "quiet 2", prompt: "quiet second"),
+            .windowDone(total: 2, label: "quiet 2", summary: nil, threads: 0, completed: 2, keptSoFar: 0)
+        ], request: gmailOnly)
+        check(quietGmail.complete && quietGmail.progress.done == 2 && quietGmail.progress.quietReads == 2
+            && quietGmail.progress.junk == 0 && quietGmail.progress.survivors == 0
+            && quietGmail.progress.lastVerdict == nil && quietGmail.progress.sourceRead?.status == .quiet,
+              "successful empty Gmail windows count as quiet coverage, never junk or failed reads")
+        check(SourceHealth.outcomes.last?.1 == "ok" && GmailConnect.modes == ["iterative"],
+              "automatic Gmail uses resumable reading and successful quiet coverage certifies source health")
+        let (authGmail, _) = await scenario([started, saved], error: AuthenticationFailure(), request: gmailOnly)
+        check(authGmail.progress.survivors == 1 && authGmail.progress.done == 1 && !authGmail.complete
+            && authGmail.progress.sourceReadFailures["Gmail"] == "Reconnect Gmail to retry this source.",
+              "auth loss after a saved Gmail window preserves the saved count and requests reconnect")
+        check(ProactiveCycle.shared.calls == 1 && ProactiveCycle.shared.excluded.contains("gmail")
+            && ConnectorCensus.outcomes.last?.2 == false && SourceHealth.outcomes.last?.1 == "connector_auth",
+              "Gmail auth failure excludes further Gmail fetches while saved work reaches the knowledge tail")
+        let (unsafeGmail, _) = await scenario([started, saved], error: UnsafeProviderFailure(), request: gmailOnly)
+        check(unsafeGmail.progress.lastSummary?.contains("Saved summaries are kept") == true
+            && unsafeGmail.progress.lastSummary?.contains("provider-secret") == false
+            && unsafeGmail.progress.sourceReadFailures["Gmail"]?.contains("user@example") == false
+            && unsafeGmail.progress.lastVerdict == nil && unsafeGmail.progress.lastPrompt == nil
+            && unsafeGmail.progress.survivors == 1 && unsafeGmail.progress.failed == 1,
+              "unexpected Gmail failure shows safe recovery text without raw provider output or a junk verdict")
+        for error: Error in [ConnectorReadFailure.GmailFailure.accountLimit, ProviderLimit()] {
+            let (limitedGmail, _) = await scenario([started, saved], error: error, request: gmailOnly)
+            check(limitedGmail.progress.survivors == 1 && !limitedGmail.complete
+                && limitedGmail.progress.sourceReadFailures["Gmail"]?.contains("limit resets") == true
+                && SourceHealth.outcomes.last?.1 == "usage_limit" && ConnectorCensus.outcomes.isEmpty,
+                  "Gmail account or model usage limit keeps saved progress and never requests reconnect")
+        }
+        let (fullDiskGmail, _) = await scenario([started, saved],
+            error: CocoaError(.fileWriteOutOfSpace), request: cloud)
+        check(fullDiskGmail.progress.diskFull && !fullDiskGmail.complete
+            && fullDiskGmail.progress.survivors == 1 && fullDiskGmail.progress.done == 1
+            && fullDiskGmail.progress.sourceReadFailures["Gmail"]?.contains("disk space") == true,
+              "Gmail storage failure keeps prior saves visible and returns the disk-full result")
+        check(ProcessingRun.calendarCalls == 0 && ProcessingRun.mcpCalls == 0 && ProactiveCycle.shared.calls == 0,
+              "Gmail disk-full halts Calendar, remaining connectors, and knowledge publication")
+        let (noWorkGmail, _) = await scenario([], request: gmailOnly)
+        check(noWorkGmail.complete && noWorkGmail.progress.successfulSources.contains("Gmail")
+            && noWorkGmail.progress.done == 0 && SourceHealth.outcomes.last?.1 == "ok",
+              "same-second Gmail no-work success clears source readiness without inventing summaries")
         print("Processing source readiness checks passed")
     }
 }
 '''
 
 source = '\n'.join((fixture, progress, plan, member(chats, 'nonisolated enum ChatSelectionReadError'),
-                    member(run, 'struct ProcessingRequest'), run_fixture, coordinator_fixture, checks))
+                    member(run, 'struct ProcessingRequest'), member(run, 'private nonisolated final class ProgressBox'),
+                    run_fixture, coordinator_fixture, checks))
 with tempfile.TemporaryDirectory(prefix='sentient-processing-readiness-') as directory:
     path = Path(directory)
     (path / 'main.swift').write_text(source)

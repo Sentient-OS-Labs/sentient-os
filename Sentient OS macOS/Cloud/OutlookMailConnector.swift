@@ -197,7 +197,10 @@ nonisolated enum OutlookMailConnector {
                 var inv = MCPSource.readInvocation(slug: slug, prompt: prompt)
                 inv.mcpReadToolNames = [tool]; inv.effort = .low; inv.timeout = 90
                 inv.claudeModel = .sonnet
-                let result = try await FrontierRun.run(inv)
+                let request = inv
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 MCPSource.meter.withLock { totals in
                     var total = totals[slug] ?? (0, 0)

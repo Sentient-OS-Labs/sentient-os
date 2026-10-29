@@ -113,15 +113,13 @@ enum SourceSelection {
         return sources
     }
 
-    /// Done makes a source available to attempt under its selected provider/account. Actual
-    /// authentication failures remain unavailable until reconfirmed. No live probe runs.
+    /// Done is the user's saved instruction to read this hosted source. Discovery and prior
+    /// read failures cannot revoke that choice; the next actual read reports its own outcome.
     static func hostedSourceReady(_ service: String) -> Bool {
         guard ModelBackend.connectorsAvailable,
               !(ModelBackend.current == .chatgpt && UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey)),
-              isSelected("dbg.run.\(service)"), isSelected("dbg.\(service).connected"),
-              let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current) else { return false }
-        let slug = service == "calendar" ? "google-calendar" : service
-        return ConnectorCensus.cached(for: origin).first(where: { $0.slug == slug })?.canAttempt ?? false
+              isSelected("dbg.run.\(service)"), isSelected("dbg.\(service).connected") else { return false }
+        return true
     }
 
     static var readyConnectors: [ConnectorCensus.DetectedConnector] {

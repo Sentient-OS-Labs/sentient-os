@@ -102,7 +102,7 @@ enum CalendarConnect {
             let range = "with a start date/time on or after \(iso(lower)) and before \(iso(upper))"
             let prompt = readPrompt(range: range, label: monthLabel)
             onProgress(.windowStart(step: month + 1, total: initialMonths, label: monthLabel, prompt: prompt))
-            if let r = try await read(prompt: prompt, window: DateInterval(start: lower, end: upper)) {
+            if let r = try await read(prompt: prompt) {
                 let itemDate = upperDay
                 pending.append(draft(r, itemDate: itemDate, label: monthLabel))
                 recorded += 1
@@ -147,7 +147,7 @@ enum CalendarConnect {
         onProgress(.windowStart(step: 1, total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
         var pending: [NoteDraft] = []
-        if let r = try await read(prompt: prompt, window: DateInterval(start: since, end: runStart)) {
+        if let r = try await read(prompt: prompt) {
             pending.append(draft(r, itemDate: runStart, label: sinceLabel))
             recorded = 1
             onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
@@ -198,7 +198,7 @@ enum CalendarConnect {
 
     // MARK: - One read (a single codex exec over a date window)
 
-    private static func read(prompt: String, window: DateInterval) async throws -> ReadResult? {
+    private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "calendar"
         inv.model = .gpt6luna               // light model — calendar data is small + structured
@@ -208,8 +208,7 @@ enum CalendarConnect {
         inv.outputSchema = readSchema
         inv.timeout = 600
         inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read recipe
-        guard let result = try await GoogleSourceRead.read(inv, slug: "google-calendar", countKey: "event_count", cap: eventCap,
-                                                         calendarWindow: window) else { return nil }
+        guard let result = try await GoogleSourceRead.read(inv, slug: "google-calendar", countKey: "event_count") else { return nil }
         return ReadResult(summary: result.text, hasActionItems: result.hasActionItems, eventCount: result.count)
     }
 

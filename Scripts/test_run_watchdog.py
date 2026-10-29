@@ -216,9 +216,14 @@ import os
             await started.wait()
             let began = ContinuousClock.now
             run.cancel()
-            let stopped = try await run.value
-            check(stopped.status != 0, "\(label) still terminates the actual child on explicit cancellation")
+            do { _ = try await run.value; preconditionFailure("\(label) returned a process exit for cancellation") }
+            catch is CancellationError { checks += 1 }
             check(began.duration(to: .now) < .seconds(4), "\(label) cancellation drains without awaiting the fixture's 60 seconds")
+            let failed: CodexCLI.ExecResult
+            let exit = ["-c", "import sys; sys.exit(15)"]
+            if streaming { failed = try await CodexCLI.executeStreaming(binary: python, args: exit, timeout: 0) { _ in } }
+            else { failed = try await CodexCLI.executeAsync(binary: python, args: exit, stdinText: nil, cwd: nil, timeout: 0) }
+            check(failed.status == 15, "\(label) does not mistake an uncancelled exit 15 for task cancellation")
         }
         print("Run watchdog and shared process execution: \(checks) assertions passed")
     }

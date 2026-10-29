@@ -1,6 +1,7 @@
 #if DEBUG
 // Synthetic regressions for bounded connector reads and writing setup. No live accounts,
-// credentials, preferences or vault writes. Exercises production readers and validators.
+// credentials or user vault writes. Identity cases require the isolated acceptance bundle
+// and restore their temporary cache preferences. Exercises production readers and validators.
 // Doc: Documentation - General - Self-Testing (Eval Harness).md
 import Foundation
 import Synchronization
@@ -30,6 +31,7 @@ enum ConnectorReliabilityTests {
             try await classification()
             try await notion()
             try await ModelBackend.$runOverride.withValue(.claude) { try await modelReaders() }
+            try await ModelBackend.$runOverride.withValue(.chatgpt) { try await identityRetries() }
             try await doubleTapSetup()
             try diagnostics()
             Log("CONNECTOR RELIABILITY: PASS")
@@ -204,59 +206,89 @@ enum ConnectorReliabilityTests {
         let quiet = #"{"thread_count":0,"notable":false,"summary":"","has_action_items":false,"tool_failure":""}"#
         let formatter = try receipt("format", tool: "StructuredOutput", payload: ["message": "does not match required schema"], failed: true)
         let repaired = FullAcceptanceTests.envelope(quiet, raw: discovered + "\n" + formatter)
-        try ConnectorReadFailure.validateTools(repaired, slug: "gmail")
-        try check(true, "formatter failure does not imply provider failure")
+        try ConnectorReadFailure.validate(repaired, slug: "gmail")
+        try check(true, "formatter failure does not imply a final source failure")
         let failedRead = try receipt("failed", tool: search, args: args, payload: ["message": "timeout"], failed: true)
+        try ConnectorReadFailure.validate(FullAcceptanceTests.envelope(quiet, raw: failedRead), slug: "gmail")
+        try check(true, "successful final output is not vetoed by a historical failed receipt")
+        let replacement = try receipt("replacement", tool: search, args: ["query": "different"])
+        try ConnectorReadFailure.validate(FullAcceptanceTests.envelope(quiet, raw: failedRead + "\n" + replacement), slug: "gmail")
+        try check(true, "successful final output accepts an adapted recovery query")
         var rejected = false
-        do { try ConnectorReadFailure.validateTools(FullAcceptanceTests.envelope(quiet, raw: failedRead), slug: "gmail") }
-        catch MCPSource.MCPError.toolFailure { rejected = true }
-        try check(rejected, "unresolved provider read still fails")
-        try ConnectorReadFailure.validateTools(FullAcceptanceTests.envelope(quiet, raw: failedRead + "\n" + discovered), slug: "gmail")
-        try check(true, "identical successful provider retry repairs a read")
-        let unrelated = try receipt("unrelated", tool: search, args: ["query": "different"])
-        rejected = false
-        do { try ConnectorReadFailure.validateTools(FullAcceptanceTests.envelope(quiet, raw: failedRead + "\n" + unrelated), slug: "gmail") }
-        catch MCPSource.MCPError.toolFailure { rejected = true }
-        try check(rejected, "a different query cannot repair a failed read")
-
         let attempts = Mutex(0)
         let conflict = FullAcceptanceTests.envelope(quiet.replacingOccurrences(of: #""tool_failure":"""#, with: #""tool_failure":"other""#), raw: repaired.raw)
         let summary = try await FrontierRun.$acceptanceRun.withValue({ _ in
             attempts.withLock { $0 += 1; return $0 == 1 ? conflict : repaired }
-        }) { try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count", cap: 300) }
-        try check(summary == nil && attempts.withLock({ $0 }) == 2, "conflicting model failure gets one fresh Google read")
+        }) { try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count") }
+        try check(summary == nil && attempts.withLock({ $0 }) == 2, "explicit model read failure gets one fresh Google read")
         attempts.withLock { $0 = 0 }
         rejected = false
         do {
             _ = try await FrontierRun.$acceptanceRun.withValue({ _ in attempts.withLock { $0 += 1 }; return conflict }) {
-                try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count", cap: 300)
+                try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count")
             }
-        } catch GoogleSourceRead.Failure.invalidResponse { rejected = true }
-        try check(rejected && attempts.withLock({ $0 }) == 2, "persistent invalid output stops after two attempts")
+        } catch MCPSource.MCPError.toolFailure { rejected = true }
+        try check(rejected && attempts.withLock({ $0 }) == 2, "persistent explicit read failure remains typed after two attempts")
         attempts.withLock { $0 = 0 }
         let auth = FullAcceptanceTests.envelope(#"{"tool_failure":"auth"}"#, raw: discovered)
         rejected = false
         do {
             _ = try await FrontierRun.$acceptanceRun.withValue({ _ in attempts.withLock { $0 += 1 }; return auth }) {
-                try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count", cap: 300)
+                try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count")
             }
         } catch MCPSource.MCPError.connectorAuth { rejected = true }
         try check(rejected && attempts.withLock({ $0 }) == 1, "Google authentication failure does not retry")
-        attempts.withLock { $0 = 0 }
-        _ = try await FrontierRun.$acceptanceRun.withValue({ _ in
-            let attempt = attempts.withLock { $0 += 1; return $0 }
-            if attempt == 1 { throw CodexCLI.CLIError.exitFailure(code: 1, message: "StructuredOutput does not match required schema") }
-            return repaired
-        }) { try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count", cap: 300) }
-        try check(attempts.withLock({ $0 }) == 2, "Claude terminal formatting failure gets one bounded retry")
+        for slug in ["gmail", "google-calendar"] {
+            attempts.withLock { $0 = 0 }
+            let key = slug == "gmail" ? "thread_count" : "event_count"
+            let finalReply = quiet.replacingOccurrences(of: "thread_count", with: key)
+            try await Diagnostics.withOperation("processing") {
+                let processing = Diagnostics.current!
+                _ = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                    try await Diagnostics.withOperation("frontier_run") {
+                        try await Diagnostics.boundary(.connectorFailed, phase: .request, reason: "frontier_setup") {
+                            if attempts.withLock({ $0 += 1; return $0 }) == 1 {
+                                throw CodexCLI.CLIError.exitFailure(code: 1, message: "StructuredOutput does not match required schema")
+                            }
+                            return FullAcceptanceTests.envelope(finalReply)
+                        }
+                    }
+                }) { try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: slug, countKey: key) }
+                try check(attempts.withLock({ $0 }) == 2, "\(slug) terminal formatting failure gets one bounded retry")
+                try check(!processing.hasFailure, "\(slug) recovered formatting failure cannot mark its processing parent failed")
+            }
+        }
         attempts.withLock { $0 = 0 }
         rejected = false
         do {
             _ = try await FrontierRun.$acceptanceRun.withValue({ _ in attempts.withLock { $0 += 1 }; throw CancellationError() }) {
-                try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count", cap: 300)
+                try await GoogleSourceRead.read(.init(prompt: "Synthetic bounded read"), slug: "gmail", countKey: "thread_count")
             }
         } catch is CancellationError { rejected = true }
         try check(rejected && attempts.withLock({ $0 }) == 1, "Google cancellation is preserved without another model call")
+
+        let genericGood = #"{"item_count":1,"notable":true,"summary":"A completed synthetic summary without citation receipts.","has_action_items":false,"tool_failure":""}"#
+        let genericFailure = #"{"item_count":0,"notable":false,"summary":"","has_action_items":false,"tool_failure":"other"}"#
+        for (firstReply, label) in [(genericFailure, "explicit failure"), ("{}", "malformed output")] {
+            attempts.withLock { $0 = 0 }
+            try await Diagnostics.withOperation("processing") {
+                let processing = Diagnostics.current!
+                let outcome = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                    try await Diagnostics.withOperation("frontier_run") {
+                        try await Diagnostics.boundary(.connectorFailed, phase: .request, reason: "frontier_setup") {
+                            let result = attempts.withLock { $0 += 1; return $0 == 1 ? firstReply : genericGood }
+                            let response = FullAcceptanceTests.envelope(result)
+                            try ConnectorReadFailure.validate(response, slug: "google-drive")
+                            return response
+                        }
+                    }
+                }) { try await MCPSource.read(slug: "google-drive", prompt: "Synthetic selected source", mode: .initial) }
+                try check(outcome.itemCount == 1 && attempts.withLock({ $0 }) == 2,
+                          "generic first analysis retries \(label) and accepts completed output without receipts")
+                try check(!processing.hasFailure,
+                          "recovered generic \(label) cannot mark its processing parent failed")
+            }
+        }
 
         let record: [String: Any] = ["id": "m1", "date": "2026-09-01T12:00:00Z", "labelIds": ["SENT"],
                                    "toRecipients": ["fixture@example.test"], "plaintextBody": "I can review the draft tomorrow."]
@@ -278,6 +310,95 @@ enum ConnectorReliabilityTests {
             }
         } catch WritingStyle.Failure.mail { rejected = true }
         try check(rejected && attempts.withLock({ $0 }) == 2, "unverifiable writing samples remain a bounded failure")
+    }
+
+    private static func identityRetries() async throws {
+        // Production identity readers cache verified native profiles. Keep these fixtures out
+        // of the user's preference domain, including when reliabilitycheck is run manually.
+        try check(Bundle.main.bundleIdentifier == "ai.sentientos.acceptance"
+                  && (ProcessInfo.processInfo.environment["SENTIENT_VAULT_ROOT"] ?? "")
+                    .hasPrefix("/private/tmp/sentient-acceptance/"),
+                  "identity retry fixtures require the isolated acceptance app and vault")
+        let defaults = UserDefaults.standard
+        let slugs = ["google-drive", "slack", "outlook-mail", "outlook-calendar"]
+        let keys = slugs.dropFirst().map { "mcp.\($0).identity.chatgpt" }
+        let saved = defaults.persistentDomain(forName: "ai.sentientos.acceptance") ?? [:]
+        let argumentDomain = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        var temporary = argumentDomain
+        for slug in slugs {
+            temporary[ConnectorRegistry.readGenerationKey(slug, "chatgpt")] = Int.random(in: 1_000_000...Int.max)
+        }
+        defaults.setVolatileDomain(temporary, forName: UserDefaults.argumentDomain)
+        defer {
+            for key in keys {
+                if let value = saved[key] { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+            // Cached in-memory Outlook identities now belong to the expired test generation.
+            defaults.setVolatileDomain(argumentDomain, forName: UserDefaults.argumentDomain)
+        }
+        func codexReceipt(_ id: String, tool: String, args: [String: Any] = [:],
+                          result: [String: Any]) throws -> String {
+            try json(["type": "item.completed", "item": ["id": id, "type": "mcp_tool_call",
+                "server": "codex_apps", "tool": tool, "arguments": args,
+                "status": "completed", "result": result]])
+        }
+        let drive = try codexReceipt("drive-profile", tool: "google_drive.get_profile", result: [
+            "content": [], "isError": false,
+            "structured_content": ["id": "synthetic-drive-account", "email": "fixture@example.invalid"]])
+        let slackProfile = try codexReceipt("slack-profile", tool: "slack." + SlackConnector.profileTool,
+            args: ["response_format": "detailed", "include_locale": false], result: ["isError": false,
+                "content": [["type": "text", "text": try json(["result": "User ID: UFIXTURE\nOrganization Name: Fixture\n"])]]])
+        let slackWorkspace = try codexReceipt("slack-workspace", tool: "slack." + SlackConnector.workspaceTool,
+            args: ["limit": 50, "include_icon": false], result: ["content": [], "isError": false,
+                "structured_content": ["ok": true, "teams": [["id": "TFIXTURE", "name": "Fixture"]],
+                                       "response_metadata": ["next_cursor": ""]]])
+        let profile: [String: Any] = ["id": "11111111-1111-1111-1111-111111111111", "email": "fixture@example.invalid"]
+        let outlookMail = try OutlookCurationTests.receipt(backend: .chatgpt,
+            name: OutlookMailConnector.profileTool(.chatgpt), arguments: [:], payload: [profile])
+        let outlookCalendar = try codexReceipt("calendar-profile",
+            tool: "microsoft_outlook_calendar." + OutlookCalendarConnector.profileTool(.chatgpt),
+            result: ["content": [], "isError": false, "structured_content": profile])
+        for (slug, raw) in zip(slugs, [drive, slackProfile + "\n" + slackWorkspace, outlookMail, outlookCalendar]) {
+            let attempts = Mutex(0)
+            try await Diagnostics.withOperation("processing") {
+                let processing = Diagnostics.current!
+                let identity = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                    try await Diagnostics.withOperation("frontier_run") {
+                        try await Diagnostics.boundary(.connectorFailed, phase: .request, reason: "frontier_setup") {
+                            if attempts.withLock({ $0 += 1; return $0 }) == 1 { throw CodexCLI.CLIError.timedOut(after: 1) }
+                            return FullAcceptanceTests.envelope(raw: raw)
+                        }
+                    }
+                }) { try await MCPSource.readIdentity(slug: slug) }
+                try check(identity?.count == 64 && attempts.withLock({ $0 }) == 2,
+                          "\(slug) identity retry accepts a verified native profile after one timeout")
+                try check(!processing.hasFailure,
+                          "\(slug) recovered identity timeout cannot mark its processing parent failed")
+            }
+            attempts.withLock { $0 = 0 }
+            try await Diagnostics.withOperation("processing") {
+                let processing = Diagnostics.current!
+                var terminalError: Error?
+                do {
+                    _ = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                        try await Diagnostics.withOperation("frontier_run") {
+                            try await Diagnostics.boundary(.connectorFailed, phase: .request, reason: "frontier_setup") {
+                                attempts.withLock { $0 += 1 }
+                                throw CodexCLI.CLIError.timedOut(after: 1)
+                            }
+                        }
+                    }) { try await MCPSource.readIdentity(slug: slug) }
+                } catch { terminalError = error }
+                guard let terminalError, case CodexCLI.CLIError.timedOut = terminalError else {
+                    throw FullAcceptanceTests.Failure(message: "\(slug) exhausted identity timeout lost its typed failure")
+                }
+                try check(attempts.withLock({ $0 }) == 2 && !processing.hasFailure,
+                          "\(slug) exhausted identity attempts remain bounded and await caller outcome reporting")
+                Diagnostics.report(.sourceReadFailed, phase: .read, reason: "connector_read", error: terminalError, source: slug)
+                try check(processing.hasFailure, "\(slug) final identity failure still marks processing failed when reported by its caller")
+            }
+        }
     }
 
     private static func diagnostics() throws {

@@ -105,13 +105,9 @@ enum OutlookCalendarCurationTests {
                     check(result.events.count == 1 && result.complete, "\(backend) native event evidence")
                     let sensitive = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"Synthetic card fixture: 4111 1111 1111 1111","tool_failure":""}"#
                     let filtered = try MCPSource.parse(sensitive, slug: slug)
-                    let verified = try OutlookCalendarSource.validate(raw: native, backend: backend, mode: .initial, window: window, outcome: filtered)
-                    check(verified == .quiet(itemCount: 1), "\(backend) privacy discard keeps native coverage without retained text")
-                    let wrongCount = try MCPSource.parse(sensitive.replacingOccurrences(of: "\"item_count\":1", with: "\"item_count\":2"), slug: slug)
-                    check(rejects { _ = try OutlookCalendarSource.validate(raw: native, backend: backend, mode: .initial, window: window, outcome: wrongCount) },
-                          "\(backend) privacy discard cannot bypass native event-count validation")
-                    check(rejects { _ = try OutlookCalendarSource.validate(raw: "", backend: backend, mode: .initial, window: window, outcome: filtered) },
-                          "\(backend) privacy discard still requires successful native read evidence")
+                    check(filtered == .quiet(itemCount: 1), "\(backend) privacy discard keeps the considered count without retained text")
+                    let differentCount = try MCPSource.parse(sensitive.replacingOccurrences(of: "\"item_count\":1", with: "\"item_count\":2"), slug: slug)
+                    check(differentCount == .quiet(itemCount: 2), "\(backend) summary acceptance does not require a native count match")
                     let empty = try OutlookCalendarSource.evidence(raw: trace(backend, name: name, arguments: args, values: []), backend: backend, purpose: .initial, window: window)
                     check(empty.events.isEmpty && empty.complete, "\(backend) actual empty discovery succeeds")
                     let boundary = [event(id: "LOWER", start: "2026-09-01T00:00:00", end: "2026-09-01T01:00:00"),
@@ -142,16 +138,9 @@ enum OutlookCalendarCurationTests {
                 } catch { check(false, "\(backend) recipe refused: \(ErrorLabel(error))") }
             }
         }
-        do {
-            var row = event(); row["uri"] = "calendar:///events/EVENT_FIXTURE"
-            let raw = trace(.claude, name: "outlook_calendar_search", arguments: searchArgs(.claude), values: [row])
-            let valid = MCPSource.ReadOutcome.notable(.init(summary: "The user was scheduled for project planning. calendar:///events/EVENT_FIXTURE", hasActionItems: false, itemCount: 1))
-            check(!rejects { _ = try OutlookCalendarSource.validate(raw: raw, backend: .claude, mode: .initial, window: window, outcome: valid) }, "observed event URI is a valid source alongside webLink")
-            let uncited = MCPSource.ReadOutcome.notable(.init(summary: "The user was scheduled for project planning. calendar:///events/EVENT_FIXTURE\n\nAnother unsupported paragraph.", hasActionItems: false, itemCount: 1))
-            check(rejects { _ = try OutlookCalendarSource.validate(raw: raw, backend: .claude, mode: .initial, window: window, outcome: uncited) }, "every retained paragraph requires its own source")
-            let fabricated = MCPSource.ReadOutcome.notable(.init(summary: "The user was scheduled for project planning. calendar:///events/EVENT_FIXTURE https://example.invalid/invented", hasActionItems: false, itemCount: 1))
-            check(rejects { _ = try OutlookCalendarSource.validate(raw: raw, backend: .claude, mode: .initial, window: window, outcome: fabricated) }, "unobserved links cannot enter the summary")
-        }
+        let uncited = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"You were scheduled for project planning.","tool_failure":""}"#
+        check((try? MCPSource.parse(uncited, slug: slug))?.result != nil,
+              "Calendar summary wording and omitted source links do not fail a knowledge read")
         let content = "Title: Fixture appointment\nStart: 2026-09-15T09:00:00\nEnd: 2026-09-15T09:15:00\nTime zone: UTC\nAttendees: \nLocation: \nNotes: Verification."
         check(OutlookCalendarActionEvidence.creationFromContent(content) != nil, "editable event details parse")
         for backend in [ModelBackend.claude, .chatgpt] {

@@ -17,95 +17,76 @@ enum FullAcceptanceTests {
         .init(result: result, sessionID: "synthetic", numTurns: 1, durationMS: 1,
               inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, raw: raw)
     }
-    static func calendarEvidenceFixtures() throws {
-        let parser = ISO8601DateFormatter()
-        let window = DateInterval(start: parser.date(from: "2026-09-15T20:00:00Z")!,
-                                  end: parser.date(from: "2026-09-16T20:00:00Z")!)
+    static func googleReadPolicyFixtures() async throws {
         for backend in [ModelBackend.chatgpt, .claude] {
-            try ModelBackend.$runOverride.withValue(backend) {
-                let claude = backend == .claude
-                let lower = claude ? "startTime" : "time_min"
-                let upper = claude ? "endTime" : "time_max"
-                let good = [lower: "2026-09-15T20:00:00Z", upper: "2026-09-16T20:00:00Z"]
-                func raw(_ arguments: [[String: String]], payload: String = #"{"events":[]}"#) throws -> String {
-                    var events: [[String: Any]] = []
-                    for (index, args) in arguments.enumerated() {
-                        let id = "fixture-\(index)"
-                        if claude {
-                            events.append(["type":"assistant","message":["content":[["type":"tool_use","id":id,
-                                "name":"mcp__claude_ai_Google_Calendar__list_events","input":args]]]])
-                            events.append(["type":"user","message":["content":[["type":"tool_result","tool_use_id":id,
-                                "content":payload,"is_error":false]]]])
+            try await ModelBackend.$runOverride.withValue(backend) {
+                for slug in ["gmail", "google-calendar"] {
+                    let key = slug == "gmail" ? "thread_count" : "event_count"
+                    let quiet = "{\"\(key)\":0,\"notable\":false,\"has_action_items\":false,\"summary\":\"\",\"tool_failure\":\"\"}"
+                    let notable = "{\"\(key)\":1,\"notable\":true,\"has_action_items\":false,\"summary\":\"A completed synthetic source summary.\",\"tool_failure\":\"\"}"
+                    let abovePromptCap = notable.replacingOccurrences(of: "\"\(key)\":1", with: "\"\(key)\":301")
+                    let tool = backend == .claude
+                        ? (slug == "gmail" ? "mcp__claude_ai_Gmail__search_threads" : "mcp__claude_ai_Google_Calendar__list_events")
+                        : (slug == "gmail" ? "gmail.search_emails" : "google_calendar.search_events")
+                    func receipt(_ id: String, failed: Bool, query: String) throws -> String {
+                        let args = ["query": query]
+                        let payload = failed ? #"{"error":{"status":401,"message":"authentication required"}}"# : #"{"items":[]}"#
+                        let events: [[String: Any]]
+                        if backend == .claude {
+                            events = [
+                                ["type": "assistant", "message": ["content": [["type": "tool_use", "id": id, "name": tool, "input": args]]]],
+                                ["type": "user", "message": ["content": [["type": "tool_result", "tool_use_id": id, "is_error": failed, "content": payload]]]]]
                         } else {
-                            events.append(["type":"item.completed","item":["type":"mcp_tool_call","id":id,
-                                "tool":"google_calendar.search_events","status":"completed","arguments":args,
-                                "result":["content":[["type":"text","text":payload]]]]])
+                            events = [["type": "item.completed", "item": ["type": "mcp_tool_call", "id": id,
+                                "server": "codex_apps", "tool": tool, "status": failed ? "failed" : "completed",
+                                "arguments": args, "result": ["content": [["type": "text", "text": payload]]]]]]
+                        }
+                        return try events.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }.joined(separator: "\n")
+                    }
+                    let failed = try receipt("old-failure", failed: true, query: "original query")
+                    let replacement = try receipt("replacement", failed: false, query: "adapted query with different arguments")
+                    for (label, raw) in [("without native receipts", ""), ("with changed discovery arguments", replacement),
+                                         ("after a historical failure and different replacement call", failed + "\n" + replacement)] {
+                        for (result, expectedCount) in [(quiet, 0), (notable, 1), (abovePromptCap, 301)] {
+                            let calls = OSAllocatedUnfairLock(initialState: 0)
+                            var invocation = CodexCLI.Invocation(prompt: "Read the selected source's requested window")
+                            invocation.mcpReadConnectors = [slug]
+                            invocation.sandbox = .readOnly
+                            let request = invocation
+                            let summary = try await FrontierRun.$acceptanceRun.withValue({ request in
+                                try require(request.connectorOnlyRead && !request.webSearch && request.mcpActionServer == nil,
+                                            "\(slug) remains a read-only source request")
+                                calls.withLock { $0 += 1 }
+                                return envelope(result, raw: raw)
+                            }) { try await GoogleSourceRead.read(request, slug: slug, countKey: key) }
+                            try require((summary?.count ?? 0) == expectedCount && calls.withLock({ $0 }) == 1,
+                                        "\(backend.rawValue) \(slug) completed \(expectedCount == 0 ? "quiet" : "notable") output accepted \(label)")
                         }
                     }
-                    return try events.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }.joined(separator: "\n")
+                    for failure in ["auth", "other"] {
+                        let result = quiet.replacingOccurrences(of: #""tool_failure":"""#, with: "\"tool_failure\":\"\(failure)\"")
+                        var refused = false
+                        do {
+                            _ = try await FrontierRun.$acceptanceRun.withValue({ _ in envelope(result) }) {
+                                try await GoogleSourceRead.read(.init(prompt: "Synthetic source"), slug: slug, countKey: key)
+                            }
+                        } catch MCPSource.MCPError.connectorAuth { refused = failure == "auth" }
+                        catch MCPSource.MCPError.toolFailure { refused = failure == "other" }
+                        try require(refused, "\(backend.rawValue) \(slug) explicit \(failure) remains an error without receipts")
+                    }
+                    for malformed in ["{}", "not JSON", notable.replacingOccurrences(of: "\"\(key)\":1", with: "\"\(key)\":-1"),
+                                      notable.replacingOccurrences(of: #""tool_failure":"""#, with: #""tool_failure":"unexpected""#),
+                                      notable.replacingOccurrences(of: #""tool_failure":"""#, with: #""tool_failure":42"#)] {
+                        var refused = false
+                        do {
+                            _ = try await FrontierRun.$acceptanceRun.withValue({ _ in envelope(malformed) }) {
+                                try await GoogleSourceRead.read(.init(prompt: "Synthetic source"), slug: slug, countKey: key)
+                            }
+                        } catch GoogleSourceRead.Failure.invalidResponse { refused = true }
+                        try require(refused, "\(backend.rawValue) \(slug) malformed source output remains an error")
+                    }
                 }
-                func changed(_ key: String, _ value: String?) -> [String: String] {
-                    var copy = good; copy[key] = value; return copy
-                }
-                let cases: [(String, [[String: String]], Bool)] = [
-                    ("exact", [good], true),
-                    ("equivalent offset", [[lower:"2026-09-15T13:00:00-07:00",upper:"2026-09-16T13:00:00-07:00"]], true),
-                    ("widened", [changed(lower,"2026-09-15T00:00:00Z")], false),
-                    ("narrowed", [changed(lower,"2026-09-15T21:00:00Z")], false),
-                    ("bounded continuation", [good, changed(lower,"2026-09-15T21:00:00Z")], true),
-                    ("missing bound", [changed(upper,nil)], false),
-                    ("missing timezone", [changed(lower,"2026-09-15T20:00:00")], false),
-                    ("other calendar", [changed(claude ? "calendarId" : "calendar_id","shared-fixture")], false),
-                    ("keyword narrowing", [changed("query","Cedar")], false),
-                    ("extra widened query", [good,changed(upper,"2026-09-17T20:00:00Z")], false),
-                    ("no discovery", [], false)]
-                for (label, args, expected) in cases {
-                    var accepted = false
-                    do { try GoogleSourceRead.validateDiscovery(envelope(raw: try raw(args)), slug: "google-calendar", calendarWindow: window); accepted = true }
-                    catch GoogleSourceRead.Failure.invalidResponse {}
-                    try require(accepted == expected, "Calendar \(backend.rawValue) evidence: \(label)")
-                }
-                var oversizedRejected = false
-                do {
-                    try GoogleSourceRead.validateDiscovery(envelope(raw: try raw([good], payload:
-                        "Error: result exceeds maximum allowed tokens. Output has been saved to a file.")),
-                        slug: "google-calendar", calendarWindow: window)
-                } catch GoogleSourceRead.Failure.invalidResponse { oversizedRejected = true }
-                try require(oversizedRejected, "Calendar \(backend.rawValue) evidence: oversized notice is not visible discovery")
-                let gmailRaw = try raw([good], payload: "Error: result exceeds maximum allowed tokens. Output has been saved to a file.")
-                    .replacingOccurrences(of: claude ? "mcp__claude_ai_Google_Calendar__list_events" : "google_calendar.search_events",
-                                          with: claude ? "mcp__claude_ai_Gmail__search_threads" : "gmail.search_emails")
-                var gmailOversizedRejected = false
-                do { try GoogleSourceRead.validateDiscovery(envelope(raw: gmailRaw), slug: "gmail") }
-                catch GoogleSourceRead.Failure.invalidResponse { gmailOversizedRejected = true }
-                try require(gmailOversizedRejected, "Gmail \(backend.rawValue) evidence: oversized notice is not discovery")
-                for (label, payload, expected) in [
-                    ("observed empty metadata", #"{"accessRole":"owner","defaultReminders":[],"summary":"Fixture","timeZone":"UTC","updated":"2026-09-16T20:00:00Z"}"#, claude),
-                    ("empty without optional reminders", #"{"accessRole":"owner","summary":"Fixture","timeZone":"UTC","updated":"2026-09-16T20:00:00Z"}"#, claude),
-                    ("unknown event collection is not empty", #"{"accessRole":"owner","summary":"Fixture","timeZone":"UTC","updated":"2026-09-16T20:00:00Z","items":[{"id":"fixture"}]}"#, false),
-                    ("unfinished empty page", #"{"accessRole":"owner","defaultReminders":[],"summary":"Fixture","timeZone":"UTC","updated":"2026-09-16T20:00:00Z","nextPageToken":"more"}"#, false),
-                    ("missing result structure", "{}", false)] {
-                    var accepted = false
-                    do { try GoogleSourceRead.validateDiscovery(envelope(raw: try raw([good], payload: payload)),
-                            slug: "google-calendar", calendarWindow: window); accepted = true }
-                    catch GoogleSourceRead.Failure.invalidResponse {}
-                    try require(accepted == expected, "Calendar \(backend.rawValue) evidence: \(label)")
-                }
-                let short = DateInterval(start: window.start.addingTimeInterval(0.2), end: window.start.addingTimeInterval(0.4))
-                try GoogleSourceRead.validateDiscovery(envelope(raw: try raw([[lower: "2026-09-15T20:00:00Z",
-                    upper: "2026-09-15T20:00:00Z"]])), slug: "google-calendar", calendarWindow: short)
-                try require(true, "Calendar \(backend.rawValue) evidence: subsecond window uses second-precision bounds")
             }
-        }
-        let env = ProcessInfo.processInfo.environment
-        if let path = env["LAB_GOOGLE_REPLAY"], let lower = env["LAB_CALENDAR_REPLAY_LOWER"],
-           let upper = env["LAB_CALENDAR_REPLAY_UPPER"], let start = parser.date(from: lower), let end = parser.date(from: upper) {
-            let raw = try String(contentsOfFile: path, encoding: .utf8)
-            try ModelBackend.$runOverride.withValue(.claude) {
-                try GoogleSourceRead.validateDiscovery(envelope(raw: raw), slug: "google-calendar",
-                                                      calendarWindow: DateInterval(start: start, end: end))
-            }
-            try require(true, "recorded real Calendar pagination stays within its requested window")
         }
     }
     @MainActor static func googleAudit() async {
@@ -222,8 +203,8 @@ enum FullAcceptanceTests {
                     let third = await IterativeRun(modelPath: model, store: store).run([connector], mode: .auto)
                     try require(third.done == 1 && third.survivors == 1, "new local file advances iterative ingestion once")
                 } else if mode == "google-malformed" {
-                    try calendarEvidenceFixtures()
-                    let sensitive = try GoogleSourceRead.parse(#"{"thread_count":1,"notable":true,"has_action_items":false,"summary":"The user's private card is 4242 4242 4242 4242."}"#, countKey: "thread_count", cap: 300)
+                    try await googleReadPolicyFixtures()
+                    let sensitive = try GoogleSourceRead.parse(#"{"thread_count":1,"notable":true,"has_action_items":false,"summary":"The user's private card is 4242 4242 4242 4242."}"#, countKey: "thread_count")
                     try require(sensitive == nil, "Google summary backstop discards high-risk identifiers")
                     var failures = 0
                     for slug in ["gmail", "calendar"] {
@@ -245,70 +226,83 @@ enum FullAcceptanceTests {
                     for slug in ["gmail", "calendar"] {
                         let before = await store.pointer(slug)
                         let key = slug == "gmail" ? "thread_count" : "event_count"
-                        let valid = "{\"\(key)\":1,\"notable\":true,\"has_action_items\":false,\"summary\":\"The user maintains a synthetic project.\"}"
-                        let quiet = "{\"\(key)\":0,\"notable\":false,\"has_action_items\":false,\"summary\":\"\"}"
-                        let tool = slug == "gmail" ? "gmail.search_emails" : "google_calendar.search_events"
-                        let receipt: @Sendable (CodexCLI.Invocation) -> String = { invocation in
-                            var arguments: [String: String] = [:]
-                            if slug == "calendar" {
-                                let pattern = #"Calendar discovery must use exactly these instants: (\S+) through (\S+)\."#
-                                let regex = try! NSRegularExpression(pattern: pattern)
-                                let match = regex.firstMatch(in: invocation.prompt, range: NSRange(invocation.prompt.startIndex..., in: invocation.prompt))!
-                                arguments = ["time_min": String(invocation.prompt[Range(match.range(at: 1), in: invocation.prompt)!]),
-                                             "time_max": String(invocation.prompt[Range(match.range(at: 2), in: invocation.prompt)!])]
-                            }
-                            return String(decoding: try! JSONSerialization.data(withJSONObject: ["type":"item.completed", "item": [
-                                "id":"fixture", "type":"mcp_tool_call", "tool":tool, "status":"completed",
-                                "arguments":arguments, "result":["content":[["type":"text", "text":#"{"events":[]}"#]]]]]), as: UTF8.self)
-                        }
+                        let valid = "{\"\(key)\":1,\"notable\":true,\"has_action_items\":false,\"summary\":\"The user maintains a synthetic project.\",\"tool_failure\":\"\"}"
+                        let quiet = "{\"\(key)\":0,\"notable\":false,\"has_action_items\":false,\"summary\":\"\",\"tool_failure\":\"\"}"
                         var refused = false
-                        do {
-                            _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in envelope(quiet) }) {
-                                if slug == "gmail" { return try await GmailConnect.runIterative() }
-                                return try await CalendarConnect.runIterative()
-                            }
-                        } catch { refused = true }
-                        try require((await store.pointer(slug)) == before && refused, "\(slug) quiet prose without discovery cannot advance")
+                        let originalNotes = Set(await store.notes().filter { $0.bucketKey == slug }.map(\.sourceID))
+                        for failure in ["auth", "other"] {
+                            let result = quiet.replacingOccurrences(of: #""tool_failure":"""#, with: "\"tool_failure\":\"\(failure)\"")
+                            refused = false
+                            do {
+                                _ = try await FrontierRun.$acceptanceRun.withValue({ _ in envelope(result) }) {
+                                    if slug == "gmail" { return try await GmailConnect.runIterative() }
+                                    return try await CalendarConnect.runIterative()
+                                }
+                            } catch { refused = true }
+                            try require((await store.pointer(slug)) == before && refused,
+                                        "\(slug) explicit \(failure) cannot advance its checkpoint")
+                            try require(Set(await store.notes().filter { $0.bucketKey == slug }.map(\.sourceID)) == originalNotes,
+                                        "\(slug) explicit \(failure) preserves pending summaries")
+                        }
+                        // Start the explicit-refresh fixture independently of the preceding
+                        // malformed automatic backfill. Gmail retries now resume their plan.
+                        if slug == "gmail", let before {
+                            _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: before,
+                                origin: GoogleSourceRead.origin(bucket: slug), replaceNotes: false)
+                        }
                         let calls = OSAllocatedUnfairLock(initialState: 0)
                         refused = false
                         do {
                             _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in
                                 let n = calls.withLock { $0 += 1; return $0 }
                                 if n == 3 { throw CancellationError() }
-                                return envelope(valid, raw: receipt(invocation))
+                                return envelope(valid)
                             }) {
                                 if slug == "gmail" { return try await GmailConnect.runInitial() }
                                 return try await CalendarConnect.runInitial()
                             }
                         } catch { refused = true }
                         try require((await store.pointer(slug)) == before && refused, "\(slug) failed initial retains old checkpoint")
-                        try require(await store.notes().filter { $0.bucketKey == slug }.count == 1, "\(slug) failed initial retains old summary only")
+                        let partialNotes = await store.notes().filter { $0.bucketKey == slug }
+                        try require(slug == "gmail" ? partialNotes.count > 1 : partialNotes.count == 1,
+                                    "\(slug) interrupted initial retains the appropriate committed summaries")
                         await store.failNextMCPCommitForTesting()
                         refused = false
                         do {
-                            _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in envelope(valid, raw: receipt(invocation)) }) {
+                            _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in envelope(valid) }) {
                                 if slug == "gmail" { return try await GmailConnect.runIterative() }
                                 return try await CalendarConnect.runIterative()
                             }
                         } catch { refused = true }
                         try require((await store.pointer(slug)) == before && refused, "\(slug) failed save retains checkpoint")
-                        try require(await store.notes().filter { $0.bucketKey == slug }.count == 1, "\(slug) failed save rolls summary back")
-                        _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in envelope(valid, raw: receipt(invocation)) }) {
+                        try require(Set(await store.notes().filter { $0.bucketKey == slug }.map(\.sourceID)) == Set(partialNotes.map(\.sourceID)),
+                                    "\(slug) failed save rolls only its uncommitted window back")
+                        _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in envelope(valid) }) {
                             if slug == "gmail" { return try await GmailConnect.runInitial() }
                             return try await CalendarConnect.runInitial()
                         }
                         let count = await store.notes().filter { $0.bucketKey == slug }.count
-                        try require(count == (slug == "gmail" ? 4 : 12), "\(slug) successful initial atomically replaces old notes")
-                        _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in envelope(quiet, raw: receipt(invocation)) }) {
+                        try require(count == (slug == "gmail" ? 4 : 12), "\(slug) completed first analysis saves summaries without native receipts")
+                        let quietBefore = ItemKey(order: Date().addingTimeInterval(-3600).timeIntervalSince1970, tiebreak: "")
+                        _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: quietBefore,
+                            origin: GoogleSourceRead.origin(bucket: slug), replaceNotes: false)
+                        let quietCalls = OSAllocatedUnfairLock(initialState: 0)
+                        _ = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                            quietCalls.withLock { $0 += 1 }
+                            return envelope(quiet)
+                        }) {
                             if slug == "gmail" { return try await GmailConnect.runIterative() }
                             return try await CalendarConnect.runIterative()
                         }
-                        try require(await store.notes().filter { $0.bucketKey == slug }.count == count, "\(slug) verified quiet read preserves pending notes")
+                        let quietAfter = await store.pointer(slug)
+                        try require(quietCalls.withLock({ $0 }) > 0 && (quietAfter?.order ?? 0) > quietBefore.order,
+                                    "\(slug) completed quiet output advances without native receipts")
+                        try require(await store.notes().filter { $0.bucketKey == slug }.count == count, "\(slug) completed quiet read preserves pending notes")
                         _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: ItemKey(order: 42, tiebreak: "fixture"), origin: "previous-engine", replaceNotes: false)
                         let backfillCalls = OSAllocatedUnfairLock(initialState: 0)
                         _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in
                             backfillCalls.withLock { $0 += 1 }
-                            return envelope(quiet, raw: receipt(invocation))
+                            return envelope(quiet)
                         }) {
                             if slug == "gmail" { return try await GmailConnect.runIterative() }
                             return try await CalendarConnect.runIterative()
@@ -324,6 +318,47 @@ enum FullAcceptanceTests {
                             else { _ = try await CalendarConnect.runIterative() }
                         } catch MCPSource.MCPError.clockMovedBackwards { clockRejected = true }
                         try require((await store.pointer(slug)) == future && clockRejected, "\(slug) clock rollback preserves its checkpoint")
+                        if slug == "gmail" {
+                            let retryCalls = OSAllocatedUnfairLock(initialState: 0)
+                            try await Diagnostics.withOperation("processing") {
+                                let processing = Diagnostics.current!
+                                let kept = try await FrontierRun.$acceptanceRun.withValue({ invocation in
+                                    try await Diagnostics.withOperation("frontier_run") {
+                                        try await Diagnostics.boundary(.connectorFailed, phase: .request, reason: "frontier_setup") {
+                                            if retryCalls.withLock({ $0 += 1; return $0 }) == 1 {
+                                                throw CodexCLI.CLIError.timedOut(after: 1)
+                                            }
+                                            return envelope(valid)
+                                        }
+                                    }
+                                }) { try await GmailConnect.runInitial() }
+                                try require(kept == 4 && retryCalls.withLock { $0 } == 5,
+                                            "Gmail recovers one typed runtime timeout and saves all four windows")
+                                try require(!processing.hasFailure,
+                                            "recovered Gmail timeout cannot mark its processing parent failed")
+                            }
+                            let exhaustedCalls = OSAllocatedUnfairLock(initialState: 0)
+                            try await Diagnostics.withOperation("processing") {
+                                let processing = Diagnostics.current!
+                                var rejected = false
+                                do {
+                                    _ = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                                        try await Diagnostics.withOperation("frontier_run") {
+                                            try await Diagnostics.boundary(.connectorFailed, phase: .request, reason: "frontier_setup") {
+                                                exhaustedCalls.withLock { $0 += 1 }
+                                                throw CodexCLI.CLIError.timedOut(after: 1)
+                                            }
+                                        }
+                                    }) { try await GmailConnect.runInitial() }
+                                } catch GmailConnect.GmailError.incomplete {
+                                    rejected = true
+                                }
+                                try require(rejected && exhaustedCalls.withLock { $0 } == 8,
+                                            "Gmail exhausts exactly one runtime-timeout retry per window")
+                                try require(processing.hasFailure,
+                                            "exhausted Gmail retries still mark their processing parent failed")
+                            }
+                        }
                     }
                 } else if mode == "google-source" {
                     try await googleSource(store: store)
