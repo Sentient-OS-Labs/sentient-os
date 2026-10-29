@@ -3,6 +3,7 @@
 // Doc: Documentation - Diagnostics (Sentry & TelemetryDeck).md
 
 import Foundation
+import CoreFoundation
 import Synchronization
 import AppKit
 
@@ -109,6 +110,20 @@ nonisolated final class AgentRunDiagnostics: Sendable {
             let builtins: Set<String> = ["StructuredOutput", "WaitForMcpServers", "ToolSearch", "Read", "Write", "Edit", "Glob", "Grep"]
             if builtins.contains(tool) { return ("builtin", tool) }
         }
+        if server == "codex_apps" {
+            let namespaces = ["gmail": "gmail", "gcal": "google-calendar", "google_calendar": "google-calendar",
+                              "gdrive": "google-drive", "google_drive": "google-drive", "slack": "slack",
+                              "microsoft_outlook_email": "outlook-mail", "microsoft_outlook_calendar": "outlook-calendar"]
+            for (namespace, slug) in namespaces {
+                let qualified = "mcp__codex_apps__" + namespace
+                let prefixes = [namespace + ".", qualified + "__", qualified + "_", qualified + "."]
+                guard let prefix = prefixes.first(where: tool.hasPrefix) else { continue }
+                let name = String(tool.dropFirst(prefix.count))
+                if ConnectorRegistry.packs.first(where: { $0.slug == slug })?.codexReadTools?.contains(name) == true {
+                    return ("connector", slug + "." + name)
+                }
+            }
+        }
         for pack in ConnectorRegistry.packs {
             if pack.claudeToolPrefix == "mcp__" + server + "__", pack.readTools?.contains(tool) == true {
                 return ("connector", pack.slug + "." + tool)
@@ -152,8 +167,9 @@ nonisolated final class AgentRunDiagnostics: Sendable {
                     case .unknown: return [.focusChanged, .inputInterrupted, .elementUnavailable, .staleState].contains(failure.detail) ? .staleTarget : .unknown
                     }
                 } ?? Self.errorReason(error ?? result ?? item)
+                let diagnosticFields = native?.fields ?? (failed ? Self.connectorFailureFields(item) : [:])
                 end(id, failed: failed, known: known, reason: failed ? failureReason : .unknown,
-                    code: native?.code ?? error?["code"] as? Int, nativeFields: native?.fields ?? [:])
+                    code: native?.code, nativeFields: diagnosticFields)
             }
         } else if let message = event["message"] as? [String: Any], let blocks = message["content"] as? [[String: Any]] {
             for block in blocks {
@@ -179,6 +195,59 @@ nonisolated final class AgentRunDiagnostics: Sendable {
             }
         }
         return Reason.classify(text)
+    }
+
+    /// Only protocol-marked failures are inspected. Payloads/messages stay local; numeric
+    /// protocol ranges and this closed provider-code vocabulary are the entire output.
+    static func connectorFailureFields(_ item: [String: Any]) -> [String: String] {
+        guard item["type"] as? String == "mcp_tool_call",
+              item["server"] as? String == "codex_apps" else { return [:] }
+        let result = item["result"] as? [String: Any]
+        let explicitError = item["error"] != nil && !(item["error"] is NSNull)
+        guard explicitError || item["status"] as? String == "failed"
+            || result?["isError"] as? Bool == true || result?["is_error"] as? Bool == true else { return [:] }
+        let knownCodes: Set<String> = ["invalid_grant", "invalid_token", "unauthenticated", "unauthorized",
+            "permission_denied", "access_denied", "rate_limit_exceeded", "usage_limit_reached",
+            "quota_exceeded", "resource_exhausted", "invalid_argument", "invalid_parameters",
+            "not_found", "unavailable", "deadline_exceeded", "internal", "internal_error", "server_error"]
+        var fields: [String: String] = [:]
+        func object(_ value: Any?) -> [String: Any]? {
+            if let value = value as? [String: Any] { return value }
+            guard let text = value as? String, text.utf8.count <= 16_384 else { return nil }
+            return try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+        }
+        func inspect(_ object: [String: Any], depth: Int = 0) {
+            guard depth < 4 else { return }
+            for key in ["http_status", "status_code", "status", "code"] {
+                guard let number = object[key] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue else { continue }
+                let value = number.doubleValue
+                // Generic `code` values can be process/provider codes, not HTTP statuses.
+                if key != "code", (100...599).contains(value) { fields["http_status"] = String(number.intValue) }
+                if key == "code", value == -32700 || (-32603 ... -32600).contains(value) || (-32099 ... -32000).contains(value) {
+                    fields["rpc_error_code"] = String(number.intValue)
+                }
+            }
+            for key in ["code", "error", "status", "error_code"] {
+                if let value = object[key] as? String, knownCodes.contains(value.lowercased()) {
+                    fields["provider_error_code"] = value.lowercased()
+                }
+            }
+            for key in ["error", "data", "structured_content", "structuredContent"] {
+                if let nested = object[key] as? [String: Any] { inspect(nested, depth: depth + 1) }
+            }
+        }
+        if let error = object(item["error"]) { inspect(error) }
+        if let result {
+            inspect(result)
+            // Some MCP servers put their structured error object in a JSON text block.
+            // Parse the object, never regex arbitrary text or search successful source content.
+            for block in (result["content"] as? [[String: Any]] ?? []).prefix(4) {
+                guard block["type"] as? String == "text", let diagnostic = object(block["text"]) else { continue }
+                inspect(diagnostic)
+            }
+        }
+        return fields
     }
 
     private func start(_ id: String, server: String, tool: String, arguments: [String: Any], observedStart: Bool = true) {

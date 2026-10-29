@@ -76,6 +76,7 @@ nonisolated enum Diagnostics {
         let id = UUID().uuidString
         let name: String
         private let parent: Operation?
+        private let propagatesFailure: Bool
         var parentID: String? { parent?.id }
         var rootID: String { parent?.rootID ?? id }
         let began = Date()
@@ -91,14 +92,15 @@ nonisolated enum Diagnostics {
             get { phaseValue.withLock { $0 } }
             set { phaseValue.withLock { $0 = newValue } }
         }
-        init(_ name: StaticString, doubleTapProvider: DoubleTapProvider? = nil) {
+        init(_ name: StaticString, doubleTapProvider: DoubleTapProvider? = nil, propagatesFailure: Bool = true) {
             self.name = name.description; parent = Diagnostics.current
+            self.propagatesFailure = propagatesFailure
             backend = doubleTapProvider?.rawValue ?? ModelBackend.current.rawValue
         }
         var hasFailure: Bool { failures.withLock { !$0.isEmpty } }
         func claim(_ key: String, marksFailure: Bool = true) -> Bool {
             if marksFailure {
-                parent?.noteChildFailure()
+                if propagatesFailure { parent?.noteChildFailure() }
                 failures.withLock { _ = $0.insert(key) }
             }
             return reportedEvents.withLock { $0.insert(key).inserted }
@@ -106,18 +108,21 @@ nonisolated enum Diagnostics {
         func markReported(_ error: Error) {
             let key = Diagnostics.causeKey(error)
             causes.withLock { _ = $0.insert(key) }
-            parent?.markReported(error)
+            if propagatesFailure { parent?.markReported(error) }
         }
         func wasReported(_ error: Error) -> Bool { causes.withLock { $0.contains(Diagnostics.causeKey(error)) } }
         private func noteChildFailure() {
             failures.withLock { _ = $0.insert("child") }
-            parent?.noteChildFailure()
+            if propagatesFailure { parent?.noteChildFailure() }
         }
     }
 
-    static func withOperation<T>(_ name: StaticString, isolation: isolated (any Actor)? = #isolation,
+    /// Retry attempts may retain their own failures without marking the caller failed.
+    /// That caller must report any final failure after its recovery policy is exhausted.
+    static func withOperation<T>(_ name: StaticString, propagatesFailure: Bool = true,
+                                 isolation: isolated (any Actor)? = #isolation,
                                  _ body: () async throws -> T) async rethrows -> T {
-        let operation = Operation(name)
+        let operation = Operation(name, propagatesFailure: propagatesFailure)
         return try await $current.withValue(operation) {
             CrashReporting.diagnosticBreadcrumb("operation.begin", data: ["operation": operation.name, "operation_id": operation.id])
             defer {
@@ -132,11 +137,12 @@ nonisolated enum Diagnostics {
                 }
                 return try await body()
             } catch {
-                operation.finish(outcome: isCancellation(error) ? "cancelled" : (isExpected(error) ? "blocked" : "failed"))
-                if !isCancellation(error), !isExpected(error), !ConnectorClassificationDiagnostics.ownsFailures {
+                let failure: Error = Task.isCancelled ? CancellationError() : error
+                operation.finish(outcome: isCancellation(failure) ? "cancelled" : (isExpected(failure) ? "blocked" : "failed"))
+                if !isCancellation(failure), !isExpected(failure), !ConnectorClassificationDiagnostics.ownsFailures {
                     _ = operation.claim("thrown_error")
                 }
-                throw error
+                throw failure
             }
         }
     }
@@ -235,14 +241,15 @@ nonisolated enum Diagnostics {
                             _ body: () async throws -> T) async rethrows -> T {
         do { return try await body() }
         catch {
+            let failure: Error = Task.isCancelled ? CancellationError() : error
             if ConnectorClassificationDiagnostics.ownsFailures {
-                CrashReporting.diagnosticBreadcrumb("connector.classification.runtime_failure", data: errorFields(error).merging(
-                    ["phase": (current?.phase ?? phase).rawValue, "cancelled": String(isCancellation(error))]) { _, new in new })
-            } else if isExpected(error) {
-                CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(error).merging(
-                    ["reason": reason.description, "cancelled": String(isCancellation(error))]) { _, new in new })
-            } else { report(event, phase: current?.phase ?? phase, reason: reason, error: error, source: source, terminal: true) }
-            throw error
+                CrashReporting.diagnosticBreadcrumb("connector.classification.runtime_failure", data: errorFields(failure).merging(
+                    ["phase": (current?.phase ?? phase).rawValue, "cancelled": String(isCancellation(failure))]) { _, new in new })
+            } else if isExpected(failure) {
+                CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(failure).merging(
+                    ["reason": reason.description, "cancelled": String(isCancellation(failure))]) { _, new in new })
+            } else { report(event, phase: current?.phase ?? phase, reason: reason, error: failure, source: source, terminal: true) }
+            throw failure
         }
     }
 

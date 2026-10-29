@@ -232,33 +232,4 @@ nonisolated enum OutlookCalendarSource {
         return Evidence(events: events, references: references, complete: !hasMore)
     }
 
-    static func validate(raw: String, backend: ModelBackend, mode: MCPSource.ReadMode, window: MCPSource.Window,
-                         outcome: MCPSource.ReadOutcome) throws -> MCPSource.ReadOutcome {
-        let native = try evidence(raw: raw, backend: backend, purpose: purpose(mode), window: window)
-        guard outcome.itemCount == native.events.count else { throw invalid("event_count") }
-        guard let result = outcome.result else { return .quiet(itemCount: native.events.count) }
-        guard result.summary.split(whereSeparator: \.isWhitespace).count <= (mode == .initial ? 200 : 150),
-              !native.events.isEmpty else { throw invalid("summary_budget") }
-        let safe = native.events.filter { !$0.privateContent }
-        let safeReferences = Set(safe.flatMap(\.references))
-        guard !safe.isEmpty, safeReferences.contains(where: result.summary.contains),
-              !native.events.filter(\.privateContent).contains(where: { !$0.subject.isEmpty && result.summary.contains($0.subject) }) else { throw invalid("summary_evidence") }
-        for paragraph in result.summary.components(separatedBy: "\n\n") {
-            let lines = paragraph.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { $0.trimmingCharacters(in: CharacterSet(charactersIn: " #*:")) != "ACTION ITEMS" }
-            let bullets = lines.filter { $0.hasPrefix("- ") || $0.hasPrefix("* ") }
-            let units = bullets.isEmpty ? [lines.joined(separator: " ")] : bullets
-            for unit in units where !unit.isEmpty {
-                guard safeReferences.contains(where: unit.contains) else { throw invalid("paragraph_source") }
-            }
-        }
-        let pattern = #"https?://[^\s<>()\[\]]+|calendar:///events/[^\s<>()\[\]]+"#
-        let expression = try! NSRegularExpression(pattern: pattern)
-        for match in expression.matches(in: result.summary, range: NSRange(result.summary.startIndex..., in: result.summary)) {
-            guard let range = Range(match.range, in: result.summary) else { throw invalid("source_link") }
-            let link = String(result.summary[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
-            guard safeReferences.contains(link) else { throw invalid("source_link") }
-        }
-        return outcome
-    }
 }

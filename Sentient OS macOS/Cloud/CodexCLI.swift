@@ -621,16 +621,16 @@ actor CodexCLI {
             return try await runInner(invocation, modelID: modelID, effortArg: effortArg,
                                       onLine: onLine)
         } catch {
-            // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
-            // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
-            if !Task.isCancelled {
-                let ms = Int(Date().timeIntervalSince(t0) * 1000)
-                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=\(invocation.feature) in \(ms)ms")
-                emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
-                                 modelID: modelID, effort: effortArg,
-                                 resumed: invocation.resumeSessionID != nil,
-                                 durationMS: ms, timeoutS: Int(invocation.timeout), diag: invocation.diag)
-            }
+            // STOP and sibling-task cancellation must remain cancellation at every boundary,
+            // rather than surfacing the terminated child's exit as a setup/provider defect.
+            try Task.checkCancellation()
+            if Diagnostics.isCancellation(error) { throw error }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=\(invocation.feature) in \(ms)ms")
+            emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                             modelID: modelID, effort: effortArg,
+                             resumed: invocation.resumeSessionID != nil,
+                             durationMS: ms, timeoutS: Int(invocation.timeout), diag: invocation.diag)
             throw error
         }
     }
@@ -1364,7 +1364,9 @@ actor CodexCLI {
             diagnostics?.observe(line)
             onStdoutLine?(line)
         }
-        return try await withTaskCancellationHandler {
+        let result: ExecResult
+        do {
+          result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try ChildProcessDiagnostics.$directory.withValue(childDirectory) { try execute(binary: binary, args: args, stdinText: stdinText,
@@ -1375,7 +1377,13 @@ actor CodexCLI {
                     catch { cont.resume(throwing: error) }
                 }
             }
-        } onCancel: { holder.terminate() }
+          } onCancel: { holder.terminate() }
+        } catch {
+            try Task.checkCancellation()
+            throw error
+        }
+        try Task.checkCancellation()
+        return result
     }
 
     /// Blocking runner (call off-main). GUI-spawned `Process` works with a SANITIZED env —
@@ -1558,7 +1566,9 @@ actor CodexCLI {
         let holder = ProcHolder()
         let interaction = SidekickInteraction.current
         let childDirectory = ChildProcessDiagnostics.directory
-        return try await withTaskCancellationHandler {
+        let result: ExecResult
+        do {
+          result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let lease: CodexRuntime.FileLock?
@@ -1650,8 +1660,14 @@ actor CodexCLI {
                                                   stdout: outSink.text, stderr: errSink.text))
             }
         }
-        } onCancel: {
-            holder.terminate()    // STOP: kill codex → the run resumes with a non-zero exit
+          } onCancel: {
+            holder.terminate()
+          }
+        } catch {
+            try Task.checkCancellation()
+            throw error
         }
+        try Task.checkCancellation()
+        return result
     }
 }

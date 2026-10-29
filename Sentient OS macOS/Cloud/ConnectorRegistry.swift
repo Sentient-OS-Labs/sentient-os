@@ -422,8 +422,9 @@ nonisolated enum ConnectorRegistry {
         UserDefaults.standard.set(enabled, forKey: kbKey(slug))
     }
 
-    /// Expected reads come from the user's selections, including unavailable accounts. This
-    /// allows the processing run to skip and report an unavailable source instead of hiding it.
+    /// Expected reads come from saved selections. A hosted catalog may be absent or stale;
+    /// synthesize selected catalog entries so that discovery cannot veto admission.
+    /// Direct selections must resolve an existing stored account, never a provider placeholder.
     static func kbEnabledConnectors() -> [ConnectorCensus.DetectedConnector] {
         let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
         var candidates = origin.map { ConnectorCensus.cached(for: $0) } ?? []
@@ -431,7 +432,7 @@ nonisolated enum ConnectorRegistry {
         candidates += DirectMCPStore.connections().map(\.detected)
         for pack in packs where !ConnectorCensus.dedicatedSourceSlugs.contains(pack.slug) {
             guard !candidates.contains(where: { $0.slug == pack.slug }), isKBEnabled(pack.slug),
-                  let sourceOrigin = pack.directProvider != nil ? .direct : origin else { continue }
+                  pack.directProvider == nil, let sourceOrigin = origin else { continue }
             candidates.append(.init(slug: pack.slug, displayName: pack.displayName, origin: sourceOrigin,
                 serverURL: pack.claudeServerURL, catalogID: pack.codexCatalogID,
                 iconPath: nil, healthy: false, lastSeen: .distantPast))

@@ -111,7 +111,10 @@ nonisolated enum OutlookCalendarConnector {
             var envelope: CodexCLI.Envelope?
             do {
                 try Task.checkCancellation()
-                let result = try await FrontierRun.run(inv)
+                let request = inv
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 let account = try identity(raw: result.raw, backend: backend)
                 let origin = ConnectorRegistry.readOrigin(slug: slug, backend: backend)

@@ -72,6 +72,7 @@ import Foundation
         }
         let slug: String
         var canAttempt = true
+        var healthy = true
     }
     static var records: [DetectedConnector] = []
     static func cached(for origin: DetectedConnector.Origin) -> [DetectedConnector] { records }
@@ -156,11 +157,12 @@ __GENERIC__
     struct Source {
         let serviceSlug: String
         let connector: ConnectorCensus.DetectedConnector?
+        var usesHostedConnection = true
     }
     var source: Source
     var knowledgeEnabled = true
-    var selected = true
     var locked = false
+    var isSelected: Bool { selected }
     var detailText: String? { detail }
     var statusText: String { status }
 __PILL__
@@ -287,14 +289,30 @@ __PILL__
         direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == false, "Direct Settings opt-out was overwritten")
         var pill = PillFixture(source: .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive")))
-        check(pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
               "Explicit Done still appeared to need verification in the source list")
         pill.source = .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive", canAttempt: false))
-        check(pill.detailText == "Connection needs attention · Manage", "Actual read failure lost its source warning")
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Cached read failure overrode the selected source chip")
         pill.source = .init(serviceSlug: "google-drive", connector: nil)
-        check(pill.detailText != nil, "Missing account lost its source warning")
-        pill.knowledgeEnabled = false; pill.selected = false
-        check(pill.detailText == nil && !pill.statusText.hasPrefix("Selected"), "Unselected source appeared selected or broken")
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Missing catalog entry overrode the selected source chip")
+        pill.source = .init(serviceSlug: "direct-fixture", connector: nil, usesHostedConnection: false)
+        check(!pill.isSelected && pill.detailText == "Connection needs attention · Manage"
+              && pill.statusText == "Selected, but review this connection before analysis can use it.",
+              "Direct catalog-only KB selection appeared available without a stored account")
+        pill.source = .init(serviceSlug: "direct-fixture",
+                            connector: .init(slug: "direct-fixture", canAttempt: false), usesHostedConnection: false)
+        check(!pill.isSelected && pill.detailText == "Connection needs attention · Manage",
+              "Stale direct catalog metadata appeared available without a stored account")
+        pill.source = .init(serviceSlug: "direct-fixture",
+                            connector: .init(slug: "direct-fixture", canAttempt: true, healthy: false),
+                            usesHostedConnection: false)
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Stored direct account's cached failure overrode the selected source chip")
+        pill.knowledgeEnabled = false
+        check(!pill.isSelected && pill.detailText == nil && !pill.statusText.hasPrefix("Selected"),
+              "Unselected source appeared selected or broken")
         pill.locked = true
         check(pill.statusText == CodexAuth.connectorLockedTip && pill.detailText == nil, "Locked connector lost its plan guidance")
         print("PASS: \(checks) hosted sheet confirmation, state, provider and direct-route checks")
@@ -307,7 +325,8 @@ __PILL__
     declaration(generic, "private func stopHostedReading()"),
     declaration(generic, "private var hostedCanRead: Bool"),
     declaration(generic, "private var hostedConnected: Bool"),
-])).replace("__PILL__", declaration(pills, "private var detail: String?") + "\n" +
+])).replace("__PILL__", declaration(pills, "private var selected: Bool") + "\n" +
+    declaration(pills, "private var detail: String?") + "\n" +
     declaration(pills, "private var status: String"))
 
 with tempfile.TemporaryDirectory(prefix="sentient-hosted-sheet-tests-") as directory:

@@ -212,7 +212,10 @@ nonisolated enum SlackConnector {
                 invocation.mcpReadToolNames = [profileTool] + (backend == .chatgpt ? [workspaceTool] : [])
                 invocation.effort = .low
                 invocation.timeout = 90
-                let result = try await FrontierRun.run(invocation)
+                let request = invocation
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 MCPSource.meter.withLock { totals in
                     var total = totals[slug] ?? (0, 0)

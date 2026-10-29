@@ -106,18 +106,19 @@ struct ConnectorPill: View {
 
     private var selected: Bool {
         knowledgeEnabled && ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug)
+            && (source.usesHostedConnection || source.connector?.canAttempt == true)
     }
 
     private var detail: String? {
         guard !locked else { return nil }
-        if knowledgeEnabled && (!selected || source.connector?.canAttempt != true) { return "Connection needs attention · Manage" }
+        if knowledgeEnabled && !selected { return "Connection needs attention · Manage" }
         if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Tasks only" }
         return nil
     }
 
     private var status: String {
         if locked { return CodexAuth.connectorLockedTip }
-        if knowledgeEnabled && (!selected || source.connector?.canAttempt != true) { return "Selected, but review this connection before analysis can use it." }
+        if knowledgeEnabled && !selected { return "Selected, but review this connection before analysis can use it." }
         return selected ? "Selected for analysis and nightly updates."
             : "Open this app to set it up and choose whether to use it for your knowledge base."
     }

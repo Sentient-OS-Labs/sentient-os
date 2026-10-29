@@ -158,7 +158,6 @@ enum NotionCurationTests {
                 let result = try await MCPSource.model(prompt: prompt, schema: MCPSource.readSchema, slug: "notion", claudeModel: nil)
                 try result.raw.write(to: output.appending(path: "fixture-\(name)-raw.jsonl"), atomically: true, encoding: .utf8)
                 let outcome = try MCPSource.parse(result.result, slug: "notion")
-                try NotionSource.validateSummary(outcome, pages: [page], mode: .iterative, slug: "notion")
                 let pass = (outcome.result != nil) == expectedNotable && (!expectedNotable || outcome.result?.hasActionItems == true)
                 if !pass { failures += 1 }
                 let record: [String: Any] = ["fixture": name, "passed": pass, "summary": outcome.result?.summary ?? "",
@@ -214,29 +213,13 @@ enum NotionCurationTests {
             check(accepted?.content == "A proposed project.", "only page content extracted")
             check(accepted?.properties == "Status: proposed", "properties retain status evidence")
             check(accepted?.url == url, "stable observed page identity")
-            let summary = MCPSource.ReadOutcome.notable(.init(summary: "The user has a proposed project. [Source](\(url))", hasActionItems: false, itemCount: 1))
-            try NotionSource.validateSummary(summary, pages: [accepted!], mode: .initial, slug: "notion")
-            check(true, "observed source link accepted")
-            rejects("unsupported source link refused") {
-                let bad = MCPSource.ReadOutcome.notable(.init(summary: "The user has a project. [Source](\(url)) [Other](https://example.test)", hasActionItems: false, itemCount: 1))
-                try NotionSource.validateSummary(bad, pages: [accepted!], mode: .initial, slug: "notion")
-            }
-            rejects("uncited notable summary refused") {
-                try NotionSource.validateSummary(.notable(.init(summary: "The user has a project.", hasActionItems: false, itemCount: 1)), pages: [accepted!], mode: .initial, slug: "notion")
-            }
-            rejects("overlong summary refused") {
-                try NotionSource.validateSummary(.notable(.init(summary: String(repeating: "word ", count: 201) + url, hasActionItems: false, itemCount: 1)), pages: [accepted!], mode: .initial, slug: "notion")
-            }
-            let action = MCPSource.ReadOutcome.notable(.init(summary: "The user has a task.\nACTION ITEMS\nReview the proposal. [Source](\(url))", hasActionItems: true, itemCount: 1))
-            try NotionSource.validateSummary(action, pages: [accepted!], mode: .initial, slug: "notion")
-            check(true, "action cites complete page evidence")
-            let partial = try NotionSource.page(page(["truncated": true]), candidate: candidate, window: window)!
-            rejects("partial page cannot certify an unresolved action") { try NotionSource.validateSummary(action, pages: [partial], mode: .initial, slug: "notion") }
             let reply = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"The user has a proposal.","tool_failure":""}"#
-            _ = try MCPSource.parse(reply, slug: "notion")
-            check(true, "Notion summary parser accepts third-person text")
-            rejects("Notion second person refused") { _ = try MCPSource.parse(reply.replacingOccurrences(of: "The user", with: "You"), slug: "notion") }
-            rejects("Notion exact financial amount refused") { _ = try MCPSource.parse(reply.replacingOccurrences(of: "proposal", with: "$500 proposal"), slug: "notion") }
+            let summary = try MCPSource.parse(reply, slug: "notion")
+            check(summary.result != nil, "Notion accepts a useful uncited summary")
+            check(try MCPSource.parse(reply.replacingOccurrences(of: "The user", with: "You"), slug: "notion").result != nil,
+                  "Notion wording alone does not fail a read")
+            check(try MCPSource.parse(reply.replacingOccurrences(of: "proposal", with: "$500 proposal"), slug: "notion").result != nil,
+                  "Notion currency formatting alone does not fail a read")
             check(accepted != nil, "lower bound included")
             let missing = NotionSource.Candidate(id: String(repeating: "a", count: 32), title: "Unread page", url: NotionSource.stableURL(String(repeating: "a", count: 32)))
             let partialRead = try await NotionSource.collectPages([candidate, missing], window: window) { item in

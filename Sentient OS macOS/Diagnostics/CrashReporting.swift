@@ -310,7 +310,7 @@ nonisolated enum CrashReporting {
             if let values = value as? [Any] { return (key, values.map { scrubData(["value": $0])["value"]! } as Any) }
             return (key, value)
         }).merging(data.filter { key, value in
-            (["operation_id", "parent_operation_id", "root_operation_id", "task_id", "capture_id"].contains(key)
+            (["operation_id", "parent_operation_id", "root_operation_id", "task_id", "capture_id", "app_binary_id"].contains(key)
                 && (value as? String).flatMap(UUID.init(uuidString:)) != nil)
                 || (["native_detail", "stderr_detail"].contains(key)
                     && (value as? String).flatMap(NativeComputerUseFailure.Detail.init(rawValue:)) != nil)

@@ -55,7 +55,7 @@ enum WritingStyleMail {
                       ConnectorRegistry.readOrigin(slug: slug, backend: backend) == origin else {
                     throw MCPSource.MCPError.connectionChanged
                 }
-                try ConnectorReadFailure.validateTools(result, slug: slug)
+                try ConnectorReadFailure.validate(result, slug: slug)
                 let samples = try validate(result, slug: slug, backend: backend)
                 Log("WritingStyleMail: verified \(samples.count) sent emails from \(slug)")
                 return samples

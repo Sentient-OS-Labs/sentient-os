@@ -126,20 +126,14 @@ enum NotionSource {
         var finalError: Error = MCPSource.MCPError.invalidResponse(slug: connection.slug)
         for attempt in 1...2 {
             var envelope: CodexCLI.Envelope?
-            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous output failed validation. Recheck the exact item count, third person, source references, action heading, and privacy rules. Return only valid JSON.")
+            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous output could not be decoded. Return all required JSON fields with their correct types, a consistent notable result, and an explicit tool_failure if the read failed.")
             do {
-                let result = try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
-                    slug: connection.slug, claudeModel: claudeModel)
-                envelope = result
-                guard let bytes = result.jsonResult.data(using: .utf8),
-                      let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-                      object["item_count"] as? Int == pages.count,
-                      object["tool_failure"] as? String == "" else {
-                    throw MCPSource.MCPError.invalidResponse(slug: connection.slug, rule: "item_count")
+                let result = try await Diagnostics.withOperation("mcp_read_attempt", propagatesFailure: false) {
+                    try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
+                        slug: connection.slug, claudeModel: claudeModel)
                 }
-                let outcome = try MCPSource.parse(result.result, slug: connection.slug)
-                try content.validate(outcome, slug: connection.slug)
-                try validateSummary(outcome, pages: pages, mode: mode, slug: connection.slug)
+                envelope = result
+                let outcome = try parseSummary(result.result, content: content, slug: connection.slug)
                 try DirectMCPSession.check(verified)
                 onReceipt?(result, outcome, attempt, attemptPrompt, "content", attempt == 1 ? calls : [:])
                 recordedContent = true
@@ -155,6 +149,18 @@ enum NotionSource {
             }
         }
         throw finalError
+    }
+
+    /// Native fetches determine the inspected count; prose and citation formatting do not
+    /// require another read. Actual skipped-content failures still cannot become quiet success.
+    static func parseSummary(_ result: String, content: Content, slug: String) throws -> MCPSource.ReadOutcome {
+        let parsed = try MCPSource.parse(result, slug: slug)
+        try content.validate(parsed, slug: slug)
+        if let result = parsed.result {
+            return .notable(.init(summary: result.summary, hasActionItems: result.hasActionItems,
+                                 itemCount: content.pages.count))
+        }
+        return .quiet(itemCount: content.inspectedCount)
     }
 
     static func evidencePrompt(_ prompt: String, actorID: String, actorName: String,
@@ -301,32 +307,6 @@ enum NotionSource {
                let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any], value["error"] == nil { return value }
         }
         throw DirectMCPError.invalidResponse
-    }
-
-    static func validateSummary(_ outcome: MCPSource.ReadOutcome, pages: [Page],
-                                mode: MCPSource.ReadMode, slug: String) throws {
-        guard let summary = outcome.result?.summary else { return }
-        guard summary.split(whereSeparator: { $0.isWhitespace }).count <= (mode == .initial ? 200 : 150),
-              pages.contains(where: { summary.contains($0.url) }) else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "summary_evidence")
-        }
-        let pattern = try NSRegularExpression(pattern: #"https?://[^\s)\]>]+"#)
-        let references = pattern.matches(in: summary, range: NSRange(summary.startIndex..., in: summary))
-            .compactMap { Range($0.range, in: summary).map { String(summary[$0]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;")) } }
-        guard references.allSatisfy({ reference in pages.contains(where: { $0.url == reference }) }) else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "source_reference")
-        }
-        if outcome.result?.hasActionItems == true {
-            guard let heading = summary.range(of: "ACTION ITEMS", options: .caseInsensitive) else {
-                throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "action_evidence")
-            }
-            let actions = String(summary[heading.upperBound...])
-            let actionReferences = references.filter { actions.contains($0) }
-            guard !actionReferences.isEmpty,
-                  actionReferences.allSatisfy({ reference in pages.contains(where: { !$0.partial && $0.url == reference }) }) else {
-                throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "action_evidence")
-            }
-        }
     }
 
     static func isEntitlementFailure(_ result: [String: Any]) -> Bool {

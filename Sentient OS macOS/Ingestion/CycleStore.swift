@@ -50,6 +50,8 @@ final class BucketPointer {
     var appleMailState: Data? = nil
     /// Unpublished, vetted Calendar survivors only. Never a rejected-event ledger.
     var appleCalendarRetry: Data? = nil
+    /// Fixed Gmail windows and completed coverage. Separate from consumable summary notes.
+    var gmailReadState: Data? = nil
 
     init(bucketKey: String, mark: ItemKey, floor: ItemKey? = nil, updatedAt: Date = Date()) {
         self.bucketKey = bucketKey
@@ -258,6 +260,83 @@ actor CycleStore {
         return (r.mark, r.mcpReadOrigin)
     }
 
+    func gmailReadState() throws -> GmailReadState? {
+        guard let data = try fetchRow("gmail")?.gmailReadState else { return nil }
+        let state = try JSONDecoder().decode(GmailReadState.self, from: data)
+        try state.validate()
+        return state
+    }
+
+    /// Persist the exact import bounds before starting requests. A retry resumes the original
+    /// plan even after midnight or note consumption; an account change gets a new plan.
+    func beginGmailRead(_ proposed: GmailReadState) throws -> GmailReadState {
+        try Task.checkCancellation()
+        try proposed.validate()
+        if let active = try gmailReadState(), active.origin == proposed.origin { return active }
+        let data = try JSONEncoder().encode(proposed)
+        let outcome = commit(bucketKey: "gmail", note: nil, apply: { r in
+            r.gmailReadState = data; r.updatedAt = Date()
+        }, make: {
+            let r = BucketPointer(bucketKey: "gmail", mark: ItemKey(order: 0, tiebreak: ""))
+            r.gmailReadState = data
+            return r
+        })
+        try requireGmailSave(outcome)
+        return proposed
+    }
+
+    /// Save one validated window and its coverage in the same transaction. Gaps never advance
+    /// the global watermark, and a late callback cannot certify a replacement import.
+    /// Returns false for an already committed callback without recreating consumed notes.
+    func commitGmailWindow(stateID: UUID, origin: String, index: Int, note: NoteDraft?) throws -> Bool {
+        try Task.checkCancellation()
+        guard var state = try gmailReadState(), state.id == stateID, state.origin == origin,
+              state.windows.indices.contains(index) else { throw MCPSource.MCPError.connectionChanged }
+        if state.completed.contains(index) { return false }
+        if let note, note.sourceID != state.sourceID(for: index) || note.kind != .gmail {
+            throw GmailReadState.Failure.invalidCheckpoint
+        }
+        state.completed.insert(index)
+        let finished = state.isComplete
+        let data = finished ? nil : try JSONEncoder().encode(state)
+        let outcome = commit(bucketKey: "gmail", note: note, prepare: {
+            if finished && state.replaceNotes {
+                let bucket = "gmail"
+                let previous = try self.modelContext.fetch(FetchDescriptor<CycleNote>(
+                    predicate: #Predicate { $0.bucketKey == bucket }))
+                let ids = Set(state.windows.indices.map { state.sourceID(for: $0) })
+                for old in previous where !ids.contains(old.sourceID) { self.modelContext.delete(old) }
+            }
+        }, apply: { r in
+            r.gmailReadState = data; r.updatedAt = Date()
+            if finished {
+                r.order = state.through.timeIntervalSince1970; r.tiebreak = ""
+                r.floorOrder = nil; r.floorTiebreak = nil; r.mcpReadOrigin = origin
+            }
+        }, make: {
+            // A missing plan cannot be reconstructed from one window's result. Fail the
+            // transaction instead of creating a checkpoint that skips unfinished windows.
+            throw GmailReadState.Failure.invalidCheckpoint
+        }, beforeSave: {
+            #if DEBUG
+            if self.failNextHostedCommit {
+                self.failNextHostedCommit = false
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            #endif
+        })
+        try requireGmailSave(outcome)
+        return true
+    }
+
+    private func requireGmailSave(_ outcome: CommitOutcome) throws {
+        switch outcome {
+        case .saved: break
+        case .diskFull: throw CocoaError(.fileWriteOutOfSpace)
+        case .failed: throw GoogleSourceRead.Failure.storage
+        }
+    }
+
     /// A bucket's full durable state, or nil if it's never run: the high-water mark (or, mid-first-run,
     /// the TOP), plus the FLOOR when a first run is mid-descent. A non-nil floor ⇒ resume that descent
     /// (strictly below the floor) rather than restart. IterativeRun reads this to pick per-bucket mode.
@@ -353,12 +432,14 @@ actor CycleStore {
     /// on results it can't keep, then repeats it the next night; field-found 2026-08-15).
     private func commit(bucketKey: String, note: NoteDraft?,
                         prepare: (() throws -> Void)? = nil,
-                        apply: (BucketPointer) -> Void, make: () -> BucketPointer) -> CommitOutcome {
+                        apply: (BucketPointer) -> Void, make: () throws -> BucketPointer,
+                        beforeSave: (() throws -> Void)? = nil) -> CommitOutcome {
         func attempt() throws {
             try prepare?()
             if let note { insertNote(bucketKey: bucketKey, note: note) }
             if let r = try fetchRow(bucketKey) { apply(r) }
-            else { modelContext.insert(make()) }
+            else { modelContext.insert(try make()) }
+            try beforeSave?()
             try modelContext.save()
         }
         do { try attempt(); return .saved }
@@ -438,6 +519,7 @@ actor CycleStore {
             r.order = mark.order; r.tiebreak = mark.tiebreak
             r.floorOrder = nil; r.floorTiebreak = nil
             r.mcpReadOrigin = origin; r.updatedAt = Date()
+            if bucketKey == "gmail" { r.gmailReadState = nil }
         }, make: {
             let r = BucketPointer(bucketKey: bucketKey, mark: mark)
             r.mcpReadOrigin = origin
