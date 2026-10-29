@@ -122,7 +122,7 @@ struct OnboardingFrontierModelView: View {
         }
         .overlay { OnboardingTelemetryConsent() }
         .onAppear {
-            tab = activeTab
+            tab = activeTab.visibleTab
             // Join launch preparation, including adoption of a portable existing login into
             // the private runtime. A legacy CLI's login alone cannot make this screen ready.
             Task {

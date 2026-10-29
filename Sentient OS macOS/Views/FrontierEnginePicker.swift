@@ -8,8 +8,8 @@
 //  (ModelBackend/CustomProvider — the one source of truth), Test & Select (vision-gated
 //  activation: an unproven model can never become the engine), and the local-models
 //  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
-//  onboarding embeds the live codex login. Onboarding leads with a hosted-usage button;
-//  Settings keeps the six-choice grid. Doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
+//  onboarding embeds the live codex login. Hosted entry points follow the shared presentation
+//  gate. Doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
 //
 
 import SwiftUI
@@ -78,7 +78,8 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
             Group {
                 switch tab {
-                case .sentient:   SentientInferencePanel()
+                case .sentient:
+                    if Tab.hostedUsageVisible { SentientInferencePanel() }
                 case .chatgpt:    chatgptPanel()
                 case .claude:     claudePanel
                 case .openRouter: endpointPanel(for: .openRouter)
@@ -96,7 +97,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         }
         .animation(.easeInOut(duration: 0.25), value: tab)
         .onAppear {
-            tab = activeTab
+            tab = activeTab.visibleTab
             apiKey = CustomProvider.apiKey ?? ""
         }
         // The host's ChatGPT panel flipping the backend home (Use ChatGPT) retires any verdict.
@@ -115,14 +116,16 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     @ViewBuilder private var tabStrip: some View {
         if layout == .onboardingGrid {
             VStack(spacing: 16) {
-                OnboardingHostedUsageButton(selected: tab == .sentient,
-                                            active: activeTab == .sentient && isActiveEngineHealthy(.sentient)) {
-                    selectTab(.sentient)
-                }
+                if Tab.hostedUsageVisible {
+                    OnboardingHostedUsageButton(selected: tab == .sentient,
+                                                active: activeTab == .sentient && isActiveEngineHealthy(.sentient)) {
+                        selectTab(.sentient)
+                    }
 
-                Text("Or connect your own AI")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
+                    Text("Or connect your own AI")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary)
+                }
 
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
@@ -136,12 +139,13 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             .frame(width: EngineTab.pillWidth * 3 + 16)
         } else if formStyle {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-                ForEach(Tab.allCases) { pill($0) }
+                ForEach(Tab.visibleCases) { pill($0) }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    pill(.sentient); pill(.chatgpt); pill(.claude)
+                    if Tab.hostedUsageVisible { pill(.sentient) }
+                    pill(.chatgpt); pill(.claude)
                 }
                 HStack(spacing: 8) {
                     pill(.openRouter); pill(.lmStudio); pill(.custom)

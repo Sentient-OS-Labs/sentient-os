@@ -8,6 +8,11 @@ nonisolated enum FrontierEngineTab: String, CaseIterable, Identifiable {
     case sentient, chatgpt, claude, openRouter, lmStudio, custom
     var id: Self { self }
 
+    /// Temporary presentation gate. Runtime support and saved provider choices stay intact.
+    static let hostedUsageVisible = false
+    static var visibleCases: [Self] { allCases.filter { $0 != .sentient || hostedUsageVisible } }
+    var visibleTab: Self { self == .sentient && !Self.hostedUsageVisible ? .chatgpt : self }
+
     init(backend: ModelBackend, preset: CustomProvider.Preset) {
         switch backend {
         case .sentient: self = .sentient
