@@ -73,6 +73,7 @@ Example run snapshot (the token is returned only at creation):
   "run_id": "00000000-0000-4000-8000-000000000001",
   "purpose": "sidekick",
   "model": "operator-configured-model",
+  "maximum_output_tokens": 16000,
   "phase": "running",
   "server_time": "2026-10-29T12:00:00+00:00",
   "lease_expires_at": "2026-10-29T12:00:45+00:00",
@@ -87,6 +88,11 @@ Example run snapshot (the token is returned only at creation):
 Errors have the Anthropic-compatible outer shape
 `{ "type": "error", "error": { "type": "code", "code": "code", "message": "safe text" } }`.
 Quota/lifecycle errors also carry current usage fields inside `error` and at the top level.
+Run creation, controls and usage include `maximum_output_tokens`; the local runtime must configure
+its provider request output ceiling to this value. Usage reports 503 when service policy is
+disabled/unfunded or the global budget is exhausted, and 429 when the shared personal dollar
+budget is exhausted. Exhausted Sidekick time alone leaves usage readable so background work
+can remain available; a new Sidekick run is still refused.
 `daily_time_exhausted`, `usage_limit_reached` and `request_rate_limited` use 429;
 `service_budget_reached` and `service_disabled` use 503;
 `run_expired` uses 429; `run_paused` and `run_busy` use 409.
@@ -168,3 +174,6 @@ identifiers, token counts, times, amounts, statuses and payload hashes used for 
 Do not turn on body/header capture in infrastructure logs. Anonymous enrollment remains
 vulnerable to fresh-identity abuse; production rollout still requires enrollment protections,
 finite aggregate funding, provider billing reconciliation and a tested operational kill switch.
+An anonymous installation credential is not a verified unique person. This code supplies no
+human-uniqueness guarantee. Keep production disabled until the team's enrollment abuse controls
+and funded rollout policy are ready; a 60-minute per-identity timer cannot substitute for them.
