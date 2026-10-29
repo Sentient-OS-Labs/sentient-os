@@ -172,8 +172,15 @@ nonisolated enum Permissions {
 }
 '''
 SUPPORT += r'''
+@MainActor final class NativePermissionSetup {
+    var canAttemptTask = false
+    static let shared=NativePermissionSetup()
+    func permissionFailed()->UUID {UUID()}
+    func recovered(ifCurrent token:UUID) {}
+}
 @MainActor final class NativePermissionCheck {
     static let shared = NativePermissionCheck()
+    var isTearingDown = false
     var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
     var invalidations = 0
     func refresh() {}

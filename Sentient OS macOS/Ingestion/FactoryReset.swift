@@ -90,6 +90,7 @@ enum FactoryReset {
         d.removeObject(forKey: AppState.onboardingKey)
         d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)         // re-offer the optional voice grant on rebuild
         d.removeObject(forKey: HealthCaution.nativeComputerUseEverReadyKey)
+        NativePermissionSetup.shared.reset()
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
         SidekickHistory.reset()                                          // paired requests and outcomes start blank on rebuild
         DiagnosticHistory.reset(defaults: d)

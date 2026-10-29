@@ -235,6 +235,24 @@ final class OpenAIComputerUseRuntime {
 
     func invalidate() { checked = nil }
 
+    /// A permission relaunch must also replace the old helper process. Never stop a foreign
+    /// installation or a helper serving another task, and never force-quit a refusing helper.
+    func prepareForPermissionRestart(configuration selected: OpenAIComputerUse.Configuration) async throws {
+        guard activeTasks.isEmpty, starting == nil, checking == nil, !restarting, diagnosticLease == nil else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        try Task.checkCancellation()
+        guard let lease = try CodexRuntime.executionLease(for: CodexRuntime.executable.path, exclusive: true) else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        defer { lease.unlock() }
+        _ = try selected.afterRuntimeLease()
+        restarting = true
+        defer { restarting = false }
+        try await OpenAIComputerUse.stopOwnedHelper(allowForce: false)
+        launched = nil; checked = nil
+    }
+
     /// An invalid helper cannot pass restart()'s signature check. Before replacing it,
     /// take the same exclusive file lock used by the installer, then stop ONLY our bundle.
     /// Another process's live task makes this fail as busy rather than disrupting its work.

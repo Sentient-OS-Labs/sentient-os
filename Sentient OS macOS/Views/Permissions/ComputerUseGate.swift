@@ -83,6 +83,11 @@ final class ComputerUseGate {
     var nativeRestartRequired: Bool { runtimeFailure?.restartRequired == true }
     private(set) var restartingNative = false
     private(set) var checkingCapabilities = false
+    /// User acknowledgement enables a restart, never task admission or a green grant row.
+    var permissionSetupConfirmed = false
+    private var postRestartCheckAttempted = false
+    private var helperRestartedForPermissions = false
+    private var ownsPermissionRelaunch = false
     private var teardownDepth = 0
     @ObservationIgnored private var nativeOperationID = UUID()
     @ObservationIgnored private var automationProbeID: UUID?
@@ -91,6 +96,61 @@ final class ComputerUseGate {
     @ObservationIgnored private var permissionRequest: Task<Void, Never>?
     @ObservationIgnored private var lastAutomationProbe: Date?
     var setup: ComputerUseSetup { .instance(for: backend) }
+
+    private var mayVerifyCapabilities: Bool {
+        helperPermissionState.isReady || NativePermissionSetup.shared.canAttemptTask
+    }
+
+    var requiresPermissionRestart: Bool {
+        backend == .openAI && !allRequiredGranted &&
+            (NativePermissionSetup.shared.needsRestart || !sentientScreen || automation == .denied || automation == .notAsked)
+    }
+
+    var canRestartAfterPermissions: Bool {
+        permissionSetupConfirmed && nativeInstallationReady && !requestingAutomation && !checkingCapabilities
+            && (SafeAppRelaunch.shared.canRelaunchPermissionWait || SafeAppRelaunch.shared.canRelaunch)
+    }
+
+    var hasWaitingAction: Bool { pending != nil }
+
+    /// Explicitly leave an external/preparing task when it cannot be preserved as a draft.
+    /// This only cancels the gate's waiter; it cannot interrupt an admitted computer task.
+    func stopWaitingAction() { cancelPendingAction() }
+
+    func restartAfterPermissions() {
+        guard teardownDepth == 0, requiresPermissionRestart, canRestartAfterPermissions else { return }
+        let relaunch = SafeAppRelaunch.shared
+        NativePermissionSetup.shared.confirmForRestart()
+        ownsPermissionRelaunch = true
+        let accepted = relaunch.canRelaunchPermissionWait
+            ? relaunch.relaunchPermissionWait() : relaunch.relaunchPreservingDraft()
+        if !accepted { ownsPermissionRelaunch = false }
+    }
+
+    /// Opening a grant guide starts a new setup round, even for previously working installs.
+    func changingNativePermissions() {
+        _ = beginNativeOperation()
+        permissionRequest?.cancel()
+        cancelPendingCheck()
+        NativePermissionCheck.shared.invalidate()
+        capabilityFailure = nil
+        NativePermissionSetup.shared.requestRestart()
+        permissionSetupConfirmed = false
+        if pending != nil, window == nil { presentPendingAction() }
+    }
+
+    var shouldCheckAfterRestart: Bool {
+        backend == .openAI && NativePermissionSetup.shared.hasRestarted && !postRestartCheckAttempted
+            && nativeInstallationReady && sentientScreen && automation == .granted
+            && !requestingAutomation && !checkingAutomation && pendingCheck == nil
+            && !SafeAppRelaunch.shared.isPreparing && teardownDepth == 0
+    }
+
+    func checkAfterRestartIfNeeded() {
+        guard shouldCheckAfterRestart else { return }
+        postRestartCheckAttempted = true
+        requestNativeAccess(ask: false, verifyCapabilities: false)
+    }
 
     /// Synchronous grants and installation state. A service starting in the background is not
     /// evidence that these permissions need to be granted again.
@@ -113,11 +173,25 @@ final class ComputerUseGate {
         teardownDepth == 0 && localRequirementsReady && (backend == .cua || (automation == .granted && nativePermissionError == nil && !nativeHelperConflict))
     }
 
+    /// Workflow admission after a confirmed restart is deliberately separate from grant proof.
+    /// The real native request enforces macOS permissions and owns permission recovery.
+    var isReadyForTask: Bool {
+        if backend == .cua { return allRequiredGranted }
+        if allRequiredGranted, !NativePermissionSetup.shared.recoveryNeeded { return true }
+        return teardownDepth == 0 && nativeInstallationReady && sentientScreen && automation == .granted
+            && !NativePermissionSetup.shared.needsRestart && !NativePermissionSetup.shared.recoveryNeeded
+            && (helperPermissionState.isReady || NativePermissionSetup.shared.canAttemptTask)
+            && runtimeFailure == nil && automationFailure == nil && !nativeHelperConflict
+    }
+
     /// Reset and uninstall close admission before draining work. A permission request can be
     /// suspended in installation or Automation before the shared proof owner sees it, so the
     /// gate must drain its producers as well as cancelling the held task.
     func beginTeardown() async {
         teardownDepth += 1
+        permissionSetupConfirmed = false
+        postRestartCheckAttempted = false
+        helperRestartedForPermissions = false
         nativeOperationID = UUID()
         checkingCapabilities = false
         let request = permissionRequest
@@ -148,11 +222,20 @@ final class ComputerUseGate {
     }
 
     func requestAutomation() {
+        requestNativeAccess(ask: true, verifyCapabilities: false)
+    }
+
+    func verifyNativePermissions() {
+        guard !requiresPermissionRestart, sentientScreen, automation == .granted else { return }
+        requestNativeAccess(ask: false, verifyCapabilities: true)
+    }
+
+    private func requestNativeAccess(ask: Bool, verifyCapabilities: Bool) {
         guard teardownDepth == 0, backend == .openAI, setup.ready, !requestingAutomation, pendingCheck == nil else { return }
         let id = beginNativeOperation()
         permissionRequestID = id
         requestingAutomation = true
-        capabilityFailure = nil
+        if verifyCapabilities { capabilityFailure = nil }
         permissionRequest = Task {
             defer { finishPermissionRequest(id) }
             do {
@@ -164,7 +247,10 @@ final class ComputerUseGate {
                 try requireCurrentOperation(id)
                 _ = await automationProbe?.value
                 try requireCurrentOperation(id)
-                try await checkNativeAccess(ask: true, configuration: configuration, operationID: id, entryPoint: .explicitCheck)
+                try await checkNativeAccess(ask: ask, configuration: configuration,
+                                            stoppingConflictingHelpers: verifyCapabilities,
+                                            verifyCapabilities: verifyCapabilities,
+                                            operationID: id, entryPoint: .explicitCheck)
                 refresh()
             } catch {
                 recordNativeFailure(error, operationID: id)
@@ -191,7 +277,9 @@ final class ComputerUseGate {
                 try requireCurrentOperation(id)
                 try await OpenAIComputerUseRuntime.shared.restart(configuration: configuration)
                 try requireCurrentOperation(id)
-                try await checkNativeAccess(ask: true, configuration: configuration, operationID: id, entryPoint: .restart)
+                try await checkNativeAccess(ask: true, configuration: configuration,
+                                            verifyCapabilities: false,
+                                            operationID: id, entryPoint: .restart)
             } catch { recordNativeFailure(error, operationID: id) }
         }
     }
@@ -228,7 +316,8 @@ final class ComputerUseGate {
         var outcome = CheckOutcome.success
         var reason = CheckReason.automationGranted
         var nativeFailure: NativeComputerUseFailure?
-        let capabilityRequested = ask || verifyCapabilities
+        let capabilityRequested = verifyCapabilities && !NativePermissionSetup.shared.needsRestart && sentientScreen
+        if capabilityRequested, NativePermissionSetup.shared.hasRestarted { postRestartCheckAttempted = true }
         Analytics.signal("PermissionGate.nativeCheckStarted", parameters: [
             "entry_point": entryPoint.rawValue, "stage": stage.rawValue,
             "capability_requested": String(capabilityRequested), "proof_present": String(proofID != nil)
@@ -256,6 +345,15 @@ final class ComputerUseGate {
             if let supplied { configuration = supplied }
             else { configuration = try await OpenAIComputerUse.Configuration.resolveForSetup() }
             try requireCurrentOperation(id)
+            if NativePermissionSetup.shared.hasRestarted, NativePermissionSetup.shared.canAttemptTask,
+               !helperRestartedForPermissions {
+                await NativePermissionCheck.shared.close()
+                try requireCurrentOperation(id)
+                try await OpenAIComputerUseRuntime.shared.prepareForPermissionRestart(configuration: configuration)
+                try requireCurrentOperation(id)
+                helperRestartedForPermissions = true
+                NativePermissionSetup.shared.preparedAfterRestart()
+            }
             let helper = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration,
                 stoppingConflictingHelpers: ask || stoppingConflictingHelpers)
             try requireCurrentOperation(id)
@@ -281,17 +379,18 @@ final class ComputerUseGate {
             }
             // Passive refresh validates existing evidence but never manufactures a capability
             // success or clears its failure merely because Automation is granted.
-            if ask || verifyCapabilities {
+            if capabilityRequested {
                 stage = .capability
                 proofID = NativePermissionCheck.shared.proofID
                 checkingCapabilities = true
                 defer { if nativeOperationID == id { checkingCapabilities = false } }
-                try await NativePermissionCheck.shared.check(configuration: configuration, helper: helper)
+                try await NativePermissionCheck.shared.check(configuration: configuration, helper: helper, useHelperSetup: true)
                 try requireCurrentOperation(id)
                 guard helperPermissionState.isReady, NativePermissionCheck.shared.proofID != nil else {
                     throw CancellationError()
                 }
                 capabilityFailure = nil
+                NativePermissionSetup.shared.verified()
                 reason = .capabilityVerified
             }
         } catch {
@@ -385,7 +484,9 @@ final class ComputerUseGate {
             Task { @MainActor in
                 guard self.pending?.id == id else { return }
                 self.cancelPendingAction()
-                self.dismissWindow()
+                // Saving this waiter as a draft is part of an explicit restart. Keep its
+                // setup surface available to explain a cancelled/failed relaunch.
+                if !self.ownsPermissionRelaunch || !SafeAppRelaunch.shared.isPreparing { self.dismissWindow() }
             }
         }
     }
@@ -412,7 +513,7 @@ final class ComputerUseGate {
         pending = intent
         showingVoiceRepair = false
         if backend == .openAI, nativeInstallationReady, sentientScreen,
-           window == nil, !requestingAutomation {
+           mayVerifyCapabilities, window == nil, !requestingAutomation {
             // Even a cached green result must finish scoped async validation before admission.
             refreshAutomation(force: true)
             Log("ComputerUseGate: waiting for native readiness before presenting setup")
@@ -433,13 +534,13 @@ final class ComputerUseGate {
     }
 
     private var canProceedWithoutSetup: Bool {
-        guard allRequiredGranted else { return false }
-        HealthCaution.latchComputerUse()
+        guard isReadyForTask else { return false }
+        if allRequiredGranted { HealthCaution.latchComputerUse() }
         return true
     }
 
     private func presentPendingAction() {
-        let blocking = !allRequiredGranted
+        let blocking = !isReadyForTask
         let wasVisible = window?.isVisible ?? false
         present()
         if wasVisible {
@@ -496,6 +597,9 @@ final class ComputerUseGate {
         backend = .current
         setup.refresh()
         if backend == .openAI { NativePermissionCheck.shared.refresh() }
+        if backend == .openAI, helperPermissionState.isReady, NativePermissionSetup.shared.recoveryNeeded {
+            NativePermissionSetup.shared.verified()
+        }
         if capabilityFailure != nil, unresolvedCapabilityFailure == nil { capabilityFailure = nil }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         let speech = SFSpeechRecognizer.authorizationStatus()
@@ -539,7 +643,7 @@ final class ComputerUseGate {
     func awaitAutomationRefresh() async { _ = await automationProbe?.value }
 
     /// Cancelling this waiter does not cancel the shared passive preflight. Finish the owned
-    /// capability validation, then re-read grants without scheduling another passive refresh.
+    /// runtime/Automation validation, then re-read workflow state without another passive refresh.
     private func afterNativeRefresh(entryPoint: CheckEntryPoint,
                                     _ completion: @escaping @MainActor (ComputerUseGate, Bool) -> Void) {
         let id = UUID()
@@ -556,7 +660,7 @@ final class ComputerUseGate {
                 let operationID = self.beginNativeOperation()
                 do {
                     try await self.checkNativeAccess(ask: false, stoppingConflictingHelpers: true,
-                                                    verifyCapabilities: self.sentientScreen,
+                                                    verifyCapabilities: false,
                                                     operationID: operationID, entryPoint: entryPoint)
                     validated = true
                 }
@@ -570,23 +674,24 @@ final class ComputerUseGate {
     }
 
     /// The window's main button — dismiss and fire the held action. Only ever fires once every
-    /// required grant is green (the button is disabled until then); the re-probe + guard here make
-    /// that a hard invariant, so a stale tap can never launch a feature that would just fail.
+    /// required setup step is complete. A confirmed relaunch permits a real task to try; the
+    /// helper enforces macOS grants. Closing or replacing this intent prevents late admission.
     func continueNow() {
         guard teardownDepth == 0 else { return }
         if showingVoiceRepair { dismissWindow(); return }
+        if requiresPermissionRestart { restartAfterPermissions(); return }
         guard window != nil, pendingCheck == nil else { return }
         refresh()
         afterNativeRefresh(entryPoint: .continueSetup) { gate, validated in
-            guard validated, gate.allRequiredGranted else {
+            guard validated, gate.isReadyForTask else {
                 Log("ComputerUseGate: Continue blocked (\(gate.blockingReason))")
                 return
             }
-            HealthCaution.latchComputerUse()
+            if gate.allRequiredGranted { HealthCaution.latchComputerUse() }
             let action = gate.pending
             gate.pending = nil
             let runtime = gate.backend
-            Analytics.signal("PermissionGate.continued", parameters: ["all_granted": "true"])
+            Analytics.signal("PermissionGate.continued", parameters: ["all_granted": String(gate.allRequiredGranted)])
             gate.dismissWindow()
             // CUA needs a fresh daemon after a permission change. Native tasks establish their
             // required connection themselves, after checking the selected helper and grants.
@@ -647,6 +752,11 @@ final class ComputerUseGate {
 
     /// Closing setup always drops the held action. Optional voice repair owns no typed action.
     private func windowClosed() {
+        if ownsPermissionRelaunch, SafeAppRelaunch.shared.isPreparing,
+           !SafeAppRelaunch.shared.isApplicationTerminating {
+            SafeAppRelaunch.shared.cancelPendingRelaunch()
+        }
+        ownsPermissionRelaunch = false
         permissionRequest?.cancel()
         cancelPendingAction()
         if let closeObserver {

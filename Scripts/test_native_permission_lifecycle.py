@@ -69,7 +69,7 @@ actor OpenAIComputerUseSession {
         let s = OpenAIComputerUseSession()
         await MainActor.run { sessions.append(s) }; return s
     }
-    func call(_ tool: String, arguments: Data, timeout: TimeInterval) async throws -> Data {
+    func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         precondition(timeout > 0 && timeout <= 12 && tool == "get_app_state")
         if await Self.delay { try await Task.sleep(for:.seconds(30)) }
         let marker = await NativePermissionCheckWindow.currentMarker

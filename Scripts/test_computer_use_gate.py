@@ -4,6 +4,7 @@ All defaults, permission APIs, native sessions, app state and UI are replaced by
 """
 from pathlib import Path
 import platform
+import os
 import subprocess
 import tempfile
 APP=Path(__file__).resolve().parents[1]/'Sentient OS macOS'
@@ -14,6 +15,9 @@ source='import Foundation\nimport Observation\n'+source+r'''
     private func present() { if window == nil { window=NSWindow() }; presentations += 1 }
     private func dismissWindow() { windowClosed() }
     private func windowClosed() {
+        if ownsPermissionRelaunch, SafeAppRelaunch.shared.isPreparing,
+           !SafeAppRelaunch.shared.isApplicationTerminating { SafeAppRelaunch.shared.cancelPendingRelaunch() }
+        ownsPermissionRelaunch=false
         permissionRequest?.cancel(); cancelPendingAction(); window=nil; showingVoiceRepair=false
     }
     var presentations=0
@@ -28,7 +32,17 @@ import Foundation
 func Log(_ value:String) {}
 enum PrivacyCopy { static let voiceInput="fixture" }
 @MainActor final class NSWindow { var isVisible=true }
-nonisolated enum ComputerUseBackend { case cua, openAI; static var current: Self { .openAI }; var isInstalled:Bool { true } }
+nonisolated enum ComputerUseBackend { case cua, openAI; nonisolated(unsafe) static var current: Self = .openAI; var isInstalled:Bool { true } }
+@MainActor let fixtureDefaults = UserDefaults(suiteName: "sentient-native-setup-fixture")!
+@MainActor final class SafeAppRelaunch {
+    static let shared=SafeAppRelaunch()
+    var canRelaunchPermissionWait=true;var canRelaunch=true;var isPreparing=false
+    var isApplicationTerminating=false;var cancellations=0
+    var savedRestarts=0;var idleRestarts=0
+    func relaunchPermissionWait()->Bool {savedRestarts+=1;return true}
+    func relaunchPreservingDraft()->Bool {idleRestarts+=1;return true}
+    func cancelPendingRelaunch() {isPreparing=false;cancellations+=1}
+}
 @MainActor final class ComputerUseSetup {
     static let shared=ComputerUseSetup()
     static func instance(for:ComputerUseBackend)->ComputerUseSetup {shared}
@@ -65,6 +79,8 @@ nonisolated enum OpenAIComputerUse {
     static let shared=OpenAIComputerUseRuntime()
     var nextStartFailure:OpenAIComputerUse.RuntimeError?
     var holdStart=false
+    var permissionRestarts=0
+    func prepareForPermissionRestart(configuration:OpenAIComputerUse.Configuration) async throws {permissionRestarts+=1}
     func start(configuration:OpenAIComputerUse.Configuration,stoppingConflictingHelpers:Bool) async throws -> Int {
         while holdStart {try? await Task.sleep(for:.milliseconds(5));await Task.yield()}
         if let failure=nextStartFailure {nextStartFailure=nil;throw failure};return 1
@@ -93,7 +109,8 @@ nonisolated enum OpenAIComputerUse {
         while holdRefresh {try? await Task.sleep(for:.milliseconds(5));await Task.yield()}
         if invalidateOnRefresh {invalidateOnRefresh=false;snapshot = .init()}
     }
-    func check(configuration:OpenAIComputerUse.Configuration,helper:Int) async throws {
+    func check(configuration:OpenAIComputerUse.Configuration,helper:Int,useHelperSetup:Bool = false) async throws {
+        precondition(useHelperSetup, "Gate recovery must use the official helper UI")
         calls+=1
         while hold {try await Task.sleep(for:.milliseconds(5))}
         try Task.checkCancellation()
@@ -102,6 +119,7 @@ nonisolated enum OpenAIComputerUse {
         if cancelAfterPublishing {cancelAfterPublishing=false;throw CancellationError()}
     }
     func close() async {snapshot = .init()}
+    func invalidate() {snapshot = .init()}
 }
 nonisolated enum OpenAIComputerUseProbe {static func validateResult(_ result:[String:Any],requiresCapture:Bool) throws {}}
 enum Diagnostics {
@@ -109,7 +127,10 @@ enum Diagnostics {
     static func isExpected(_ error:Error)->Bool {true}
     static func report(_ kind:Kind,phase:Phase,error:Error) {}
 }
-@MainActor enum HealthCaution {static func latchComputerUse() {}}
+@MainActor enum HealthCaution {
+    static let nativeComputerUseEverReadyKey="fixture.native-ever-ready"
+    static func latchComputerUse() {}
+}
 @MainActor enum Analytics {
     enum Tier {case core,extended}
     struct Event {let name:String;let parameters:[String:String];let tier:Tier}
@@ -130,66 +151,103 @@ import Foundation
     @MainActor static func settle(_ gate:ComputerUseGate) async throws {await gate.awaitAutomationRefresh();try await Task.sleep(for:.milliseconds(50))}
     @MainActor static func main() async throws {
         let proof=NativePermissionCheck.shared
-        proof.snapshot = .init(accessibility:.verified,screenRecording:.verified)
-        let ready=ComputerUseGate.fixture()
-        ready.refresh();try await settle(ready)
-        var readyFired=0
-        check(ready.intercept({readyFired+=1}),"Native cached readiness waits for asynchronous validation")
-        check(readyFired == 0,"No synchronous native admission")
-        try await settle(ready)
-        check(readyFired == 1,"Validated cached proof resumes exactly once")
-        check(!ready.visible && ready.micSpeech == .notAsked,"No unsolicited voice offer")
-        proof.snapshot = .init();proof.calls=0
-        let fresh=ComputerUseGate.fixture();var fired=0
-        check(fresh.intercept({fired+=1}),"Unknown helper capability holds user action")
-        try await settle(fresh)
-        check(fired == 1 && proof.calls == 1 && !fresh.visible,"Explicit user intent verifies owned target then resumes exactly once")
-        proof.snapshot = .init();proof.hold=true
+        fixtureDefaults.removePersistentDomain(forName:"sentient-native-setup-fixture")
+        let firstUse=ComputerUseGate.fixture();var firstFired=0
+        check(firstUse.intercept({firstFired+=1}),"First use holds the request")
+        try await settle(firstUse)
+        check(firstUse.visible && firstUse.requiresPermissionRestart && proof.calls == 0,"Initial setup never tests a window")
+        await firstUse.prepareNativePermissions();try await settle(firstUse)
+        check(firstUse.automation == .granted && !firstUse.isReadyForTask,"Automation alone does not finish setup")
+        NativePermissionSetup.shared.didDrop(.accessibility)
+        check(NativePermissionSetup.shared.dropped == [.accessibility] && !firstUse.helperAccessibility,
+              "One completed drag updates only progress, never a grant")
+        firstUse.continueNow();try await settle(firstUse)
+        check(SafeAppRelaunch.shared.savedRestarts == 0 && firstFired == 0,"Drag alone cannot admit or restart")
+        firstUse.permissionSetupConfirmed=true
+        SafeAppRelaunch.shared.canRelaunchPermissionWait=false;SafeAppRelaunch.shared.canRelaunch=false
+        firstUse.restartAfterPermissions()
+        check(NativePermissionSetup.shared.restartProcess == nil,"Busy work refuses restart")
+        SafeAppRelaunch.shared.canRelaunchPermissionWait=true;SafeAppRelaunch.shared.canRelaunch=true
+        firstUse.restartAfterPermissions()
+        check(NativePermissionSetup.shared.needsRestart && !NativePermissionSetup.shared.canAttemptTask,"Same process cannot consume confirmation")
+        firstUse.fixtureClose()
+        NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"after-restart")
+        let restarted=ComputerUseGate.fixture();var fired=0
+        _=restarted.intercept({fired+=1});try await settle(restarted)
+        check(fired == 1 && proof.calls == 0 && !restarted.visible,"After restart try actual work without synthetic verification")
+        check(restarted.isReadyForTask && !restarted.allRequiredGranted && !proof.snapshot.isReady,"Task admission never fabricates grant proof")
+        check(OpenAIComputerUseRuntime.shared.permissionRestarts == 1,"Prior helper is refreshed once after permission restart")
+        restarted.checkAfterRestartIfNeeded();restarted.checkAfterRestartIfNeeded();try await settle(restarted)
+        check(proof.calls == 0,"Reopening setup never triggers a test popup")
+
+        check(!NativePermissionSetup.shared.hasRestarted,"Successful helper preparation consumes the one-time restart receipt")
+        NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"later-launch")
+        let later=ComputerUseGate.fixture();var laterFired=0
+        _=later.intercept({laterFired+=1});try await settle(later)
+        check(laterFired == 1 && OpenAIComputerUseRuntime.shared.permissionRestarts == 1,
+              "Later launches reuse completed setup without restarting a healthy helper")
+
+        // Merely opening a guide then quitting must not impersonate the confirmation step.
+        NativePermissionSetup.shared.requestRestart()
+        NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"unconfirmed-relaunch")
+        check(NativePermissionSetup.shared.needsRestart && !NativePermissionSetup.shared.canAttemptTask,"Unconfirmed relaunch does not complete setup")
+        NativePermissionSetup.shared.confirmForRestart()
+        NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"confirmed-relaunch")
+        let token=NativePermissionSetup.shared.permissionFailed()
+        let recovery=ComputerUseGate.fixture();var recoveredFired=0
+        _=recovery.intercept({recoveredFired+=1});try await settle(recovery)
+        check(recovery.visible && !recovery.isReadyForTask && !recovery.requiresPermissionRestart,
+              "Known permission failure offers helper recovery rather than endless restart")
+        proof.nextFailure = .init(kind:.timeout,code:nil,detail:.requestTimedOut,stage:.probe)
+        recovery.verifyNativePermissions();try await settle(recovery)
+        check(proof.calls == 1 && recovery.capabilityCheckFailed && !recovery.isReadyForTask,"Timed out recovery never becomes ready")
+        recovery.fixturePassiveRefresh();try await settle(recovery)
+        check(proof.calls == 1 && recovery.capabilityCheckFailed,"Passive refresh does not repeat helper setup")
+        recovery.verifyNativePermissions();try await settle(recovery)
+        check(proof.calls == 2 && recovery.allRequiredGranted && recovery.isReadyForTask,"Explicit successful helper response completes recovery")
+        recovery.continueNow();recovery.continueNow();try await settle(recovery)
+        check(recoveredFired == 1 && !recovery.visible,"Repeated Continue releases exactly one waiting action")
+        _=NativePermissionSetup.shared.permissionFailed();proof.snapshot = .init()
+        proof.publishNewProof();recovery.refresh();try await settle(recovery)
+        check(recovery.isReadyForTask && !NativePermissionSetup.shared.recoveryNeeded,
+              "A fresh successful Settings diagnostic also resolves permission recovery")
+        NativePermissionSetup.shared.requestRestart()
+        NativePermissionSetup.shared.recovered(ifCurrent:token)
+        check(NativePermissionSetup.shared.needsRestart,"Stale recovery cannot overwrite a newer setup round")
+        NativePermissionSetup.shared.verified();proof.snapshot = .init();proof.calls=0
+
+        OpenAIComputerUseRuntime.shared.holdStart=true
         let stopped=ComputerUseGate.fixture();var stoppedFired=0
-        check(stopped.intercept({stoppedFired+=1}),"Pending readiness holds action")
-        try await Task.sleep(for:.milliseconds(15))
-        check(stopped.cancelBeforePresentation(),"Stop cancels pending preflight")
-        proof.hold=false;try await settle(stopped)
-        check(stoppedFired == 0 && !stopped.visible && !proof.snapshot.isReady,"Late probe cannot revive stopped action")
-        proof.snapshot = .init();Permissions.screen=false
+        _=stopped.intercept({stoppedFired+=1});try await Task.sleep(for:.milliseconds(15))
+        check(stopped.cancelBeforePresentation(),"Stop cancels asynchronous startup")
+        OpenAIComputerUseRuntime.shared.holdStart=false;try await settle(stopped)
+        check(stoppedFired == 0 && !stopped.visible,"Late startup cannot revive a stopped task")
+        OpenAIComputerUseRuntime.shared.holdStart=true
+        let edited=ComputerUseGate.fixture();var editedFired=0
+        _=edited.intercept({editedFired+=1});try await Task.sleep(for:.milliseconds(15))
+        edited.changingNativePermissions();OpenAIComputerUseRuntime.shared.holdStart=false;try await settle(edited)
+        check(edited.visible && edited.requiresPermissionRestart && editedFired == 0,"New permission round cancels old admission")
+        edited.fixtureClose();NativePermissionSetup.shared.verified()
+
+        Permissions.screen=false
         let dismissed=ComputerUseGate.fixture();var dismissedFired=0
-        check(dismissed.intercept({dismissedFired+=1}) && dismissed.visible,"Missing own screen permission opens required setup")
-        dismissed.fixtureClose();Permissions.screen=true;proof.snapshot = .init(accessibility:.verified,screenRecording:.verified)
-        try await settle(dismissed)
-        check(dismissedFired == 0,"Closing required setup drops original action")
-        proof.snapshot = .init();proof.hold=true
-        let waiter=ComputerUseGate.fixture()
-        let task=Task {try await waiter.waitUntilReady()}
-        try await Task.sleep(for:.milliseconds(15));task.cancel();proof.hold=false
-        do {try await task.value;fatalError("Stopped waiter continued")}
-        catch is CancellationError {count+=1}
-        catch is ComputerUseGate.SetupCancelled {count+=1}
-        try await settle(waiter)
-        check(!waiter.visible,"Cancellation closes waiting setup and cannot reopen later")
+        _=dismissed.intercept({dismissedFired+=1})
+        check(dismissed.visible,"Missing Sentient Screen Recording retains our setup screen")
+        dismissed.fixtureClose();Permissions.screen=true;try await settle(dismissed)
+        check(dismissedFired == 0,"Closing setup discards its held action")
+        NativePermissionSetup.shared.requestRestart()
+        let savedWait=ComputerUseGate.fixture()
+        let savedTask=Task {try await savedWait.waitUntilReady()};try await settle(savedWait)
+        savedWait.permissionSetupConfirmed=true;savedWait.restartAfterPermissions()
+        SafeAppRelaunch.shared.isPreparing=true;savedTask.cancel()
+        do {try await savedTask.value;fatalError("Saved waiter admitted")}
+        catch is ComputerUseGate.SetupCancelled {} catch is CancellationError {}
+        try await settle(savedWait)
+        check(savedWait.visible && !savedWait.hasWaitingAction,"Restart preserves the draft and leaves setup visible while preparing")
+        savedWait.fixtureClose()
+        check(!SafeAppRelaunch.shared.isPreparing,"Closing setup cancels pending relaunch")
+        NativePermissionSetup.shared.verified();proof.calls=0
 
-        proof.snapshot = .init();proof.calls=0
-        proof.nextFailure = .init(kind:.unknown,code:nil,detail:.testWindowMarkerMissing,stage:.probe)
-        let failed=ComputerUseGate.fixture();var failedFired=0
-        check(failed.intercept({failedFired+=1}),"Failed capability check holds task")
-        try await settle(failed)
-        let failureMessage=failed.nativePermissionError
-        check(failureMessage != nil && failed.capabilityCheckFailed && !failed.checkingCapabilities && failed.visible,
-              "Failed proof leaves an actionable error and exits checking")
-        failed.fixturePassiveRefresh();try await settle(failed)
-        check(failed.nativePermissionError == failureMessage && failed.capabilityCheckFailed && proof.calls == 1 && !failed.allRequiredGranted,
-              "Automation-only success preserves proof failure without retrying capture")
-        OpenAIComputerUseRuntime.shared.nextStartFailure = .conflictingHelper
-        failed.fixturePassiveRefresh();try await settle(failed)
-        check(failed.nativePermissionError == failureMessage && !failed.allRequiredGranted,
-              "Passive helper conflict cannot erase capability error")
-        failed.fixturePassiveRefresh();try await settle(failed)
-        proof.publishNewProof()
-        check(failed.nativePermissionError == nil && failed.allRequiredGranted && failed.visible && failedFired == 0,
-              "New shared Doctor proof clears capability error without running visible held task")
-        failed.continueNow();failed.continueNow();try await settle(failed)
-        check(failedFired == 1 && !failed.visible,"Repeated Continue resumes original task exactly once")
-
-        proof.snapshot = .init()
         let startup=ComputerUseGate.fixture()
         OpenAIComputerUseRuntime.shared.nextStartFailure = .backendUnavailable
         startup.refresh();try await settle(startup)
@@ -219,7 +277,7 @@ import Foundation
         try await Task.sleep(for:.milliseconds(15))
         check(coldFired == 0 && !cold.visible,"No inference admission while liveness is unresolved")
         proof.holdRefresh=false;try await settle(cold)
-        check(coldFired == 1 && proof.snapshot.isReady,"Dead cached proof is renewed before task admission")
+        check(coldFired == 1 && !proof.snapshot.isReady,"Expired proof does not prevent a confirmed setup from trying real work")
 
         proof.publishNewProof();proof.holdRefresh=true
         let stoppedCached=ComputerUseGate.fixture();var cachedFired=0
@@ -229,22 +287,12 @@ import Foundation
         proof.holdRefresh=false;try await settle(stoppedCached)
         check(cachedFired == 0 && !stoppedCached.visible,"Late liveness success cannot resume stopped cached waiter")
 
-        proof.snapshot = .init();proof.cancelAfterPublishing=true
-        let retired=ComputerUseGate.fixture();var retiredFired=0
-        check(retired.intercept({retiredFired+=1}),"Retired proof operation holds original intent")
-        try await settle(retired)
-        check(retiredFired == 0 && retired.visible,
-              "Cancelled validation cannot admit from another simultaneously ready snapshot")
-        retired.fixtureClose()
-
-        proof.snapshot = .init();proof.hold=true
+        proof.snapshot = .init();OpenAIComputerUseRuntime.shared.holdStart=true
         let replaced=ComputerUseGate.fixture();var oldFired=0;var newFired=0
-        check(replaced.intercept({oldFired+=1}),"First user intent waits for proof")
-        try await Task.sleep(for:.milliseconds(15))
-        check(replaced.intercept({newFired+=1}),"New user intent replaces waiting continuation")
-        proof.hold=false;try await settle(replaced)
-        check(oldFired == 0 && newFired == 1 && !replaced.visible,
-              "Late old check cannot clear or resume the replacement intent")
+        _=replaced.intercept({oldFired+=1});try await Task.sleep(for:.milliseconds(15))
+        _=replaced.intercept({newFired+=1})
+        OpenAIComputerUseRuntime.shared.holdStart=false;try await settle(replaced)
+        check(oldFired == 0 && newFired == 1,"Replacement intent is the only one resumed")
 
         proof.snapshot = .init();ComputerUseSetup.shared.holdInstall=true
         let teardown=ComputerUseGate.fixture();var teardownFired=0
@@ -275,6 +323,9 @@ import Foundation
         teardown.endTeardown();teardown.requestAutomation()
         check(!teardown.requestingAutomation,"Nested teardown holds admission until every owner releases")
         teardown.endTeardown();teardown.requestAutomation()
+        try await settle(teardown)
+        check(proof.calls == callsBeforeTeardown,"Post-teardown consent still does not capture a window")
+        teardown.verifyNativePermissions()
         try await settle(teardown)
         check(proof.calls == callsBeforeTeardown+1 && !teardown.requestingAutomation && teardown.allRequiredGranted,
               "Fresh user operation can run after teardown ends")
@@ -319,7 +370,8 @@ import Foundation
 
         Analytics.events=[];proof.snapshot = .init()
         let telemetry=ComputerUseGate.fixture()
-        telemetry.requestAutomation();try await settle(telemetry)
+        telemetry.refresh();try await settle(telemetry);Analytics.events=[]
+        telemetry.verifyNativePermissions();try await settle(telemetry)
         check(checkEvents.map(\.name) == ["PermissionGate.nativeCheckStarted","PermissionGate.nativeCheckFinished"],
               "One explicit owned check emits one attempt and one terminal")
         check(checkEvents[0].parameters["proof_present"] == "false"
@@ -349,7 +401,7 @@ import Foundation
         let privateText="PRIVATE_NONCE_PROMPT_PATH_/Users/customer/secret"
         proof.nextFailure = .init(kind:.unknown,code:42,detail:.testWindowMarkerMissing,stage:.probe,
                                   rpcCode:-32603,systemDomain:privateText,modelError:privateText)
-        telemetry.requestAutomation();try await settle(telemetry)
+        telemetry.verifyNativePermissions();try await settle(telemetry)
         let failureFields=checkTerminals[0].parameters
         check(checkEvents.count == 2 && failureFields["outcome"] == "failure"
               && failureFields["reason"] == "native_error" && failureFields["native_detail"] == "testWindowMarkerMissing"
@@ -365,7 +417,7 @@ import Foundation
         check((0...600_000).contains(elapsed),"Elapsed time is a bounded nonnegative integer")
 
         Analytics.events=[];proof.hold=true
-        telemetry.requestAutomation()
+        telemetry.verifyNativePermissions()
         try await Task.sleep(for:.milliseconds(15))
         telemetry.fixtureClose();proof.hold=false
         try await settle(telemetry)
@@ -388,14 +440,27 @@ import Foundation
         check(checkEvents.count == 4 && checkTerminals.last?.parameters["entry_point"] == "explicit_check"
               && checkTerminals.last?.parameters["outcome"] == "success",
               "Replacement explicit check has an independent attempt and success terminal")
-        print("PASS \(count) typed gate, scoped error and held-action checks")
+        NativePermissionSetup.shared.requestRestart()
+        fixtureDefaults.removeObject(forKey:HealthCaution.nativeComputerUseEverReadyKey)
+        NativePermissionSetup.shared.reset()
+        let resetPolicy=NativePermissionSetup(defaults:fixtureDefaults,processID:"after-reset")
+        check(resetPolicy.needsRestart && !resetPolicy.hasRestarted,
+              "Factory reset leaves no old restart receipt that could skip fresh grant setup")
+        ComputerUseBackend.current = .cua
+        let legacy=ComputerUseGate.fixture()
+        check(!legacy.intercept({}),"Legacy CUA admission does not acquire the native restart requirement")
+        check(!legacy.requiresPermissionRestart,"Legacy CUA keeps its existing permission UI")
+        print("PASS \(count) typed gate, restart workflow, scoped error and held-action checks")
     }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='sentient-gate-fixture-') as directory:
  p=Path(directory)
- for name,value in [('Gate',source),('Support',SUPPORT),('Tests',TESTS)]: (p/(name+'.swift')).write_text(value)
+ setup=(APP/'Views/Permissions/NativePermissionSetup.swift').read_text().replace(
+    'static let shared = NativePermissionSetup()',
+    'static var shared = NativePermissionSetup(defaults: fixtureDefaults, processID: "before-restart")')
+ for name,value in [('Gate',source),('Support',SUPPORT),('Tests',TESTS),('Setup',setup)]: (p/(name+'.swift')).write_text(value)
  binary=p/'test'
  subprocess.run(['xcrun','swiftc','-swift-version','5','-parse-as-library','-target',f'{platform.machine()}-apple-macos15.0',
-    *[str(p/(n+'.swift')) for n in ['Support','Gate','Tests']],str(APP/'Driver/NativePermissionReadiness.swift'),str(APP/'Diagnostics/NativeComputerUseFailure.swift'),'-o',str(binary)],check=True,timeout=60)
- subprocess.run([str(binary)],check=True,timeout=15)
+    *[str(p/(n+'.swift')) for n in ['Support','Setup','Gate','Tests']],str(APP/'Driver/NativePermissionReadiness.swift'),str(APP/'Diagnostics/NativeComputerUseFailure.swift'),'-o',str(binary)],check=True,timeout=60)
+ subprocess.run([str(binary)],env=dict(os.environ,CFFIXED_USER_HOME=str(p/'home')),check=True,timeout=20)

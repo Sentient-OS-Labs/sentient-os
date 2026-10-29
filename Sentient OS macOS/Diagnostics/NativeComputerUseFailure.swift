@@ -39,6 +39,15 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
 
     var effectsMayBeUnknown: Bool { actionEffectsUnconfirmed ?? (stage == .action) }
 
+    /// Only native system-grant failures open permission setup. Auth, app approvals, policy,
+    /// window/capture failures and timeouts are separate recovery paths.
+    var requiresSystemPermissionSetup: Bool {
+        guard ![.senderNotAuthenticated, .approvalDenied, .blockedByPolicy].contains(detail) else { return false }
+        return code == -10009 || code == -10014
+            || (["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(systemDomain ?? "")
+                && systemCode == -3801)
+    }
+
     /// An owned capability check was interrupted or its marker was not observed. None of
     /// these local proof failures establishes that an operating-system grant was denied.
     var isReadinessInterruption: Bool {

@@ -17,6 +17,7 @@ only check permission state and never request consent. Three pieces:
 |---|---|
 | `ComputerUseGate.swift` | The interception (`intercept`, `interceptBeforeStart`, `presentVoiceFixIfDenied`), the grant probes, the AppKit-owned floating window, Continue. |
 | `ComputerUseGateView.swift` | The window's face: the grants as `StatusLine` rows in two groups (`SentientPermissionRows` is shared with the upgrade window). |
+| `NativePermissionSetup.swift` | Restart workflow receipt; never permission evidence. First-use confirmation permits a normal task only in a later app process. |
 | `ComputerUseUpgrade.swift` | Persistent upgrade coordination, native setup window, installation, readiness, release, and reset. |
 | `ComputerUseWindowGuard.swift` | Excludes regular scene content during setup and registers its AppKit window for hiding. |
 | `PermissionGuide.swift` | `guide(pane, dragging:)`: open the pane and raise the panel; drag vs instruction mode; close. |
@@ -38,10 +39,17 @@ The required grants follow the selected runtime:
 | All | Microphone and Speech are optional; typed commands work without them. |
 
 OpenAI Automation is checked through Apple's asynchronous API after launching the signed helper.
-Visible permission setup requests unasked consent through the macOS Apple Events dialog; the user chooses Allow there. Granted and denied states are not re-prompted automatically. The Automation row distinguishes granted, unasked, denied and unavailable states, with contextual Settings/retry actions. The helper's own Accessibility/Screen Recording rows use the floating drag guide
-with the helper bundle, while Sentient's rows carry Sentient itself. Full Disk Access is not a
-computer-use prerequisite. Helper admission never reads TCC databases; unknown capability is shown
-as **not checked**, with **Check computer use** and contextual System Settings actions.
+Visible permission setup requests unasked Automation consent through the macOS dialog. Asking for
+Automation never starts a capability test. The helper's Accessibility and Screen Recording rows use
+Sentient's floating drag guide. A completed copy drop inside the tracked Settings window changes
+only that row to **Restart to finish**; cancelled, misplaced and stale-guide drops do nothing.
+The user still enables each macOS toggle, confirms both permissions, and selects **Restart Sentient**.
+Drag completion and confirmation never create permission proof. Existing enabled entries need not
+be dragged again. Full Disk Access is not required and the gate never reads TCC databases.
+
+After a confirmed relaunch, rows without live proof say **Ready to try**. `isReadyForTask` permits an
+ordinary native request; `allRequiredGranted` continues to mean actual capability evidence. The
+macOS helper enforces access during the task. Known denial keeps the workflow blocked for recovery.
 
 Native first-use setup checks both the compatible Codex CLI and helper installation, and exposes
 the shared installer when either needs preparation. Claude users are not asked for a ChatGPT login. Existing grants are reused. `SentientPermissionRows` and
@@ -50,10 +58,10 @@ the shared installer when either needs preparation. Claude users are not asked f
 ## The gate (`ComputerUseGate`)
 
 `intercept(action)` returns true when it holds an action for required setup or a readiness check.
-A user-started task can automatically check previously granted helper capabilities. Missing installation,
-Sentient Screen Recording or Automation consent opens the setup window. Continue requires all
-required capabilities; closing or cancelling drops the action, and late results cannot revive it.
-Once required setup is ready, typed commands proceed immediately. There is no optional voice offer.
+First-use and post-restart admission never open the synthetic test window. Missing installation,
+Sentient Screen Recording or Automation still hold the task in our setup screen. A confirmed restart
+allows real work to try without claiming either helper grant. Closing or cancelling drops the held
+action, and late startup results cannot revive it. Voice remains optional for typed requests.
 The legacy `computerUse.micSpeechOffered` key remains only for reset cleanup.
 
 Before waiting, `CommandRunModel` writes a private `PermissionWaitDraft` bound to its run ID and
@@ -62,10 +70,30 @@ router or model work. Explicit Stop/cancel retires it; approved application term
 it for macOS's own Quit and Reopen. Next launch can restore it only into an empty composer of the
 same generation, as an unsent draft. It is never submitted automatically.
 
-When Sentient's Screen Recording needs a restart, **Save request & relaunch** is available only for
+For native setup, **Restart Sentient** uses **Save request & relaunch** internally only for
 the exact pre-inference waiter with an empty composer. It preserves request/reply, cancels and
 drains only that waiter, then uses the ordinary guarded restart. An already executing task cannot
-use that path. Native helper restarts remain distinct from restarting Sentient itself.
+use that path. Other busy work blocks restart with an explanation; a gate-held external task can
+be stopped explicitly before restarting. The setup window remains available if saving the draft
+or preparing the relaunch fails. No saved request is automatically submitted after relaunch.
+
+The restart receipt is bound to the confirming process. Closing a guide and relaunching without
+confirmation does not complete setup. Before the first post-restart request, an exclusive runtime
+lease protects a graceful stop of only Sentient's idle helper. Active work and foreign helpers are
+never stopped by this preparation. Confirmation survives later launches until reset or a new setup
+round; it remains separate from grant evidence.
+
+### Official helper fallback
+
+A native `-10009`/`-10014` or exact ScreenCaptureKit user denial permits one recovery attempt per task.
+`NativeComputerUseServer` uses its existing authenticated, model-free MCP session to request
+`get_app_state` for System Settings. The helper presents its own permission UI when needed; its
+Chrome extension step is optional. Successful text plus a decodable screenshot completes recovery.
+Timeout, dismissal, helper exit or Stop do not. The failed original action is never replayed and
+still reaches the agent as an error with fresh-read guidance. Recovery shares the original request's
+bounded time budget. Further failures leave **Open helper setup** available in our permission screen.
+Auth failures, app approvals/policy blocks, missing windows, timeouts and ordinary interaction errors
+never trigger this fallback. Reset/new setup invalidates late recovery results.
 
 `presentVoiceFixIfDenied()` is used only after deliberate voice input encounters denied Microphone or
 Speech access. Its voice-only window has Done and no held typed action. Unasked voice permission
@@ -80,18 +108,11 @@ AX text alone, a screenshot alone, a stale marker, timeout, interrupted window o
 turns the rows green. An exact ScreenCaptureKit user-denied domain/code identifies Screen Recording
 as denied; unrelated auth, policy and transport failures remain unknown with their actual error.
 
-`NativePermissionCheck` owns the small read-only window. It runs only for an explicit held computer
-task or visible setup/check action, never a background health refresh. It targets Sentient by its app
-path, performs no clicks or typing, discards the response and closes the window on every outcome.
-A 12-second tool timeout bounds the read; session initialization has its own bounded waits. Closing
-setup or Stop cancels the held action and active check. Reset/uninstall can drain it through `close()`.
-
-Successful proof stays in memory with the exact helper configuration/PID and a model-free connection
-that prevents normal idle helper teardown. Helper exit, changed installation/configuration, dead
-connection, explicit repair/teardown or native permission errors invalidate the proof. No persistent
-permission flag substitutes for capability evidence. Passive Health refresh reads this same state
-without opening a window. A fresh launch's unknown state is not a denial; the next explicit task can
-verify existing grants. The actual task still enforces macOS permissions and preserves native errors.
+The marker-based check is retained for explicit diagnostics and validation fixtures, not ordinary
+onboarding or task admission. Permission recovery uses the helper setup request instead, with no
+custom test window. `NativePermissionCheck` serializes explicit setup/diagnostic operations and
+retains successful helper PID/configuration and connection-scoped evidence. Passive Health observes
+that evidence without opening a window. Reset/uninstall drains checks and clears workflow receipts.
 
 Passing required checks latches `HealthCaution`'s native readiness history. The isolated fixtures
 `test_native_permission_readiness.py`, `test_native_permission_lifecycle.py` and
@@ -117,7 +138,8 @@ An onboarded user enters native migration when prior computer-use readiness, a C
 receipt or binary, or an earlier deferred migration establishes existing setup history.
 Earlier deferral is treated as unfinished setup. Native completion remains separate from CUA history.
 
-The flow is pitch → shared installation → required grants. Failure is retryable. Completing it
+The flow is pitch → shared installation → required grants → confirmed restart → functional check.
+Failure is retryable. Completing it
 requires a fresh readiness check and an explicit Done action. Native migration is mandatory:
 the regular interface stays unavailable until installation and required permissions are ready.
 Closing or minimizing setup does not release the interface, and quitting preserves pending setup for

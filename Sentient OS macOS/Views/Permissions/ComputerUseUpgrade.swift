@@ -83,7 +83,7 @@ final class ComputerUseUpgrade {
         guard defaults.bool(forKey: AppState.onboardingKey) else { return }
         migrationBackend = .current
         ComputerUseGate.shared.refresh()
-        let ready = ComputerUseGate.shared.allRequiredGranted
+        let ready = ComputerUseGate.shared.isReadyForTask
         let pending = defaults.bool(forKey: pendingKey)
         let required: Bool
         if migrationBackend == .openAI {
@@ -103,7 +103,7 @@ final class ComputerUseUpgrade {
         if ready, !isPreview {
             defaults.removeObject(forKey: pendingKey)
             if migrationBackend == .openAI { defaults.removeObject(forKey: Self.legacyNativeDeferredKey) }
-            HealthCaution.latchComputerUse()
+            if ComputerUseGate.shared.allRequiredGranted { HealthCaution.latchComputerUse() }
         }
         guard required else { return }
         self.onSetupFinished = onSetupFinished
@@ -258,11 +258,15 @@ final class ComputerUseUpgrade {
     /// alone can reveal the app while a required permission is still missing.
     func finish() {
         ComputerUseGate.shared.refresh()
+        if isBlockingInterface, phase == .grants, ComputerUseGate.shared.requiresPermissionRestart {
+            ComputerUseGate.shared.restartAfterPermissions()
+            return
+        }
         guard isBlockingInterface, phase == .grants, migrationBackend.isInstalled,
-              ComputerUseGate.shared.allRequiredGranted else { return }
+              ComputerUseGate.shared.isReadyForTask else { return }
         Analytics.signal("ComputerUseUpgrade.finished",
-                         parameters: ["all_granted": "true"])
-        if !isPreview { HealthCaution.latchComputerUse() }
+                         parameters: ["all_granted": String(ComputerUseGate.shared.allRequiredGranted)])
+        if !isPreview, ComputerUseGate.shared.allRequiredGranted { HealthCaution.latchComputerUse() }
         completeSetup()
     }
 
@@ -362,8 +366,9 @@ struct ComputerUseUpgradeView: View {
             case .grants:
                 SentientPermissionRows(gate: gate)
                     .padding(.top, 30)
-                OnboardingNextButton(title: gate.allRequiredGranted ? "Done" : "Grant permissions to finish",
-                                     enabled: gate.allRequiredGranted) {
+                OnboardingNextButton(title: gate.requiresPermissionRestart ? "Restart Sentient"
+                                        : (gate.isReadyForTask ? "Done" : "Grant permissions to finish"),
+                                     enabled: gate.requiresPermissionRestart ? gate.canRestartAfterPermissions : gate.isReadyForTask) {
                     model.finish()
                 }
                 .frame(maxWidth: .infinity)

@@ -53,14 +53,15 @@ entitlement and uses `AEDeterminePermissionToAutomateTarget` off the main thread
 Automation access. The helper is started through LaunchServices before querying, so a stopped target
 is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, and the user chooses Allow in that dialog.
 
-The helper's Accessibility and Screen Recording readiness comes from a bounded, read-only check of
-a temporary Sentient-owned window: unique AX marker plus decoded screenshot. Full Disk Access is
-not needed. `NativePermissionCheck` retains process/configuration-scoped evidence in memory and
-invalidates it on helper exit/change, dead connection or native permission failure. Passive Health
-only observes that state; explicit setup or a user-started computer task can open the check window.
-Unknown stays unverified rather than denied. Its grant rows carry the helper bundle to System Settings. Sentient's
-own Screen Recording remains required for screen context; native actions do not require Sentient's
-CUA-specific Accessibility grant. Native permission rows are shared by setup, upgrade and Health.
+The helper owns its Accessibility and Screen Recording grants. Our setup rows show **Restart to
+finish** after accepted drags, with explicit confirmation before relaunch. After a confirmed
+restart, the gate permits a normal task to try without a synthetic test window. Workflow completion
+is separate from verified grant evidence; no TCC database read or Full Disk Access is required.
+A native permission denial opens the helper's own setup at most once per task, while ordinary
+errors, authentication failures and app-policy refusals do not. The original action is never replayed.
+Explicit diagnostics retain the unique-marker/screenshot check and its PID/connection-scoped proof.
+Passive Health only observes evidence. Sentient's own Screen Recording remains required for screen
+context; native actions do not require Sentient's CUA-specific Accessibility grant.
 
 Normal startup and Factory Reset preserve Automation consent. Uninstall uses the supported `tccutil`
 reset for Sentient's own Apple Events grants. No code edits a TCC database or resets another app's

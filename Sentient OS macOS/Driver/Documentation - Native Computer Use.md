@@ -110,14 +110,18 @@ The native path needs Sentient's Apple Events entitlement plus user-granted Auto
 OpenAI's helper. The helper has its own Accessibility and Screen Recording grants; Sentient retains
 Screen Recording for Sidekick's screen context. This applies to Claude, ChatGPT and custom models.
 Sentient's old CUA Accessibility grant is not needed for native actions. Microphone and Speech remain optional.
-Full Disk Access is not needed for native setup or Sidekick. Effective helper readiness uses
-`NativePermissionCheck` and `NativePermissionReadiness`: an explicit, model-free `get_app_state`
-against a temporary Sentient-owned window must return its unique AX marker and a valid screenshot.
-A `list_apps` service check alone never grants admission. No probe response is stored or sent to a
-model; the read performs no actions. The tested helper's PID/configuration and a live model-free
-connection scope the in-memory proof. Helper exit/change, dead connection and native permission
-errors invalidate it. Background Health checks observe the proof without opening the window.
-Unknown readiness offers Check computer use, not a claim that permission was denied.
+Full Disk Access is not needed for native setup or Sidekick. First use keeps Sentient's own permission
+screen and drag guides; accepted drops show Restart to finish without fabricating grant evidence.
+A confirmed relaunch admits real tasks through `isReadyForTask`, while `allRequiredGranted` remains
+reserved for actual proof. No synthetic permission test runs before normal work. The real helper
+enforces its own grants.
+
+Confirmed native permission failures can open the official helper setup once per task via the
+existing authenticated MCP connection. Chrome is optional. Ordinary window, capture, policy,
+authentication and timeout errors do not open setup. Recovery never replays an action; the failed
+tool remains an error and the agent must read current state before continuing. Dismissal, cancellation
+and timeout keep recovery available in Permissions & Health. The custom marker/screenshot test is
+retained for explicit diagnostics, with its existing lifetime and cancellation guards.
 
 
 Automation checks use Apple's asynchronous permission API after starting the helper through

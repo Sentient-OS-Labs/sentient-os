@@ -20,6 +20,7 @@ actor NativeComputerUseServer {
     private var tools: [[String: Any]] = []
     private var closed = false
     private var busy = false
+    private var offeredPermissionSetup = false
     private var verified: Set<String> = []
     private var fingerprints: [Data: Data] = [:]
     private var replies: [Data: Data] = [:]
@@ -165,13 +166,14 @@ actor NativeComputerUseServer {
             let grants = NativePermissionCheck.shared.snapshot
             let missing = !Permissions.hasScreenRecording() || grants.accessibility == .denied || grants.screenRecording == .denied
                 || automation == .denied || automation == .notAsked
-            return (missing: missing, verified: grants.isReady && automation == .granted)
+            return (missing: missing, readyForDiagnostic:
+                (grants.isReady || NativePermissionSetup.shared.canAttemptTask) && automation == .granted)
         }
         guard !permissionState.missing else {
             interaction?.computerUseCheckConsent.invalidate(owner: diagnosticOwner)
             return try response("permission_needed", "A required macOS grant is missing. Help the user fix the specific permission in Permissions & Health. A diagnostic window is unnecessary and was not opened.")
         }
-        guard permissionState.verified else {
+        guard permissionState.readyForDiagnostic else {
             interaction?.computerUseCheckConsent.invalidate(owner: diagnosticOwner)
             return try response("permission_unverified", "The app cannot confirm that all required permissions are granted. Do not assume a broad outage or offer a diagnostic window. Continue available recovery; the user can review Permissions & Health or choose Test & repair there.")
         }
@@ -344,9 +346,37 @@ actor NativeComputerUseServer {
             var failure = (error as? NativeComputerUseFailure)
                 ?? .init(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
             failure.actionEffectsUnconfirmed = tool != "list_apps" && !isState
-            if failure.kind == .permission {
+            if failure.kind == .permission || failure.requiresSystemPermissionSetup {
                 let permissionFailure = failure
                 await MainActor.run { NativePermissionCheck.shared.invalidate(failure: permissionFailure) }
+            }
+            if failure.requiresSystemPermissionSetup {
+                let token: UUID? = await MainActor.run {
+                    guard !Task.isCancelled, !NativePermissionCheck.shared.isTearingDown else { return nil }
+                    return NativePermissionSetup.shared.permissionFailed()
+                }
+                try Task.checkCancellation()
+                guard !closed else { throw CancellationError() }
+                // One explicit permission recovery per task. Never replay the failed action;
+                // it may already have had effects. The agent receives its original failure.
+                let remaining = min(115, 120 - (ProcessInfo.processInfo.systemUptime - began))
+                if let token, !offeredPermissionSetup, remaining > 5, let connection = session {
+                    offeredPermissionSetup = true
+                    do {
+                        _ = try await NativePermissionReadiness.helperSetup { tool, arguments in
+                            try await connection.call(tool, arguments: arguments, timeout: remaining)
+                        }
+                        try Task.checkCancellation()
+                        guard !closed else { throw CancellationError() }
+                        await MainActor.run { NativePermissionSetup.shared.recovered(ifCurrent: token) }
+                        failure.modelError = (failure.modelError ?? failure.localizedDescription)
+                            + "\nThe helper's permission setup completed. The failed action was not replayed. Read the target app again and verify its current state before continuing."
+                    } catch {
+                        if error is CancellationError || Task.isCancelled || closed { throw CancellationError() }
+                        // Leave recovery available in Sentient's permission screen. A helper
+                        // relaunch, dismissal or timeout never becomes a false success.
+                    }
+                }
             }
             diagnostics.record(.failed, attempt: attempt, failure: failure, fields: fields)
             throw failure

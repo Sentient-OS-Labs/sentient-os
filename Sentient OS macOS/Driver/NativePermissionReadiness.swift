@@ -4,6 +4,24 @@
 import Foundation
 
 nonisolated enum NativePermissionReadiness {
+    /// The helper owns consent and its live grant indicators. The native request opens its
+    /// setup UI when necessary; a cancelled, denied or text-only result is never readiness.
+    static func helperSetup(call: Call) async throws -> Snapshot {
+        try Task.checkCancellation()
+        let data = try await call("get_app_state", JSONSerialization.data(withJSONObject: ["app": "com.apple.systempreferences"]))
+        try Task.checkCancellation()
+        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .probe)
+        }
+        try OpenAIComputerUseProbe.validateResult(result, requiresCapture: true)
+        guard (result["content"] as? [[String: Any]] ?? []).contains(where: {
+            $0["type"] as? String == "text" && ($0["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }) else {
+            throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .probe)
+        }
+        return Snapshot(accessibility: .verified, screenRecording: .verified)
+    }
+
     enum State: String, Sendable { case unknown, verified, denied }
     struct Snapshot: Equatable, Sendable {
         var accessibility: State = .unknown

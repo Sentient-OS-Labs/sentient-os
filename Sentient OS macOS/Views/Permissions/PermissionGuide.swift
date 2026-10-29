@@ -57,6 +57,7 @@ final class PermissionGuide {
 
     /// What the panel is currently guiding (nil = no panel up). `appURL` nil = instruction mode.
     struct Job {
+        let id = UUID()
         let pane: Pane
         let appURL: URL?
     }
@@ -71,6 +72,7 @@ final class PermissionGuide {
     private var panel: PermissionDragPanel?
     private var pendingLaunchSourceFrame: CGRect?
     private var frontmostObserver: NSObjectProtocol?
+    private var onDrop: (() -> Void)?
 
     /// The panel's one-line instruction, mode-aware.
     var instruction: AttributedString {
@@ -91,8 +93,9 @@ final class PermissionGuide {
 
     /// Open the pane in System Settings and raise the floating companion panel. The launch
     /// animation flies from the current mouse location (the button the user just pressed).
-    func guide(_ pane: Pane, dragging appURL: URL?) {
+    func guide(_ pane: Pane, dragging appURL: URL?, onDrop: (() -> Void)? = nil) {
         close()
+        self.onDrop = onDrop
         job = Job(pane: pane, appURL: appURL)
         let mouse = NSEvent.mouseLocation
         pendingLaunchSourceFrame = CGRect(x: mouse.x - 16, y: mouse.y - 16, width: 32, height: 32)
@@ -122,6 +125,7 @@ final class PermissionGuide {
         panel?.close()
         panel = nil
         job = nil
+        onDrop = nil
         pendingLaunchSourceFrame = nil
         isDraggingApp = false
         if let frontmostObserver {
@@ -141,6 +145,13 @@ final class PermissionGuide {
     func setDragging(_ dragging: Bool) {
         isDraggingApp = dragging
         panel?.setDraggingPassthrough(dragging)
+    }
+
+    /// A completed copy into the tracked Settings window is progress, not a TCC grant.
+    func finishedDrag(jobID: UUID, at point: NSPoint, operation: NSDragOperation) {
+        guard job?.id == jobID, operation.contains(.copy),
+              tracker.currentFrame?.contains(point) == true else { return }
+        onDrop?()
     }
 
     /// Keep System Settings visually frontmost whenever the panel is poked (it's non-activating).

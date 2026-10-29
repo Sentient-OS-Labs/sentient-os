@@ -66,6 +66,35 @@ import UniformTypeIdentifiers
         let image: [String:Any] = ["type":"image","data":(bytes as Data).base64EncodedString()]
         let calls = Calls()
         let payload = try JSONSerialization.data(withJSONObject:["content":[["type":"text","text":"1 text " + marker],image]])
+        let nativeSetup = try await NativePermissionReadiness.helperSetup { tool, args in
+            precondition(tool == "get_app_state")
+            let target = try JSONSerialization.jsonObject(with: args) as? [String:String]
+            precondition(target == ["app":"com.apple.systempreferences"])
+            return payload
+        }
+        check(nativeSetup.isReady,"Successful helper setup accepts an actual app read and screenshot")
+        for invalid in [["content":[image]], ["content":[["type":"text","text":"Done"]]],
+                        ["content":[["type":"text","text":"  "],image]],
+                        ["isError":true,"content":[["type":"text","text":"Denied"],image]]] as [[String:Any]] {
+            let data = try JSONSerialization.data(withJSONObject:invalid)
+            do { _ = try await NativePermissionReadiness.helperSetup { _,_ in data };fatalError("Incomplete helper setup accepted") }
+            catch is NativeComputerUseFailure {count+=1}
+        }
+        for code in [-10009,-10014] {
+            let error = NativeComputerUseFailure.classify(["isError":true,"content":[["type":"text","text":"Computer Use server error \(code): permissionsNotGranted"]]])
+            check(error.requiresSystemPermissionSetup,"Typed native permission failure opens recovery")
+        }
+        for error in [NativeComputerUseFailure(kind:.permission,code:-10000,detail:.senderNotAuthenticated),
+                      .init(kind:.permission,code:nil,detail:.permissionDenied),
+                      .init(kind:.permission,code:-10009,detail:.approvalDenied),
+                      .init(kind:.permission,code:-10009,detail:.blockedByPolicy),
+                      .init(kind:.timeout,code:-10005,detail:.timeoutReached),
+                      .init(kind:.capture,code:nil,detail:.missingImage),
+                      .init(kind:.noWindows,code:nil,detail:.noWindowsAvailable)] {
+            check(!error.requiresSystemPermissionSetup,"Ordinary errors, approvals and policy never open permission setup")
+        }
+        check(NativeComputerUseFailure(kind:.permission,code:nil,detail:.permissionDenied,
+              systemDomain:"SCStreamErrorDomain",systemCode:-3801).requiresSystemPermissionSetup,"Exact screen permission denial opens recovery")
         let verified = try await NativePermissionReadiness.verify(app:"fixture.app",marker:marker,isCurrent:{true}) { tool,args in
             try await calls.observed(tool,arguments:args); return payload
         }

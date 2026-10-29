@@ -41,6 +41,16 @@ nonisolated struct CaptureDiagnostics: Sendable {
 }
 '''
 SUPPORT += r'''
+@MainActor final class NativePermissionSetup {
+    var canAttemptTask = false
+    static let shared = NativePermissionSetup()
+    var recoveryNeeded = false
+    var recovered = 0
+    private var generation = UUID()
+    func permissionFailed() -> UUID { generation = UUID(); recoveryNeeded = true; return generation }
+    func recovered(ifCurrent token: UUID) { if token == generation { recoveryNeeded = false; recovered += 1 } }
+}
+
 nonisolated enum ModelBackend: Sendable { case chatgpt; static let current = ModelBackend.chatgpt }
 
 nonisolated final class SidekickInteraction: Sendable {
@@ -65,6 +75,7 @@ nonisolated enum Permissions {
 SUPPORT += r'''
 @MainActor final class NativePermissionCheck {
     static let shared = NativePermissionCheck()
+    var isTearingDown = false
     var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
     var invalidations = 0
     func refresh() {}
@@ -74,7 +85,7 @@ SUPPORT += r'''
 }
 '''
 PEER = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys, time
+import json, os, pathlib, sys, time, struct, zlib, base64
 p = pathlib.Path(os.environ['TEST_RPC_STATE'])
 state = json.loads(p.read_text()) if p.exists() else {'opens': 0, 'calls': [], 'effects': 0, 'pids': []}
 state['opens'] += 1
@@ -100,9 +111,20 @@ for line in sys.stdin:
             state['dropped'] = True
             state['hang_start'] = scenario == 'hang_reconnect'
             save(); sys.exit(23)
+        if scenario.startswith('permission'): state['permission_scenario'] = scenario
         save()
         result = {'content': [{'type': 'text', 'text': 'Synthetic app state; generation ' + str(state['opens'])}]}
         if scenario == 'tool_error': result = {'isError': True, 'content': [{'type': 'text', 'text': 'Element is not settable'}]}
+        if scenario.startswith('permission'):
+            result = {'isError':True,'content':[{'type':'text','text':'Computer Use server error -10009: permissionsNotGranted'}]}
+        if args.get('app') == 'com.apple.systempreferences':
+            state['setup_calls'] = state.get('setup_calls',0)+1;save()
+            if state.get('permission_scenario') == 'permission_hang':time.sleep(30)
+            def chunk(kind,data):return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
+            png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',1,1,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(b'\0\xff\0\0\xff'))+chunk(b'IEND',b'')
+            result={'content':[{'type':'text','text':'Synthetic settings state'},{'type':'image','data':base64.b64encode(png).decode()}]}
+            if state.get('permission_scenario') == 'permission_dismissed':
+                result={'isError':True,'content':[{'type':'text','text':'Computer Use server error -10014: permissionsPending'}]}
     else: raise AssertionError(method)
     # Nullable protocol members must not turn a successful reply into a failure.
     print(json.dumps({'id': req['id'], 'result': result, 'error': None}), flush=True)
@@ -191,6 +213,42 @@ import Darwin
             check(Date().timeIntervalSince(began) < 4, "Stop cancels and drains session recovery promptly")
             let pids = try state(url)["pids"] as! [Int32]
             check(pids.allSatisfy { kill($0, 0) != 0 }, "No recovered session process survives Stop")
+        }
+        do {
+            let (server,url) = try await open("permission-action")
+            _ = try await server.respond(rpc(1))
+            let failed = try await server.respond(rpc(2,"type_text","permission_action"))
+            check(NativeComputerUseFailure.isError(try result(failed)),"Recovery never turns failed action into success")
+            check(try state(url)["effects"] as? Int == 1,"Action is not replayed after permission setup")
+            check(try state(url)["setup_calls"] as? Int == 1,"Confirmed permission denial opens helper setup once")
+            check(await MainActor.run { !NativePermissionSetup.shared.recoveryNeeded },"Valid helper response finishes recovery")
+            _ = try await server.respond(rpc(3,"get_app_state","permission_action"))
+            check(try state(url)["setup_calls"] as? Int == 1,"Repeated denial cannot loop helper windows in one task")
+            check(await MainActor.run { NativePermissionSetup.shared.recoveryNeeded },"Repeated denial keeps manual recovery available")
+            await server.stop()
+        }
+        do {
+            let (server,url) = try await open("permission-dismissed")
+            let failed = try await server.respond(rpc(1,"get_app_state","permission_dismissed"))
+            check(NativeComputerUseFailure.isError(try result(failed)),"Dismissed setup preserves original error")
+            check(await MainActor.run { NativePermissionSetup.shared.recoveryNeeded },"Dismissed setup never confirms grants")
+            check(try state(url)["setup_calls"] as? Int == 1,"No automatic loop after dismissed setup")
+            await server.stop()
+        }
+        do {
+            let (server,url) = try await open("permission-stop")
+            let pending = Task {try await server.respond(rpc(1,"get_app_state","permission_hang"))}
+            for _ in 0..<100 {
+                if try state(url)["setup_calls"] as? Int == 1 {break}
+                try await Task.sleep(for:.milliseconds(20))
+            }
+            check(try state(url)["setup_calls"] as? Int == 1,"Stop is tested while helper setup is pending")
+            let began=Date()
+            await server.stop();pending.cancel()
+            do {_ = try await pending.value;fatalError("Stopped permission setup returned success")}
+            catch is CancellationError {checks+=1}
+            check(Date().timeIntervalSince(began)<4,"Stop cancels helper setup promptly")
+            check(await MainActor.run { NativePermissionSetup.shared.recoveryNeeded },"Stopped setup cannot mark permissions ready")
         }
         print("PASS \(checks) real-process native session recovery assertions")
     }

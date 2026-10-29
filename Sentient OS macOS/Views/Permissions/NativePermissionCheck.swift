@@ -128,7 +128,8 @@ import Observation
 
     /// The operation is registered before its first await, including the cached-proof path.
     /// Additional waiters can leave without cancelling the check's original owner.
-    func check(configuration: OpenAIComputerUse.Configuration, helper: NSRunningApplication) async throws {
+    func check(configuration: OpenAIComputerUse.Configuration, helper: NSRunningApplication,
+               useHelperSetup: Bool = false) async throws {
         try Task.checkCancellation()
         let admittedEpoch = epoch
         var selectedHelper = helper
@@ -151,7 +152,7 @@ import Observation
             let ready = await validateProof(configuration: configuration, helper: currentHelper)
             try ensureOperation(id)
             if ready { return }
-            try await performCheck(configuration: configuration, attempt: id)
+            try await performCheck(configuration: configuration, attempt: id, useHelperSetup: useHelperSetup)
         }
         try await wait(for: task, id: id, owns: true)
         try ensureAdmission(admittedEpoch)
@@ -268,7 +269,8 @@ import Observation
         Analytics.signal("ComputerUse.permissionProofStage", parameters: fields)
     }
 
-    private func performCheck(configuration supplied: OpenAIComputerUse.Configuration, attempt: UUID) async throws {
+    private func performCheck(configuration supplied: OpenAIComputerUse.Configuration, attempt: UUID,
+                              useHelperSetup: Bool) async throws {
         try ensureOperation(attempt)
         let runtime = OpenAIComputerUseRuntime.shared
         guard let reservation = runtime.reserveDiagnostic() else { throw OpenAIComputerUse.RuntimeError.helperRunning }
@@ -309,33 +311,41 @@ import Observation
                     throw OpenAIComputerUse.RuntimeError.backendUnavailable
                 }
                 recordProofStage(stage, began: began, helperStable: helperStable)
-                stage = .windowActivation; began = Date()
-                let panel = NativePermissionCheckWindow()
-                panel.show()
-                defer { panel.close() }
-                try await panel.waitUntilCurrent()
-                recordProofStage(stage, began: began)
-                stage = .windowRead; began = Date()
-                let helperBuild = CodexRuntime.release.helperBuild
-                let result = try await NativePermissionReadiness.verify(app: Bundle.main.bundleURL.path,
-                    marker: panel.marker, isCurrent: { panel.isCurrent }, observe: { observation in
-                        // The value contains only enums, bounded counts and booleans. The task
-                        // emits analytics only and never participates in readiness ownership.
-                        Task { @MainActor in
-                            var fields = ["read_index": String(observation.readIndex),
-                                "elapsed_ms": String(observation.elapsedMilliseconds),
-                                "marker_observed": String(observation.markerObserved),
-                                "capture_validated": String(observation.captureValidated),
-                                "outcome": observation.outcome.rawValue,
-                                "helper_build": String(helperBuild)]
-                            if let current = observation.beforeCurrent { fields["window_current_before"] = String(current) }
-                            if let current = observation.afterCurrent { fields["window_current_after"] = String(current) }
-                            if let detail = observation.detail { fields["detail"] = detail.rawValue }
-                            Analytics.signal("ComputerUse.permissionProofRead", parameters: fields)
-                        }
-                    }, timedCall: { tool, arguments, remaining in
-                        try await session.call(tool, arguments: arguments, timeout: remaining)
-                    })
+                let result: NativePermissionReadiness.Snapshot
+                if useHelperSetup {
+                    stage = .windowRead; began = Date()
+                    result = try await NativePermissionReadiness.helperSetup { tool, arguments in
+                        try await session.call(tool, arguments: arguments)
+                    }
+                } else {
+                    stage = .windowActivation; began = Date()
+                    let panel = NativePermissionCheckWindow()
+                    panel.show()
+                    defer { panel.close() }
+                    try await panel.waitUntilCurrent()
+                    recordProofStage(stage, began: began)
+                    stage = .windowRead; began = Date()
+                    let helperBuild = CodexRuntime.release.helperBuild
+                    result = try await NativePermissionReadiness.verify(app: Bundle.main.bundleURL.path,
+                        marker: panel.marker, isCurrent: { panel.isCurrent }, observe: { observation in
+                            // The value contains only enums, bounded counts and booleans. The task
+                            // emits analytics only and never participates in readiness ownership.
+                            Task { @MainActor in
+                                var fields = ["read_index": String(observation.readIndex),
+                                    "elapsed_ms": String(observation.elapsedMilliseconds),
+                                    "marker_observed": String(observation.markerObserved),
+                                    "capture_validated": String(observation.captureValidated),
+                                    "outcome": observation.outcome.rawValue,
+                                    "helper_build": String(helperBuild)]
+                                if let current = observation.beforeCurrent { fields["window_current_before"] = String(current) }
+                                if let current = observation.afterCurrent { fields["window_current_after"] = String(current) }
+                                if let detail = observation.detail { fields["detail"] = detail.rawValue }
+                                Analytics.signal("ComputerUse.permissionProofRead", parameters: fields)
+                            }
+                        }, timedCall: { tool, arguments, remaining in
+                            try await session.call(tool, arguments: arguments, timeout: remaining)
+                        })
+                }
                 recordProofStage(stage, began: began)
                 stage = .commit; began = Date()
                 let usable = await session.isUsable()

@@ -48,6 +48,7 @@ struct SentientAppPermissionRows: View {
     let screen: Bool
     var accessibilityTitle = "Accessibility (act in your apps)"
     var accessibilityTip = "Lets Sentient read windows and act inside your apps in the background."
+    var onPermissionChange: (() -> Void)?
 
     var body: some View {
         SettingsGroup(label: "Sentient Permissions") {
@@ -59,6 +60,7 @@ struct SentientAppPermissionRows: View {
                                tip: accessibilityTip,
                                fixTitle: "Allow…") {
                         guard !accessibility else { return }
+                        onPermissionChange?()
                         PermissionGuide.shared.guide(.accessibility, dragging: Bundle.main.bundleURL)
                     }
                 }
@@ -68,6 +70,7 @@ struct SentientAppPermissionRows: View {
                            tip: PrivacyCopy.screenCapture,
                            fixTitle: "Allow…") {
                     guard !screen else { return }
+                    onPermissionChange?()
                     // Sentient may not be in Tahoe's list yet. The guide carries its app bundle.
                     PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
                 }

@@ -76,8 +76,15 @@ nonisolated struct CaptureDiagnostics: Sendable {
 }
 '''
 SUPPORT += r'''
+@MainActor final class NativePermissionSetup {
+    var canAttemptTask = false
+    static let shared=NativePermissionSetup()
+    func permissionFailed()->UUID {UUID()}
+    func recovered(ifCurrent token:UUID) {}
+}
 @MainActor final class NativePermissionCheck {
     static let shared = NativePermissionCheck()
+    var isTearingDown = false
     var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
     var invalidations = 0
     func refresh() {}
@@ -143,6 +150,18 @@ import Foundation
             check(await script.closes == 0 && ComputerUseDoctor.shared.started == 0,
                   "Permission guidance never resets the connection or starts a diagnostic")
             Permissions.screen = true; Permissions.tcc = .granted; Permissions.automation = .granted
+            await s.stop()
+        }
+        do {
+            let (s,script,_) = try await server()
+            NativePermissionSetup.shared.canAttemptTask = true
+            NativePermissionCheck.shared.snapshot = .init()
+            for _ in 0..<3 { _ = try await invoke(s,"list_apps") }
+            check(try status(await invoke(s,"diagnose_computer_use"))["status"] as? String == "needs_confirmation",
+                  "Confirmed post-restart setup can still request a consented diagnostic")
+            check(await script.closes == 0 && ComputerUseDoctor.shared.started == 0,
+                  "Workflow admission never bypasses diagnostic consent")
+            NativePermissionSetup.shared.canAttemptTask = false
             await s.stop()
         }
         do {
