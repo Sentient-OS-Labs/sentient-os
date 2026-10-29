@@ -209,7 +209,20 @@ begin
     insert into public.hosted_inference_daily(principal_id,day) values(principal,today) on conflict do nothing;
     select * into d from public.hosted_inference_daily where principal_id = principal and day = today for update;
     error_details := public.hosted_inference_snapshot(principal,at_time,r.id);
-    if operation = 'usage' then return error_details; end if;
+    if operation = 'usage' then
+        if not p.enabled or least(p.user_daily_microusd,p.global_daily_microusd,p.global_monthly_microusd)<=0 then
+            return jsonb_build_object('error','service_disabled','status',503,'details',error_details);
+        end if;
+        select charged_microusd into global_day from public.hosted_inference_global where bucket='day:'||today::text;
+        select charged_microusd into global_month from public.hosted_inference_global where bucket='month:'||month_key;
+        if coalesce(global_day,0)>=p.global_daily_microusd or coalesce(global_month,0)>=p.global_monthly_microusd then
+            return jsonb_build_object('error','service_budget_reached','status',503,'details',error_details);
+        end if;
+        if d.charged_microusd>=p.user_daily_microusd then
+            return jsonb_build_object('error','usage_limit_reached','status',429,'details',error_details);
+        end if;
+        return error_details;
+    end if;
 
     -- Settlement is allowed after cancellation, expiration, midnight and a service kill switch.
     if operation = 'settle' then

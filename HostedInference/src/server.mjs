@@ -22,7 +22,8 @@ if (fixture) {
   const services = await createFixture({ budgetMicrousd: testBudget });
   database = services.db;
   handler = createGateway({ ...services, config: live ? readProductionConfig(process.env) : fixtureConfig,
-    upstream: live ? fetch : mockUpstream });
+    upstream: live ? fetch : mockUpstream, debugShapes: true,
+    observe: event => process.stdout.write(JSON.stringify(event) + '\n') });
   process.stdout.write(`Fixture authentication: ${fixtureJWT}\n`);
 } else {
   // Validate configuration before listening. Production mode also requires persistent Supabase.

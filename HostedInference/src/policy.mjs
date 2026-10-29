@@ -38,14 +38,19 @@ export function prepareMessage(body, model, config) {
   }
   // Shared provider credentials must never grant access to another request's provider-side
   // files or a remote URL. Tools may return only inline content through this gateway.
-  const inspect = value => {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) { value.forEach(inspect); return; }
-    if (value.file_id !== undefined || value.type === 'container_upload' || value.type === 'url'
-      || value.type === 'file') throw new ServiceError('remote_content_not_allowed');
-    for (const item of Object.values(value)) inspect(item);
+  const inspect = content => {
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      if (block.type === 'container_upload' || block.type === 'image' && block.source?.type !== 'base64'
+        || block.type === 'document' && !['base64','text'].includes(block.source?.type)) {
+        throw new ServiceError('remote_content_not_allowed');
+      }
+      if (block.type === 'tool_result') inspect(block.content);
+      // Tool-use arguments are application data, not provider resource references.
+    }
   };
-  inspect(body.messages);
+  for (const entry of body.messages) inspect(entry?.content);
   inspect(body.system);
   if (body.thinking?.budget_tokens !== undefined && (!Number.isSafeInteger(body.thinking.budget_tokens) || body.thinking.budget_tokens < 0 || body.thinking.budget_tokens > body.max_tokens)) {
     throw new ServiceError('thinking_limit_exceeded');

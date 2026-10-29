@@ -8,9 +8,10 @@ const encoder = new TextEncoder();
 const responseJSON = body => Response.json(body, { headers: { 'cache-control': 'no-store' } });
 const jsonHeaders = { 'content-type': 'application/json' };
 
-export function createGateway({ ledger, authenticate, config, upstream = fetch, observe = () => {} }) {
+export function createGateway({ ledger, authenticate, config, upstream = fetch, observe = () => {}, debugShapes = false }) {
   validateConfiguration(config);
   if (!ledger?.call || !authenticate) throw new Error('A ledger and token validator are required');
+  const snapshotResponse = body => responseJSON({ ...body, maximum_output_tokens: config.maximumOutputTokens });
   const credentials = async request => {
     const token = bearer(request, { allowAPIKey: true });
     if (!/^hrt_[a-f0-9]{64}$/.test(token)) throw new ServiceError('authentication_required', 401);
@@ -44,7 +45,7 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
       if (path === '/health' && request.method === 'GET') return responseJSON({ status: 'ok' });
       if (path === '/v1/usage' && request.method === 'GET') {
         const principal_id = await authenticate(bearer(request));
-        return responseJSON(await ledger.call('usage', { principal_id }));
+        return snapshotResponse(await ledger.call('usage', { principal_id }));
       }
       if (path === '/v1/runs' && request.method === 'POST') {
         const principal_id = await authenticate(bearer(request));
@@ -53,18 +54,19 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
         const run_token = randomToken();
         const run = await ledger.call('create', { principal_id, purpose: body.purpose,
           token_hash: await digest(run_token), model: config.model });
-        return responseJSON({ ...run, run_token });
+        return snapshotResponse({ ...run, run_token });
       }
       const control = path.match(/^\/v1\/runs\/([a-f0-9-]{36})\/(heartbeat|pause|resume|finish)$/i);
       if (control && request.method === 'POST') {
         const auth = await credentials(request);
         const body = request.body ? await boundedJSON(request, 4096) : {};
         if (Object.keys(body).length) throw new ServiceError('invalid_request');
-        return responseJSON(await ledger.call(control[2], { ...auth, run_id: control[1] }));
+        return snapshotResponse(await ledger.call(control[2], { ...auth, run_id: control[1] }));
       }
       if ((path === '/v1/models' && request.method === 'GET') || (path === '/v1/messages/count_tokens' && request.method === 'POST')) {
         const auth = await credentials(request);
         const run = await ledger.call('probe', auth);
+        if (run.model !== config.model) throw new ServiceError('model_configuration_changed', 409);
         if (path === '/v1/models') return responseJSON({ data: [{ id: run.model, type: 'model', display_name: run.model }],
           has_more: false, first_id: run.model, last_id: run.model });
         const body = await boundedJSON(request, config.maximumBodyBytes);
@@ -77,7 +79,13 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
       if (path !== '/v1/messages' || request.method !== 'POST') throw new ServiceError('not_found', 404);
       const auth = await credentials(request);
       const run = await ledger.call('inspect', auth);
+      if (run.model !== config.model) throw new ServiceError('model_configuration_changed', 409);
       const body = await boundedJSON(request, config.maximumBodyBytes);
+      if (debugShapes) {
+        const name = value => typeof value === 'string' && /^[A-Za-z0-9_]{1,80}$/.test(value) ? value : '[other]';
+        observe({ event: 'fixture_request_shape', keys: Object.keys(body).map(name),
+          tool_types: Array.isArray(body.tools) ? [...new Set(body.tools.map(tool => name(tool.type ?? 'custom')))] : [] });
+      }
       const prepared = prepareMessage(body, run.model, config);
       const inputHash = await digest(JSON.stringify(prepared.body));
       // CLI SDKs do not all expose idempotency headers. Identical messages in the same run
