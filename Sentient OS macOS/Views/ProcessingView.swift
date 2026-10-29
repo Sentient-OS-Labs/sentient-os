@@ -501,7 +501,12 @@ struct ProcessingView: View {
                 if kind == .loggedOut {
                     Button("Retry") { session.retry() }
                         .buttonStyle(.bordered).tint(.white)
-                    if ModelBackend.current == .claude {
+                    if ModelBackend.current == .sentient {
+                        Button("Manage Sentient") {
+                            MainNavigation.shared.show(.settings, settingsPane: .frontierModel)
+                        }
+                        .buttonStyle(.borderedProminent).tint(.white)
+                    } else if ModelBackend.current == .claude {
                         Button("Sign in to Claude") { loginStarted = true; claude.startLogin(force: true) }
                             .buttonStyle(.borderedProminent).tint(.white)
                             .disabled(claude.loggingIn)
@@ -530,14 +535,18 @@ struct ProcessingView: View {
         // once the sign-in lands, no confirm button); the moment it reads logged-in, retry the
         // cycle on our own. Leaving the failed state cancels the poll.
         .task(id: loginStarted) {
-            guard loginStarted else { return }
-            let isClaude = ModelBackend.current == .claude
-            while !Task.isCancelled, !(isClaude ? claude.loggedIn : codex.loggedIn) {
+            let backend = ModelBackend.current
+            guard loginStarted, backend == .chatgpt || backend == .claude else { return }
+            let isClaude = backend == .claude
+            while !Task.isCancelled, ModelBackend.current == backend,
+                  !(isClaude ? claude.loggedIn : codex.loggedIn) {
                 try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled, ModelBackend.current == backend else { return }
                 if isClaude { await claude.refreshLoginStatus() }
                 else { await codex.refreshLoginStatus() }
             }
-            guard !Task.isCancelled, (isClaude ? claude.loggedIn : codex.loggedIn) else { return }
+            guard !Task.isCancelled, ModelBackend.current == backend,
+                  (isClaude ? claude.loggedIn : codex.loggedIn) else { return }
             loginStarted = false
             // Unstructured on purpose: the retry flips state out of .failed, which tears THIS
             // task down — the run must survive that.
@@ -546,6 +555,13 @@ struct ProcessingView: View {
     }
 
     private static func failTitle(_ kind: OvernightCaution.Kind?) -> String {
+        if ModelBackend.current == .sentient {
+            switch kind {
+            case .loggedOut: return "Sentient needs to reconnect"
+            case .usageLimit: return "Hosted usage is temporarily limited"
+            default: break
+            }
+        }
         let claude = ModelBackend.current == .claude
         return switch kind {
         case .loggedOut:      claude ? "Claude isn't signed in" : "Codex isn't logged in"
@@ -562,6 +578,19 @@ struct ProcessingView: View {
     /// Classified failures get a friendly, actionable line (the raw detail is in the log +
     /// Sentry); unclassified ones show the step's own message, as before.
     private static func failBody(kind: OvernightCaution.Kind?, message: String) -> String {
+        if ModelBackend.current == .sentient {
+            switch kind {
+            case .loggedOut:
+                return "Reconnect in Frontier Model Choice, then retry. Your saved knowledge stays on this Mac. No ChatGPT or Claude sign-in is needed."
+            case .usageLimit:
+                return "Hosted knowledge work has its own allowance and service limits. Check Frontier Model Choice for your connection and usage, then retry when available. Your saved knowledge stays on this Mac."
+            case .inputTooLarge:
+                return "This batch exceeded the hosted model’s request limit. Your saved knowledge stays on this Mac. Try again after updating Sentient."
+            case .connectorAuth:
+                return "A connected service needs attention. Reconnect it in Knowledge Sources, then retry."
+            default: break
+            }
+        }
         let claude = ModelBackend.current == .claude
         return switch kind {
         case .loggedOut:      claude

@@ -5,11 +5,12 @@
 import Foundation
 
 nonisolated enum FrontierEngineTab: String, CaseIterable, Identifiable {
-    case chatgpt, claude, openRouter, lmStudio, custom
+    case sentient, chatgpt, claude, openRouter, lmStudio, custom
     var id: Self { self }
 
     init(backend: ModelBackend, preset: CustomProvider.Preset) {
         switch backend {
+        case .sentient: self = .sentient
         case .chatgpt: self = .chatgpt
         case .claude: self = .claude
         case .custom:
@@ -23,6 +24,7 @@ nonisolated enum FrontierEngineTab: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .sentient: return "Sentient"
         case .chatgpt: return "ChatGPT Subscription"
         case .claude: return "Claude Subscription"
         case .openRouter: return "OpenRouter"
@@ -33,7 +35,8 @@ nonisolated enum FrontierEngineTab: String, CaseIterable, Identifiable {
 
     var badge: String? {
         switch self {
-        case .chatgpt: return "recommended"
+        case .sentient: return "free"
+        case .chatgpt: return nil
         case .claude: return "beta"
         case .lmStudio, .custom: return "local"
         case .openRouter: return nil

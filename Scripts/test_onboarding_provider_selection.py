@@ -77,6 +77,15 @@ import Foundation
     func refreshLoginStatus() async { loginChecks += 1; await refresh() }
 }
 
+@MainActor final class HostedFixture {
+    var configured = true
+    var ready = true
+    var status: String?
+    var calls = 0
+    var succeeds = true
+    func prepare() async -> Bool { calls += 1; return succeeds }
+}
+
 @MainActor final class Gate {
     var entered = false
     private var continuation: CheckedContinuation<Void, Never>?
@@ -90,6 +99,7 @@ import Foundation
 @MainActor final class OnboardingFixture {
     let codex = SetupFixture()
     let claude = SetupFixture()
+    let sentient = HostedFixture()
     var observesChanges = true
     var backendRaw = "chatgpt" { didSet { if observesChanges { cancelContinue() } } }
     var presetRaw = "openrouter" { didSet { if observesChanges { cancelContinue() } } }
@@ -132,6 +142,7 @@ __METHODS__
         // Claude can be committed by Continue once signed in. Other choices
         // still require their own active identity, including custom presets.
         let states: [(ModelBackend, CustomProvider.Preset, FrontierEngineTab)] = [
+            (.sentient, .openRouter, .sentient),
             (.chatgpt, .openRouter, .chatgpt), (.claude, .openRouter, .claude),
             (.custom, .openRouter, .openRouter), (.custom, .lmStudio, .lmStudio),
             (.custom, .custom, .custom)
@@ -143,6 +154,22 @@ __METHODS__
                 flow.backendRaw = backend.rawValue; flow.presetRaw = preset.rawValue; flow.tab = visible
                 check(flow.ready == (visible == .claude || visible == expected), "Wrong readiness for visible provider")
             }
+        }
+
+        let hosted = OnboardingFixture()
+        hosted.backendRaw = "sentient"; hosted.tab = .sentient
+        hosted.codex.loggedIn = false; hosted.claude.loggedIn = false
+        hosted.tapContinue(); await hosted.continueTask?.value
+        check(hosted.advances == 1 && hosted.sentient.calls == 1, "Hosted selection did not prepare and advance")
+        check(hosted.codex.loginChecks == 0 && hosted.claude.loginChecks == 0,
+              "Hosted Continue requested a subscription login")
+        for unavailable in ["configuration", "setup"] {
+            let hosted = OnboardingFixture()
+            hosted.backendRaw = "sentient"; hosted.tab = .sentient
+            hosted.sentient.configured = unavailable != "configuration"
+            hosted.sentient.ready = unavailable != "setup"
+            hosted.tapContinue()
+            check(!hosted.ready && hosted.continueTask == nil, "Unavailable hosted selection advanced")
         }
 
         // The reported workaround: commit Claude, return to the ChatGPT panel,

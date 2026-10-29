@@ -22,10 +22,11 @@ struct ProactivePane: View {
     @AppStorage(ComputerUseSpeed.key) private var speedRaw = ComputerUseSpeed.faster.rawValue
     /// The slider drives the subscription engines (ChatGPT and Claude); a custom frontier model
     /// carries ONE reasoning level set in Frontier Model Choice (provider quirks make per-run
-    /// tuning unsafe there), so only .custom locks it.
+    /// tuning unsafe there). Sentient's hosted service manages its own model and effort.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
-    private var sliderLive: Bool { (ModelBackend(rawValue: backendRaw) ?? .chatgpt) != .custom }
+    private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
+    private var sliderLive: Bool { backend == .chatgpt || backend == .claude }
 
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick",
@@ -70,7 +71,9 @@ struct ProactivePane: View {
                             .opacity(sliderLive ? 1 : 0.4)
                         SettingsProse(sliderLive
                             ? "Faster for everyday tasks. Smarter for the tricky ones."
-                            : "Your custom model uses the reasoning level set in Frontier Model Choice.")
+                            : backend == .sentient
+                                ? "Sentient selects the supported model for covered inference. View your allowance in Frontier Model Choice."
+                                : "Your custom model uses the reasoning level set in Frontier Model Choice.")
                     }
                 }
 

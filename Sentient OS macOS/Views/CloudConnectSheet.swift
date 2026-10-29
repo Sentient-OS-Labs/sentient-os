@@ -60,7 +60,11 @@ struct CloudConnectSheet: View {
                 .foregroundStyle(Theme.Ink.statusInk)
                 .padding(.top, 18)
 
-            if !selected {
+            if backend == .sentient {
+                Text("This connection uses a ChatGPT or Claude subscription. With Sentient, use Apple Mail or Apple Calendar, or choose a supported direct connection in Knowledge Sources.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).padding(.top, 14)
+            } else if !selected {
                 Text(openedConnectorPage
                      ? "Connect \(service.title) to your \(backend == .claude ? "Claude" : "ChatGPT") account, and then come back to Sentient."
                      : "Sentient reads through your \(backend == .claude ? "Claude" : "ChatGPT") connector. Enable it and sign in on that page, then press Done.")
@@ -69,13 +73,13 @@ struct CloudConnectSheet: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
 
-            if selected && (backend == .custom || CodexAuth.connectorsLocked) {
+            if selected && (!backend.hasSubscriptionConnectors || CodexAuth.connectorsLocked) {
                 Text("This selected source is unavailable with your current AI. You can stop reading it here or choose a supported connection.")
                     .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).padding(.top, 14)
             }
             connectButton.padding(.top, 26)
-                .disabled(backend == .custom || CodexAuth.connectorsLocked)
+                .disabled(!backend.hasSubscriptionConnectors || CodexAuth.connectorsLocked)
             if selected {
                 stopLink.padding(.top, 18)
             }
@@ -98,7 +102,7 @@ struct CloudConnectSheet: View {
     }
 
     private func openConnectorPage() {
-        guard ModelBackend.current == backend, backend != .custom else { dismiss(); return }
+        guard ModelBackend.current == backend, backend.hasSubscriptionConnectors else { dismiss(); return }
         if NSWorkspace.shared.open(service.connectorURL) {
             openedConnectorPage = true
             HostedConnectorSetup.settingsOpened(slug: service.slug, backend: backend)
@@ -130,6 +134,7 @@ struct CloudConnectSheet: View {
     }
 
     private func done() {
+        guard backend.hasSubscriptionConnectors else { dismiss(); return }
         let firstConnection = !connected
         guard HostedConnectorSetup.confirm(slug: service.slug, backend: backend,
             reconnected: openedConnectorPage) else { dismiss(); return }

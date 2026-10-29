@@ -19,6 +19,7 @@ struct HealthPane: View {
     @Environment(AppState.self) private var appState: AppState?
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
+    @State private var sentient = SentientSetup.shared
     private var computerGate: ComputerUseGate { .shared }
     /// The live frontier-model choice — observed so switching engines re-renders the pane's
     /// engine group in place.
@@ -57,6 +58,7 @@ struct HealthPane: View {
     private var engineAllGreen: Bool {
         guard ComputerUseSetup.current.ready, computerGate.allRequiredGranted else { return false }
         switch backend {
+        case .sentient: return sentient.configured && sentient.ready
         case .chatgpt: return codex.installed && !codex.outdated
                            && codex.loggedIn
         case .claude:  return claude.installed && claude.loggedIn && codex.installed && !codex.outdated
@@ -103,6 +105,7 @@ struct HealthPane: View {
                             SettingsGroup(label: engineSummaryLabel) { engineSummaryLine }
                         } else {
                             switch backend {
+                            case .sentient:         sentientSetupGroup
                             case .chatgpt, .custom: codexSetupGroup
                             case .claude:           claudeSetupGroup
                             }
@@ -369,11 +372,11 @@ struct HealthPane: View {
     // it — a one-way door per visit, so the detail view never carries an extra clutter line)
 
     private var engineSummaryLabel: String {
-        backend == .claude ? "Claude" : "Codex"
+        backend == .sentient ? "Sentient" : backend == .claude ? "Claude" : "Codex"
     }
 
     private var engineSummaryText: String {
-        backend == .claude ? "Claude is all good." : "Codex is all good."
+        backend == .sentient ? "Sentient is ready." : backend == .claude ? "Claude is all good." : "Codex is all good."
     }
 
     private var engineSummaryLine: some View {
@@ -444,6 +447,24 @@ struct HealthPane: View {
         }
     }
 
+    private var sentientSetupGroup: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SentientInferencePanel()
+            SettingsGroup(label: "Local runtimes") {
+                VStack(alignment: .leading, spacing: 2) {
+                    StatusLine(title: "Claude Code runtime",
+                               health: claude.installing ? .warn : (claude.installed ? .ok : .bad),
+                               note: claude.installed ? "installed" : "not installed",
+                               tip: "Runs your selected AI through Sentient’s hosted service. A Claude subscription login is not required.",
+                               fixTitle: "Set up…",
+                               fix: sentient.preparing ? nil : { Task { _ = await sentient.prepare() } })
+                    codexCLIRow
+                    computerUseRow
+                }
+            }
+        }
+    }
+
     // MARK: - SET UP CLAUDE (the Claude backend's twin — Claude Code CLI · account · computer use)
 
     private var claudeSetupGroup: some View {
@@ -474,12 +495,14 @@ struct HealthPane: View {
     }
 
     @ViewBuilder private var codexCLIRow: some View {
-        StatusLine(title: backend == .claude ? "Codex CLI for computer use" : "Codex CLI",
+        StatusLine(title: backend == .claude || backend == .sentient ? "Codex CLI for computer use" : "Codex CLI",
                    health: codex.installing ? .warn : (codex.computerUseReady && !codex.outdated ? .ok : .bad),
                    note: codex.installing ? "preparing…" : !codex.installed ? "not installed"
                        : codex.outdated || !codex.computerUseReady ? "needs an update"
                        : (codex.version.map { "installed · \($0)" } ?? "installed"),
-                   tip: backend == .claude
+                   tip: backend == .sentient
+                       ? "Runs Sidekick’s computer actions on this Mac. Sentient covers inference; no ChatGPT or Claude subscription login is required."
+                       : backend == .claude
                        ? "Runs Sidekick's computer actions using your Claude subscription. A ChatGPT account is not required."
                        : "Sentient’s verified copy of Codex, using your selected frontier model. New versions arrive with Sentient updates. Repair preserves your login and saved tasks.",
                    fixTitle: codex.installed ? "Repair…" : "Install…",
@@ -542,6 +565,8 @@ struct HealthPane: View {
         // Custom backends keep the codex CLI probe (codex is their harness) but skip the login
         // check — no ChatGPT account is needed there.
         switch backend {
+        case .sentient:
+            await sentient.refresh()
         case .chatgpt:
             await codex.refreshInstalled()
             plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)

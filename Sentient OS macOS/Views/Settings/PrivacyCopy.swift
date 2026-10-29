@@ -24,7 +24,11 @@ enum PrivacyCopy {
     static let screenCapture = "Lets Sidekick and Double Tap understand the screen you’re asking about. Sidekick uses your selected AI. Double Tap uses its own drafting provider, including Sentient’s OpenAI API route with Zero Data Retention by default."
     static let voiceInput = "Privacy-focused voice input, using Apple’s on-device speech recognition where supported. Your words become a Sidekick request."
     static let frontierSummary = "Your Mac understands your local sources. Your chosen AI organizes that knowledge and helps get things done."
-    static let frontierDetail = "Sentient’s on-device model prepares useful summaries from your local sources. Choose the AI that organizes your knowledge, prepares proactive suggestions, and powers Sidekick: your ChatGPT or Claude account, OpenRouter, or a compatible local model."
+    static let frontierDetail = "Sentient’s on-device model prepares useful summaries from your local sources. Choose the AI that organizes your knowledge, prepares proactive suggestions, and powers Sidekick: free hosted inference from Sentient, your ChatGPT or Claude account, OpenRouter, or a compatible local model."
+    static let sentientInference = "Sentient covers Anthropic inference for your knowledge, morning suggestions, and Sidekick. No ChatGPT or Claude subscription or API key is needed. Your knowledge stays in a folder on this Mac."
+    static let sentientContext = "The context needed for each task passes through Sentient’s service to Anthropic. This can include summaries, knowledge notes, your instructions, and screen or app content. Enabled email research and connected services can supply actual message text. Anthropic’s API retention policies apply. Double Tap has separate provider and data settings."
+    static let sentientLimits = "Sidekick includes up to 60 active minutes each day. Waiting for your reply does not count. Knowledge work has its own allowance. Additional usage and service limits apply, so a task can reach a limit before all 60 minutes are used. Your current allowance and reset time appear here when connected."
+    static let sentientIdentity = "A separate anonymous installation credential connects this Mac to covered inference and its usage limits. No separate sign-in is required. Your optional knowledge-sharing link and contact email stay separate."
     static let customProvider = "Apple Mail and Apple Calendar work with your chosen model, without a ChatGPT or Claude subscription. Hosted Gmail and Google Calendar connectors use a supported subscription account. Double Tap and optional knowledge sharing have their own settings."
     static let conversationSources = "Analyzed on this Mac by Sentient’s on-device model. Your chosen AI uses the useful summaries. Double Tap’s one-time writing examples use only the chats you select."
     static let emailSources = "Apple Mail and Apple Calendar are analyzed on this Mac. If you enable email reads for proactive suggestions, your chosen AI also receives actual Mail message text. Other services use the connections you choose; your selected AI puts their context to work."
@@ -57,10 +61,17 @@ enum PrivacyCopy {
             noSale,
         ]),
         Section(id: "providers", title: "Your AI, your choice.", paragraphs: [
-            "Use your own ChatGPT or Claude account, a compatible API provider such as OpenRouter, or a supported larger local model for knowledge organization, proactive intelligence, and Sidekick. Apple Mail and Calendar work without a ChatGPT or Claude subscription. Model capabilities and hardware needs depend on your setup.",
+            "Choose free hosted inference from Sentient, your own ChatGPT or Claude account, a compatible API provider such as OpenRouter, or a supported larger local model for knowledge organization, proactive intelligence, and Sidekick. Apple Mail and Calendar work without a ChatGPT or Claude subscription. Model capabilities and hardware needs depend on your setup.",
             "Sidekick uses your request, relevant knowledge, and screen or app context to carry out your task. Cloud models process this context under your chosen provider’s account settings, training choices, and retention policies. Double Tap has its own provider setting.",
             "Sidekick keeps your last 15 requests, task statuses, and recovery errors on this Mac. Relevant task history may be included as context for your next Sidekick task and processed by your chosen AI.",
             "Connected services use the connections you authorize. Direct connections keep their credentials in your Mac’s Keychain; hosted connections use your own supported AI account. You do not need to create a separate Sentient account or login.",
+        ]),
+        Section(id: "sentient-inference", title: "Hosted inference, covered by Sentient.", paragraphs: [
+            sentientInference,
+            sentientContext,
+            sentientLimits,
+            sentientIdentity,
+            "Sentient records usage and operational metadata to enforce allowances and operate the service. Optional knowledge sharing remains a separate choice; turning it off does not turn off hosted inference. Choose another frontier model to stop using Sentient’s hosted inference for new tasks.",
         ]),
         Section(id: "double-tap", title: "Fast replies, with privacy built in.", paragraphs: [
             "To keep Double Tap responsive, we use a low-latency OpenAI API route with Zero Data Retention and cover the cost for our first users. With this route, a screenshot of the display under your pointer, your knowledge base including selected one-time writing-style examples, and your instructions pass through Sentient’s relay to generate an unsent draft for you to review.",

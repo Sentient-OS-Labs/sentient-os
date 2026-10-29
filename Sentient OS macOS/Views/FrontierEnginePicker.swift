@@ -2,14 +2,14 @@
 //  FrontierEnginePicker.swift
 //  Sentient OS macOS
 //
-//  The shared frontier-engine picker — the five engine pills (EngineTab) over each engine's
+//  The shared frontier-engine picker: six choices over each engine's
 //  setup panel, rendered identically by Settings → Frontier Model Choice and onboarding's
 //  choose-your-frontier-model step. Shares its visible tab with the host and owns the endpoint fields
 //  (ModelBackend/CustomProvider — the one source of truth), Test & Select (vision-gated
-//  activation: an unproven model can never become the engine), and the honest local-models
+//  activation: an unproven model can never become the engine), and the local-models
 //  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
-//  onboarding embeds the live codex login. Layout knob: Settings' fixed 3+2 grid, or
-//  onboarding's single centered row. Deep doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
+//  onboarding embeds the live codex login. A fixed three-column grid keeps all six choices
+//  within the same content measure. Doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
 //
 
 import SwiftUI
@@ -17,9 +17,8 @@ import SwiftUI
 struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     @Environment(\.settingsFormStyle) private var formStyle
 
-    /// Settings' fixed two-row grid (3 + 2 — a scrollbar appearing must never reflow the strip,
-    /// the jumpy-rewrap of 2026-07-24), or onboarding's single centered row of five.
-    enum Layout { case settingsGrid, singleRow }
+    /// Settings aligns the grid to its content edge; onboarding centers it.
+    enum Layout { case settingsGrid, onboardingGrid }
 
     typealias Tab = FrontierEngineTab
 
@@ -54,6 +53,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     @Binding private var tab: Tab
     @State private var claude = ClaudeSetup.shared
+    @State private var sentient = SentientSetup.shared
     @State private var claudePreparationTask: Task<Void, Never>?
     @State private var apiKey = ""
     @State private var showLocalWarning = false
@@ -73,11 +73,12 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: layout == .singleRow ? .center : .leading, spacing: 26) {
+        VStack(alignment: layout == .onboardingGrid ? .center : .leading, spacing: 26) {
             tabStrip
 
             Group {
                 switch tab {
+                case .sentient:   SentientInferencePanel()
                 case .chatgpt:    chatgptPanel()
                 case .claude:     claudePanel
                 case .openRouter: endpointPanel(for: .openRouter)
@@ -117,21 +118,12 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 ForEach(Tab.allCases) { pill($0) }
             }
         } else {
-            Group {
-                switch layout {
-                case .settingsGrid:
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            pill(.chatgpt); pill(.claude); pill(.openRouter)
-                        }
-                        HStack(spacing: 8) {
-                            pill(.lmStudio); pill(.custom)
-                        }
-                    }
-                case .singleRow:
-                    HStack(spacing: 8) {
-                        ForEach(Tab.allCases) { pill($0) }
-                    }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    pill(.sentient); pill(.chatgpt); pill(.claude)
+                }
+                HStack(spacing: 8) {
+                    pill(.openRouter); pill(.lmStudio); pill(.custom)
                 }
             }
             .fixedSize()
@@ -150,6 +142,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// onboarding: logged in).
     private func isActiveEngineHealthy(_ t: Tab) -> Bool {
         switch t {
+        case .sentient: return sentient.ready && sentient.configured
         case .chatgpt: return chatgptHealthy
         case .claude:  return claude.loggedIn
         default:       return CustomProvider.current.isUsable
