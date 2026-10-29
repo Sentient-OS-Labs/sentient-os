@@ -287,12 +287,14 @@ actor ClaudeSubscriptionBridge {
     }
 
     private func launch(_ payload: [String: Any]) throws {
+        let webInstructions = hostedEnvironment == nil
+            ? "Use your built-in WebSearch and WebFetch tools for web research, and the relay tools for app and file actions."
+            : "Use the advertised native browser tools for web research. Built-in WebSearch and WebFetch are unavailable in this hosted run."
         let system = (payload["instructions"] as? String ?? Wire.instructions) + """
 
         The sentient_relay MCP tools correspond to this Codex client's tools. Codex executes
         them and supplies the actual results. Use only the advertised tools for the user's task.
-        Use your built-in WebSearch and WebFetch tools for web research, and the relay tools
-        for app and file actions. You can alternate between them throughout the same task.
+        \(webInstructions) You can alternate research and app actions throughout the same task.
         Prefer set_value for editable text fields; verify accents, emoji, and other Unicode text.
         Never infer success from an attempted call. Do not obtain credentials or change permissions.
         """
@@ -301,8 +303,8 @@ actor ClaudeSubscriptionBridge {
         let input = try Wire.initialInput(payload)
         var arguments = ["-p", "--model", model, "--effort", effort,
             "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "dontAsk", "--tools", "WebSearch,WebFetch",
-            "--allowedTools", "mcp__sentient_relay__*", "WebSearch", "WebFetch",
+            "--permission-mode", "dontAsk", "--tools", hostedEnvironment == nil ? "WebSearch,WebFetch" : "",
+            "--allowedTools", hostedEnvironment == nil ? "mcp__sentient_relay__*,WebSearch,WebFetch" : "mcp__sentient_relay__*",
             "--strict-mcp-config", "--mcp-config", directory.appendingPathComponent("mcp.json").path,
             "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence",
             "--system-prompt-file", systemFile.path]

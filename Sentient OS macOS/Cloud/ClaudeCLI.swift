@@ -468,9 +468,11 @@ actor ClaudeCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
+        var inv = inv.canonicalConnectorTargets()
+        // Paid server-side web tools have no hosted pricing/authorization contract yet.
+        if ModelBackend.current == .sentient { inv.webSearch = false }
         try ResearchToolServer.validateInvocation(inv)
         try HostedVaultToolServer.validateInvocation(inv)
-        let inv = inv.canonicalConnectorTargets()
         let direct = DirectMCPRuntime.current
         if ModelBackend.current == .sentient {
             let targets = inv.mcpReadConnectors + [inv.mcpActionServer, inv.mcpAttachServer].compactMap { $0 }

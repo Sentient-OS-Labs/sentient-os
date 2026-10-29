@@ -26,6 +26,11 @@ and disable telemetry, error reporting, nonessential traffic and auto-update ins
 The shared process runner starts from a sanitized environment. The Anthropic organization key is
 never present in the desktop process. The computer relay captures the hosted environment before
 Network callbacks lose TaskLocal state; the outer Codex executor receives only a local relay token.
+Hosted native execution filters inherited environment variables to GUI/session routing before adding
+that token and does not read the saved custom-provider key. A real local child regression checks this.
+Hosted computer research uses native browser tools; paid Claude WebSearch/WebFetch are absent until
+there is a gateway pricing contract. Hosted background prompts explicitly omit claims that require
+unavailable external verification.
 
 Subscription connector capabilities are unavailable in `.sentient`; existing direct MCP connections
 retain their own authorization. Structured hosted runs reject subscription targets before admission,
@@ -39,7 +44,7 @@ without this capability fail closed. `HostedVaultFiles` resolves every file thro
 file descriptors with `openat`/`O_NOFOLLOW`, rejects symlinks and hard links, absolute/hidden/traversal
 paths, non-Markdown files and app-managed `writingstyle.md`, and atomically replaces private files.
 Individual files are capped at 256 KiB, transfers at 8 MiB, and RPC calls at 512 per run. Reusing a
-request ID with different arguments is rejected. A stopped/cancelled server cannot serve cached calls.
+request ID with different arguments is rejected; fingerprints store hashes instead of file content. A stopped/cancelled server cannot serve cached calls.
 The app's staging checkpoint and merge own publication of validated knowledge changes.
 
 Regression checks: `Scripts/test_hosted_claude_runtime.py`, `test_hosted_vault_tools.py`,

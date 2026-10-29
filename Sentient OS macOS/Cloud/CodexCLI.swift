@@ -1325,8 +1325,9 @@ actor CodexCLI {
     /// the real per-user temp and caches paths); `codex login` needs the same so the browser launch
     /// works. The binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to
     /// themselves). Internal (not private): ClaudeCLI's login + agent runs need the same context.
-    static func richEnvironment(binDir: String) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+    static func richEnvironment(binDir: String, includeCustomProviderKey: Bool = true) -> [String: String] {
+        let inherited = ProcessInfo.processInfo.environment
+        var env = includeCustomProviderKey ? inherited : HostedClaudeRuntime.executorEnvironment(inherited)
         let home = env["HOME"] ?? NSHomeDirectory()
         let richPath = [binDir,
                         "\(home)/.local/bin",
@@ -1335,7 +1336,7 @@ actor CodexCLI {
                         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         // Same unconditional endpoint-key injection as the sanitized env (see execute()).
-        env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        if includeCustomProviderKey { env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue }
         env[ChildProcessDiagnostics.environmentKey] = ChildProcessDiagnostics.directory?.path
         if ChildProcessDiagnostics.directory != nil { env["TMPDIR"] = FileManager.default.temporaryDirectory.path }
         return env
@@ -1565,6 +1566,7 @@ actor CodexCLI {
         let holder = ProcHolder()
         let interaction = SidekickInteraction.current
         let childDirectory = ChildProcessDiagnostics.directory
+        let hostedExecutor = ModelBackend.current == .sentient // capture before entering GCD
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -1582,7 +1584,8 @@ actor CodexCLI {
                 // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
                 // dir), and so does `codex login`'s browser launch — the bare env won't do.
                 var env = ChildProcessDiagnostics.$directory.withValue(childDirectory) {
-                    richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                    richEnvironment(binDir: (binary as NSString).deletingLastPathComponent,
+                                    includeCustomProviderKey: !hostedExecutor)
                 }
                 env.merge(extraEnv) { _, new in new }
                 proc.environment = CodexRuntime.environment(env, binary: binary)

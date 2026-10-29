@@ -1,6 +1,7 @@
 // The hosted knowledge model sees only these local Markdown capabilities. The authenticated
 // loopback transport supplies no filesystem authority beyond this run's staging directory.
 import Foundation
+import CryptoKit
 
 actor HostedVaultToolServer {
     nonisolated static let name = "sentient_vault"
@@ -85,7 +86,7 @@ actor HostedVaultToolServer {
                   Self.toolNames.contains(name), let arguments = params["arguments"] as? [String: Any] else {
                 return try reply(Self.failure("invalid_arguments"))
             }
-            let key = String(decoding: try Self.json(id), as: UTF8.self), fingerprint = try Self.json(params)
+            let key = String(decoding: try Self.json(id), as: UTF8.self), fingerprint = Data(SHA256.hash(data: try Self.json(params)))
             if let prior = calls[key] {
                 guard prior.fingerprint == fingerprint else { return try reply(Self.failure("request_id_reused")) }
                 return prior.result
