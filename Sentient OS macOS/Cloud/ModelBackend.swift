@@ -8,12 +8,12 @@
 //  (OpenRouter, a local server, any base URL + model name + key).
 //
 //  Key surface:
-//   - ModelBackend.current            → .chatgpt | .custom (read fresh; Settings is live, no restart)
+//   - ModelBackend.current            → .sentient | .chatgpt | .claude | .custom (read fresh per run)
 //   - CustomProvider.current          → the saved endpoint (preset, base URL, model, vision, key)
 //   - CustomProvider.providerOverrides() → the per-run `-c` recipe CodexCLI injects (never persisted
 //     into the user's config.toml)
 //   - CustomProvider.apiKeyEnvValue   → the env var value for codex's `env_key` auth
-//   - ModelBackend.connectorsAvailable → hosted Gmail/Calendar ride ChatGPT auth only
+//   - ModelBackend.connectorsAvailable → subscription connectors require ChatGPT or Claude account auth
 //
 //  Invariants (live-verified 2026-07-24, receipts to land in the feature doc):
 //   - The provider table ALWAYS carries `env_key` — codex otherwise falls through to the ChatGPT
@@ -29,6 +29,7 @@ import AppKit
 
 /// Which frontier engine powers the cloud ~10% of Sentient (the on-device model does the rest).
 nonisolated enum ModelBackend: String, Sendable {
+    case sentient // Sentient-funded Anthropic inference through a metered gateway
     case chatgpt   // the user's own ChatGPT subscription through their codex login (default)
     case claude    // the user's own Claude subscription through their Claude Code login (ClaudeCLI)
     case custom    // a user-supplied OpenAI-Responses-compatible endpoint
@@ -46,9 +47,12 @@ nonisolated enum ModelBackend: String, Sendable {
 
     /// Hosted Gmail/Calendar connectors ride ACCOUNT auth inside a subscription harness — codex's
     /// ChatGPT connectors, or claude.ai connectors on the Claude engine (connected by the user at
-    /// claude.ai → Settings → Connectors). A custom endpoint has neither. (Everything else —
-    /// vault, proactive, Sidekick/computer use — works on all three.)
-    static var connectorsAvailable: Bool { current != .custom }
+    /// claude.ai → Settings → Connectors). Sentient-funded inference and custom endpoints do not
+    /// borrow subscription accounts. Direct connections and local sources use their own grants.
+    var hasClaudeRuntime: Bool { self == .claude || self == .sentient }
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
+    static var hasClaudeRuntime: Bool { current.hasClaudeRuntime }
+    static var connectorsAvailable: Bool { current.hasSubscriptionConnectors }
 }
 
 /// The saved custom endpoint. All fields live in UserDefaults except the API key (Keychain).

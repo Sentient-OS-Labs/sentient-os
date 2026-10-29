@@ -129,7 +129,7 @@ nonisolated enum OutlookToolPolicy {
         }
     }
     static func runHelper(arguments: [String]) -> Int32 {
-        guard [10, 12].contains(arguments.count), let backend = ModelBackend(rawValue: arguments[2]), backend != .custom,
+        guard [10, 12].contains(arguments.count), let backend = ModelBackend(rawValue: arguments[2]), backend.hasSubscriptionConnectors,
               let operation = OutlookMailConnector.Operation(rawValue: arguments[3]),
               let runID = UUID(uuidString: arguments[4]), arguments[8] == "-"
                 || arguments[8].range(of: "^[0-9a-f]{64}\\z", options: .regularExpression) != nil,

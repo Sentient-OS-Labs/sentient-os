@@ -112,7 +112,7 @@ actor ClaudeCLI {
     /// Kill switches for EVERY claude spawn: their auto-updater (ours runs the updates) and
     /// their telemetry and error reporting (never on a Sentient user's machine on our behalf).
     /// Merged over the sanitized/rich env by the shared plumbing.
-    /// ⚠️ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC must NEVER be "1" here: Claude Code counts
+    /// Subscription runs keep CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC unset here: Claude Code counts
     /// the claude.ai CONNECTOR FETCH as non-essential traffic, so the flag starts every run
     /// connector-blind and the Gmail/Calendar probes read an honest-but-wrong NO [FIELD-FOUND
     /// 2026-08-23, the first live connector link]. It's pinned to "" instead: the spawn env
@@ -326,6 +326,11 @@ actor ClaudeCLI {
     /// Only a GOOD verdict is cached — a failed probe re-checks on every call (the codex law:
     /// a login fixed mid-session is seen by the very next retry).
     func validate(force: Bool = false) async -> CodexCLI.Availability {
+        if ModelBackend.current == .sentient {
+            guard let binary = Self.locateBinary() else { return .notInstalled }
+            return HostedInference.isConfigured ? .available(path: binary)
+                : .notWorking("Connect Sentient hosted inference in Settings.")
+        }
         if !force, let cachedAvailability { return cachedAvailability }
         guard let bin = Self.locateBinary() else {
             cachedAvailability = nil
@@ -354,7 +359,8 @@ actor ClaudeCLI {
     /// `--resume` handle) so callers reschedule/resume exactly as they do on codex.
     func run(_ invocation: CodexCLI.Invocation,
              onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
-        let (modelID, effortArg) = Self.tuned(for: invocation)
+        let (modelID, effortArg) = ModelBackend.current == .sentient
+            ? (try HostedClaudeRuntime.model(), "low") : Self.tuned(for: invocation)
         let t0 = Date()
         do {
             return try await runInner(invocation, modelID: modelID, effortArg: effortArg, onLine: onLine)
@@ -397,7 +403,7 @@ actor ClaudeCLI {
         }
         var args = try Self.arguments(for: invocation, modelID: modelID, effortArg: effortArg)
         #if DEBUG
-        if let path = ProcessInfo.processInfo.environment["LAB_CLAUDE_DEBUG_DIR"] {
+        if ModelBackend.current != .sentient, let path = ProcessInfo.processInfo.environment["LAB_CLAUDE_DEBUG_DIR"] {
             let directory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
@@ -405,6 +411,9 @@ actor ClaudeCLI {
         }
         #endif
         var environment = Self.environment(for: invocation)
+        if ModelBackend.current == .sentient {
+            environment.merge(try HostedClaudeRuntime.environment()) { _, hosted in hosted }
+        }
         if SidekickToolServer.connection != nil {
             environment["MCP_TOOL_TIMEOUT"] = String(Int(SidekickToolServer.maximumWait * 1_000))
         }
@@ -414,11 +423,12 @@ actor ClaudeCLI {
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
                                                   extraEnv: environment,
+                                                  includeCustomProviderKey: ModelBackend.current != .sentient,
                                                   observeAgentTools: true,
                                                   onStdoutLine: stdoutLine)
         AgentRunDiagnostics.current?.recordProcess(status: out.status)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
-            completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
+            hosted: ModelBackend.current == .sentient, completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
                 ? nil : SidekickInteraction.current?.conversationRun?.completionStatus)
         Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
         return env
@@ -458,9 +468,19 @@ actor ClaudeCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
+        var inv = inv.canonicalConnectorTargets()
+        // Paid server-side web tools have no hosted pricing/authorization contract yet.
+        if ModelBackend.current == .sentient { inv.webSearch = false }
         try ResearchToolServer.validateInvocation(inv)
-        let inv = inv.canonicalConnectorTargets()
+        try HostedVaultToolServer.validateInvocation(inv)
         let direct = DirectMCPRuntime.current
+        if ModelBackend.current == .sentient {
+            let targets = inv.mcpReadConnectors + [inv.mcpActionServer, inv.mcpAttachServer].compactMap { $0 }
+            guard targets.allSatisfy({ $0.hasPrefix("direct-") }),
+                  inv.configOverrides != CodexCLI.Invocation.approveConnectorWrites else {
+                throw CodexCLI.CLIError.notAvailable(.notWorking("This connected account needs its own subscription. Connect a direct account for Sentient hosted inference."))
+            }
+        }
         let requestedDirect = Set((inv.mcpReadConnectors + [inv.mcpActionServer].compactMap { $0 }).filter { $0.hasPrefix("direct-") })
         guard requestedDirect.isSubset(of: Set(direct.map(\.requestedTarget))) else { throw DirectMCPError.policyUnavailable }
         if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
@@ -556,6 +576,9 @@ actor ClaudeCLI {
             recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
         }
 
+        if let connection = HostedVaultToolServer.connection {
+            recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
+        }
         if let connection = ResearchToolServer.connection {
             recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
             recipeDenies += ["Bash", "Read", "Glob", "Grep", "Write", "Edit", "Agent", "Task"]
@@ -566,6 +589,7 @@ actor ClaudeCLI {
                     "--effort", effortArg,
                     "--setting-sources", "",
                     "--disable-slash-commands"]
+        if ModelBackend.current == .sentient { args += ["--bare"] }
         if ResearchToolServer.connection != nil {
             args += ["--no-session-persistence"]
         }
@@ -574,7 +598,7 @@ actor ClaudeCLI {
             if recipeWallURLs.isEmpty { args += ["--strict-mcp-config"] }
             args += ["--mcp-config", try DirectMCPRuntime.claudeConfig(direct),
                      "--settings", try DirectMCPRuntime.claudeSettings(direct, hostedURLs: recipeWallURLs)]
-        } else if !inv.includeUserConfig || inv.toolsDisabled {
+        } else if !inv.includeUserConfig || inv.toolsDisabled || ModelBackend.current == .sentient {
             args += ["--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#]
         } else if !recipeWallURLs.isEmpty {
             // The recipe wall: ONLY the recipe's server(s) may load — the user's own MCP
@@ -596,6 +620,7 @@ actor ClaudeCLI {
 
         var allowed = recipeAllows
         var disallowed = recipeDenies
+        if ModelBackend.current == .sentient { disallowed += ["Agent", "Task"] }
 
         // The permission recipe — codex's Seatbelt tiers in Claude Code's dialect:
         //  · readOnly        → dontAsk (auto-deny anything not pre-approved) + read-only tools.
@@ -618,7 +643,9 @@ actor ClaudeCLI {
             skippedPermissions = true
         } else {
             let mode: String
-            if inv.configOverrides == CodexCLI.Invocation.approveConnectorWrites {
+            if HostedVaultToolServer.connection != nil {
+                mode = "dontAsk"
+            } else if inv.configOverrides == CodexCLI.Invocation.approveConnectorWrites {
                 mode = "dontAsk"
                 allowed.append("mcp__*")
             } else {
@@ -630,7 +657,9 @@ actor ClaudeCLI {
             args += ["--permission-mode", mode]
         }
 
-        if inv.sandbox == .readOnly, !skippedPermissions {
+        if HostedVaultToolServer.connection != nil {
+            args += ["--tools", ""]
+        } else if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
             var tools = inv.connectorOnlyRead || inv.toolsDisabled || ResearchToolServer.connection != nil || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
@@ -649,7 +678,8 @@ actor ClaudeCLI {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
-        return try LocalMCPServer.addToClaudeArguments(SidekickToolServer.addToClaudeArguments(args), connection: ResearchToolServer.connection)
+        let connected = try LocalMCPServer.addToClaudeArguments(SidekickToolServer.addToClaudeArguments(args), connection: ResearchToolServer.connection)
+        return try LocalMCPServer.addToClaudeArguments(connected, connection: HostedVaultToolServer.connection)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —
@@ -709,7 +739,7 @@ actor ClaudeCLI {
     /// `result` object; `system/init` (the first line) carries the session id — so even a
     /// mid-run usage limit keeps its resume handle, the same guarantee codex gives.
     static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int,
-                              completion: AgentStatus? = nil) throws -> CodexCLI.Envelope {
+                              hosted: Bool = false, completion: AgentStatus? = nil) throws -> CodexCLI.Envelope {
         var sessionID: String?
         var resultObj: [String: Any]?
         var rateLimitRejected = false
@@ -726,7 +756,7 @@ actor ClaudeCLI {
                 if sessionID == nil { sessionID = obj["session_id"] as? String }
             case "rate_limit_event":
                 if let info = obj["rate_limit_info"] as? [String: Any] {
-                    noteRateLimit(info)
+                    if !hosted { noteRateLimit(info) }
                     rateLimitRejected = info["status"] as? String == "rejected"
                 }
             case "result":
@@ -763,14 +793,22 @@ actor ClaudeCLI {
             let detail = !resultDetail.isEmpty ? resultDetail
                 : (out.stderr.isEmpty ? String(out.stdout.suffix(600)) : out.stderr)
             let lowered = detail.lowercased()
-            if rateLimitRejected || usageLimitMarkers.contains(where: { lowered.contains($0) }) {
-                throw CodexCLI.CLIError.usageLimit(message: String(detail.prefix(600)),
-                                                   sessionID: sessionID)
+            let hostedQuota = hosted && ["daily_time_exhausted", "usage_limit_reached"].contains(where: lowered.contains)
+            if hostedQuota || rateLimitRejected || usageLimitMarkers.contains(where: { lowered.contains($0) }) {
+                throw CodexCLI.CLIError.usageLimit(message: hosted
+                    ? "Sentient hosted inference has reached its usage allowance. Try again after it resets."
+                    : String(detail.prefix(600)), sessionID: sessionID)
             }
+            // Gateway/provider payloads never enter a hosted user-facing error or diagnostic.
+            // Service funding, transient throttles and expired leases are not user daily quotas.
+            let safeDetail = hosted
+                ? (lowered.contains("run_expired") ? "This hosted inference session expired. Try again."
+                    : "Sentient hosted inference could not complete this request. Try again.")
+                : String(detail.prefix(600))
             if out.status != 0 {
-                throw CodexCLI.CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+                throw CodexCLI.CLIError.exitFailure(code: out.status, message: safeDetail)
             }
-            throw CodexCLI.CLIError.badEnvelope(String(detail.prefix(600)))
+            throw CodexCLI.CLIError.badEnvelope(safeDetail)
         }
 
         let usage = resultObj?["usage"] as? [String: Any]
@@ -899,16 +937,16 @@ actor ClaudeCLI {
             "feature": feature,
             "error": caseName,
             "model": modelID,
-            "backend": "claude",
+            "backend": ModelBackend.current.rawValue,
             "phase": phase,
             "availability": availability,
             "reason": reason.rawValue,
             "trigger": CodexTrigger.current.rawValue,
             "network": net.status,
             "interface": net.interface,
-            "plan": ClaudeAuth.cachedPlan ?? "unknown",
+            "plan": ModelBackend.current == .sentient ? "sentient_hosted" : (ClaudeAuth.cachedPlan ?? "unknown"),
             "claude_version": cachedVersion ?? "unknown",
         ], extra: extra,
-           fingerprint: ["claude", feature, caseName, reason.rawValue, CodexTrigger.current.rawValue])
+           fingerprint: ["claude", ModelBackend.current.rawValue, feature, caseName, reason.rawValue, CodexTrigger.current.rawValue])
     }
 }

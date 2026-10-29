@@ -36,7 +36,7 @@ nonisolated enum ConnectorCensus {
                 switch backend {
                 case .claude:  self = .claude
                 case .chatgpt: self = .chatgpt
-                case .custom:  return nil
+                case .custom, .sentient:  return nil
                 }
             }
         }
@@ -138,7 +138,7 @@ nonisolated enum ConnectorCensus {
             guard !Task.isCancelled else { return [] }
             return persist(connectors, for: .claude)
         case .chatgpt: return persist(listCodex(), for: .chatgpt)
-        case .custom:
+        case .custom, .sentient:
             return []
         }
     }
@@ -193,7 +193,7 @@ nonisolated enum ConnectorCensus {
         switch backend {
         case .chatgpt: CodexRuntime.accountIdentity
         case .claude: ClaudeAuth.cachedAccountIdentity
-        case .custom: nil
+        case .custom, .sentient: nil
         }
     }
 

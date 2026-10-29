@@ -62,7 +62,17 @@ enum NativePermissionReadiness {
     struct Snapshot { var accessibility: State = .unknown; var screenRecording: State = .unknown }
 }
 @MainActor enum CodexAuth { static var knowledgeBaseOnly = false }
-enum ModelBackend { case chatgpt, claude, custom; static var current = Self.chatgpt }
+enum ModelBackend { case chatgpt, claude, custom, sentient; static var current = Self.chatgpt }
+@MainActor enum HostedInference { static var isConfigured = true }
+@MainActor final class SentientSetup {
+    static let shared = SentientSetup()
+    static let unavailableMessage = "Hosted inference is unavailable."
+    var ready = true
+    var preparing = false
+    var checking = false
+    var status: String?
+    func refresh() async {}
+}
 @MainActor enum ComputerUseBackend {
     case openAI, cua
     static var current = Self.openAI
@@ -73,8 +83,9 @@ enum ModelBackend { case chatgpt, claude, custom; static var current = Self.chat
     static func loginStatus() async -> Bool { true }
 }
 @MainActor enum ClaudeCLI {
+    static var loginChecks = 0
     static func locateBinary() -> String? { "/synthetic/claude" }
-    static func loginStatus() async -> Bool { true }
+    static func loginStatus() async -> Bool { loginChecks += 1; return true }
 }
 @MainActor final class CodexSetup { static let shared = CodexSetup(); var outdated = false }
 @MainActor final class ComputerUseSetup {
@@ -103,6 +114,10 @@ CHECKS = r'''
     @MainActor static func main() async {
         func check(_ condition: Bool, _ label: String) { precondition(condition, label); print("PASS " + label) }
         func reset() {
+            ModelBackend.current = .chatgpt
+            HostedInference.isConfigured = true
+            SentientSetup.shared.ready = true; SentientSetup.shared.status = nil
+            ClaudeCLI.loginChecks = 0
             UserDefaults.standard.values = [:]
             UserDefaults.standard.plan = .init()
             SourceSelection.selectedProtectedSources = []
@@ -122,6 +137,18 @@ CHECKS = r'''
         let fresh = await HealthCaution.probe()
         check(fresh == nil && ProtectedLocalSource.reads.isEmpty && WakeHelperClient.shared.checks == 0 && LoginItem.checks == 0,
               "fresh Home never checks unchosen protected sources or overnight capabilities")
+        ModelBackend.current = .sentient
+        HostedInference.isConfigured = false
+        let unavailableHosted = await HealthCaution.probe()
+        check(unavailableHosted?.message == SentientSetup.unavailableMessage,
+              "hosted configuration failure is explicit and never asks for a subscription login")
+        HostedInference.isConfigured = true
+        check(await HealthCaution.probe() == nil && ClaudeCLI.loginChecks == 0,
+              "healthy hosted inference does not check a Claude subscription")
+        SentientSetup.shared.ready = false; SentientSetup.shared.status = "Try connecting again."
+        check(await HealthCaution.probe()?.message == "Try connecting again.",
+              "hosted connection failure preserves its actionable explanation")
+        reset()
         SourceSelection.selectedProtectedSources = [.notes]
         check(await HealthCaution.probe() == nil && ProtectedLocalSource.reads.isEmpty,
               "unfinished source selection does not create a permission regression")

@@ -48,7 +48,11 @@ assert ".onDisappear(perform: cancelOperation)" in generic
 source = r'''
 import Foundation
 
-@MainActor enum ModelBackend: String { case chatgpt, claude, custom; static var current: Self = .chatgpt }
+@MainActor enum ModelBackend: String {
+    case chatgpt, claude, custom, sentient
+    static var current: Self = .chatgpt
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
+}
 @MainActor enum CodexAuth { static let connectorLockedTip = "Locked" }
 @MainActor final class MemoryDefaults {
     var values: [String: Bool] = [:]
@@ -67,7 +71,7 @@ import Foundation
         enum Origin {
             case chatgpt, claude
             init?(backend: ModelBackend) {
-                switch backend { case .chatgpt: self = .chatgpt; case .claude: self = .claude; case .custom: return nil }
+                switch backend { case .chatgpt: self = .chatgpt; case .claude: self = .claude; case .custom, .sentient: return nil }
             }
         }
         let slug: String
@@ -206,7 +210,7 @@ __PILL__
                 check(HostedConnectorSetup.calls.isEmpty && generic.dismissals == 0, "Opening generic settings confirmed or dismissed the source")
             }
         }
-        for (captured, current) in [(ModelBackend.chatgpt, ModelBackend.claude), (.claude, .chatgpt), (.custom, .custom)] {
+        for (captured, current) in [(ModelBackend.chatgpt, ModelBackend.claude), (.claude, .chatgpt), (.custom, .custom), (.sentient, .sentient)] {
             reset(); ModelBackend.current = current
             let sheet = DedicatedFixture("gmail"); sheet.backend = captured
             sheet.openSettings()
@@ -217,6 +221,13 @@ __PILL__
             check(NSWorkspace.shared.urls.isEmpty && HostedConnectorSetup.settingsCalls.isEmpty, "Stale/custom generic sheet opened settings")
             check(!generic.openedConnectorPage && generic.dismissals == 1, "Stale/custom generic sheet remained active")
         }
+        reset(); ModelBackend.current = .sentient
+        let hostedDedicated = DedicatedFixture("gmail"); hostedDedicated.backend = .sentient
+        hostedDedicated.tapDone()
+        let hostedGeneric = GenericFixture("slack"); hostedGeneric.hostedBackend = .sentient
+        hostedGeneric.tapDone()
+        check(HostedConnectorSetup.calls.isEmpty && NSWorkspace.shared.urls.isEmpty,
+              "Sentient funding claimed access to subscription connectors")
         for slug in ["gmail", "google-calendar"] {
             reset()
             let sheet = DedicatedFixture(slug)

@@ -543,7 +543,7 @@ enum MCPSource {
             _ = try CodexCLI.arguments(for: inv, modelID: "gpt-6-luna", effortArg: "medium", schemaFile: nil)
         case .claude:
             _ = try ClaudeCLI.arguments(for: inv, modelID: "haiku", effortArg: "medium")
-        case .custom:
+        case .custom, .sentient:
             throw MCPError.noReadSurface(slug: slug)
         }
     }
