@@ -40,8 +40,12 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
     const requestID = crypto.randomUUID();
     try {
       const url = new URL(request.url);
-      if (url.search || url.hash) throw new ServiceError('invalid_request');
       const path = url.pathname;
+      const sdkBetaQuery = ['/v1/messages', '/v1/messages/count_tokens'].includes(path)
+        && url.searchParams.size === 1 && url.searchParams.get('beta') === 'true';
+      // Anthropic's beta SDK adds this routing marker. It never controls the gateway's
+      // server-owned beta headers or grants additional capabilities.
+      if (url.hash || url.search && !sdkBetaQuery) throw new ServiceError('invalid_request');
       if (path === '/health' && request.method === 'GET') return responseJSON({ status: 'ok' });
       if (path === '/v1/usage' && request.method === 'GET') {
         const principal_id = await authenticate(bearer(request));
@@ -182,6 +186,7 @@ export function streamWithAccounting(body, { signal, abort, finalize, maximumEve
   let sawFinalUsage = false;
   let sawStop = false;
   let closed = false;
+  let outputController;
   let resolveDone;
   const done = new Promise(resolve => { resolveDone = resolve; });
   const finish = async status => {
@@ -194,55 +199,69 @@ export function streamWithAccounting(body, { signal, abort, finalize, maximumEve
   const onAbort = () => {
     reader.cancel().catch(() => {});
     // A downstream reader that stops pulling must not strand a reservation forever.
-    void finish('cancelled');
+    void finish('cancelled').then(() => {
+      try {
+        outputController.enqueue(encoder.encode('event: error\ndata: {"type":"error","error":{"type":"hosted_stream_interrupted","message":"The hosted response was interrupted."}}\n\n'));
+        outputController.close();
+      } catch { /* The reader may already have cancelled or closed. */ }
+    });
   };
   signal.addEventListener('abort', onAbort, { once: true });
   const readable = new ReadableStream({
+    start(controller) { outputController = controller; },
     async pull(controller) {
       if (closed) return;
       try {
         let produced = false;
         while (!produced) {
-        if (signal.aborted) throw new Error('aborted');
-        const { done: ended, value } = await reader.read();
-        if (ended) {
-          buffer += decoder.decode();
-          if (buffer.trim()) throw new Error('truncated_sse');
-          if (!sawStop || !sawFinalUsage) throw new Error('missing_terminal_receipt');
-          await finish('completed');
-          controller.close();
-          return;
-        }
-        buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
-        if (encoder.encode(buffer).byteLength > maximumEventBytes) throw new Error('oversized_event');
-        let boundary;
-        while ((boundary = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-          if (data) {
-            const event = JSON.parse(data);
-            if (event.type === 'error') throw new Error('provider_stream_error');
-            if (event.type === 'message_start') {
-              if (sawStart) throw new Error('duplicate_message_start');
-              sawStart = true;
-              usage = cleanUsage(event.message?.usage);
-            } else if (event.type === 'message_delta' && event.usage) {
-              // Anthropic usage fields in stream deltas are cumulative, never additive.
-              const next = cleanUsage(event.usage);
-              for (const [key, value] of Object.entries(next)) {
-                if (value < (usage[key] ?? 0)) throw new Error('decreasing_usage');
-                usage[key] = value;
+          if (signal.aborted) throw new Error('aborted');
+          const { done: ended, value } = await reader.read();
+          if (ended) {
+            buffer += decoder.decode();
+            if (buffer.trim()) throw new Error('truncated_sse');
+            if (!sawStop || !sawFinalUsage) throw new Error('missing_terminal_receipt');
+            await finish('completed');
+            controller.close();
+            return;
+          }
+          buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+          if (encoder.encode(buffer).byteLength > maximumEventBytes) throw new Error('oversized_event');
+          let boundary;
+          while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+            if (data) {
+              const event = JSON.parse(data);
+              if (event.type === 'error') throw new Error('provider_stream_error');
+              if (event.type === 'message_start') {
+                if (sawStart) throw new Error('duplicate_message_start');
+                sawStart = true;
+                usage = cleanUsage(event.message?.usage);
+              } else if (event.type === 'message_delta' && event.usage) {
+                // Anthropic usage fields in stream deltas are cumulative, never additive.
+                const next = cleanUsage(event.usage);
+                for (const [key, value] of Object.entries(next)) {
+                  if (value < (usage[key] ?? 0)) throw new Error('decreasing_usage');
+                  usage[key] = value;
+                }
+                if (Object.hasOwn(next, 'output_tokens')) sawFinalUsage = true;
+              } else if (event.type === 'message_stop') {
+                if (!sawStart || !sawFinalUsage || sawStop) throw new Error('invalid_terminal_receipt');
+                sawStop = true;
+                // Settle before exposing the terminal marker. SDKs may immediately run a
+                // tool or request a user-wait pause, and upstream EOF can arrive later.
+                await finish('completed');
               }
-              if (Object.hasOwn(next, 'output_tokens')) sawFinalUsage = true;
-            } else if (event.type === 'message_stop') {
-              if (!sawStart || !sawFinalUsage || sawStop) throw new Error('invalid_terminal_receipt');
-              sawStop = true;
+            }
+            controller.enqueue(encoder.encode(frame + '\n\n'));
+            produced = true;
+            if (sawStop) {
+              await reader.cancel().catch(() => {});
+              controller.close();
+              return;
             }
           }
-          controller.enqueue(encoder.encode(frame + '\n\n'));
-          produced = true;
-        }
         }
       } catch {
         abort();
