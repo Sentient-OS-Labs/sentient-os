@@ -1,0 +1,9 @@
+# Deploy only after explicit operator configuration and approval; no live routes are configured.
+# Setup and contract: README.md.
+name = "sentient-hosted-inference"
+main = "src/gateway.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[observability]
+enabled = false
