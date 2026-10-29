@@ -112,7 +112,9 @@ begin
             insert into public.hosted_inference_daily(principal_id,day) values(r.principal_id,current_day) on conflict do nothing;
             select greatest(0, p.daily_seconds * 1000::bigint - active_ms) into remaining_ms
                 from public.hosted_inference_daily where principal_id = r.principal_id and day = current_day for update;
-            elapsed_ms := greatest(0, floor(extract(epoch from (segment_end - cursor_at))*1000)::bigint);
+            -- Never discard fractional time while advancing last_accounted_at. Flooring
+            -- each interval would let frequent sub-millisecond calls avoid all charging.
+            elapsed_ms := greatest(0, ceil(extract(epoch from (segment_end - cursor_at))*1000)::bigint);
             update public.hosted_inference_daily set active_ms = active_ms + least(elapsed_ms, remaining_ms)
                 where principal_id = r.principal_id and day = current_day;
             if elapsed_ms >= remaining_ms then
