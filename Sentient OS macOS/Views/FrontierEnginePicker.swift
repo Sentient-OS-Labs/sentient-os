@@ -8,8 +8,8 @@
 //  (ModelBackend/CustomProvider — the one source of truth), Test & Select (vision-gated
 //  activation: an unproven model can never become the engine), and the local-models
 //  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
-//  onboarding embeds the live codex login. A fixed three-column grid keeps all six choices
-//  within the same content measure. Doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
+//  onboarding embeds the live codex login. Onboarding leads with a hosted-usage button;
+//  Settings keeps the six-choice grid. Doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
 //
 
 import SwiftUI
@@ -113,7 +113,28 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     // MARK: - The engine tab strip
 
     @ViewBuilder private var tabStrip: some View {
-        if formStyle {
+        if layout == .onboardingGrid {
+            VStack(spacing: 16) {
+                OnboardingHostedUsageButton(selected: tab == .sentient,
+                                            active: activeTab == .sentient && isActiveEngineHealthy(.sentient)) {
+                    selectTab(.sentient)
+                }
+
+                Text("Or connect your own AI")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondary)
+
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        pill(.chatgpt); pill(.claude)
+                    }
+                    HStack(spacing: 8) {
+                        pill(.openRouter); pill(.lmStudio); pill(.custom)
+                    }
+                }
+            }
+            .frame(width: EngineTab.pillWidth * 3 + 16)
+        } else if formStyle {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                 ForEach(Tab.allCases) { pill($0) }
             }
