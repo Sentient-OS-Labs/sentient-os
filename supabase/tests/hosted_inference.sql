@@ -107,4 +107,31 @@ begin
     perform pg_temp.check_true((select phase='expired' from public.hosted_inference_runs where id=run_id),'stale lease expires');
 end;
 $$;
+
+-- Frequent calls must not erase sub-millisecond active intervals. Use the real SQL
+-- clock directly so this regression is deterministic and independent of test speed.
+insert into auth.users(id) values('20000000-0000-4000-8000-000000000003');
+do $$
+declare
+    principal uuid:='20000000-0000-4000-8000-000000000003';
+    run jsonb;
+    run_id uuid;
+    origin timestamptz:='2026-10-03 12:00:00+00';
+    total bigint;
+begin
+    run:=public.hosted_inference('create',jsonb_build_object('principal_id',principal,'purpose','sidekick','model','fixture','token_hash',repeat('9',64)));
+    run_id:=(run->>'run_id')::uuid;
+    update public.hosted_inference_runs set last_accounted_at=origin,lease_expires_at=origin+interval '10 seconds' where id=run_id;
+    for step in 1..2000 loop
+        perform public.hosted_inference_clock(run_id,origin+step*interval '500 microseconds');
+    end loop;
+    select active_ms into total from public.hosted_inference_daily where principal_id=principal and day='2026-10-03';
+    perform pg_temp.check_true(total=2000,'each positive fractional millisecond rounds up rather than disappearing');
+    update public.hosted_inference_daily set active_ms=3599999 where principal_id=principal and day='2026-10-03';
+    perform public.hosted_inference_clock(run_id,origin+interval '1 second 500 microseconds');
+    select active_ms into total from public.hosted_inference_daily where principal_id=principal and day='2026-10-03';
+    perform pg_temp.check_true(total=3600000,'fractional accounting remains capped at exactly one hour');
+    perform pg_temp.check_true((select phase='expired' from public.hosted_inference_runs where id=run_id),'fractional final interval expires the run');
+end;
+$$;
 rollback;
