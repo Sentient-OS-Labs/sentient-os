@@ -28,8 +28,10 @@ struct RootView: View {
         .instance(for: .selected(for: ModelBackend(rawValue: backendRaw) ?? .chatgpt))
     }
 
-    /// Observed for the bottom-left model-download whisper (same overlay slot).
+    /// Observed for the shared onboarding/Home download status card.
     @State private var download = ModelDownload.shared
+    @State private var backgroundSetupHeight: CGFloat = 0
+    @State private var homeBottomDockHeight: CGFloat = 0
 
     /// The sources Analyze Now will process — the shared selection (folders + DB sources).
     private var selectedSources: [RunSource] {
@@ -45,6 +47,8 @@ struct RootView: View {
                         withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
                     }
                 }
+                .environment(\.onboardingBottomOverlayInset,
+                             backgroundSetupHeight > 0 ? backgroundSetupHeight + 12 : 0)
                 .transition(.opacity)
                 // The just-updated notice, overlaid on ONBOARDING only (the home renders it in
                 // its own banner slot): a mid-onboarding user may have closed a broken window,
@@ -95,7 +99,8 @@ struct RootView: View {
             Analytics.signal("Home.opened",
                              parameters: ["trigger": sinceBoot < 5 ? "launch" : "reopen"], tier: .core)
         }
-        // Background setup/download whispers share Home and onboarding's bottom-left slot.
+        // Onboarding keeps status cards below telemetry on the left. Home uses the right
+        // corner, clearing its full-width composer when the personal-setup sidebar is gone.
         // Secondary pages use their own status rows and keep this area clear:
         // · the model-download card (ModelDownloadWhisper) — the on-device model landing in the
         //   background while the user is elsewhere (it hides itself when onboarding's full-screen
@@ -103,8 +108,9 @@ struct RootView: View {
         // · the computer-use setup line — the driver download is an unstructured background task
         //   that outlives onboarding's processing takeover (knowledge base creation, even the home
         //   in rare cases), so as long as it's actually running, this quiet line shows.
-        .overlay(alignment: .bottomLeading) {
-            VStack(alignment: .leading, spacing: 10) {
+        .onPreferenceChange(HomeBottomDockHeightKey.self) { homeBottomDockHeight = $0 }
+        .overlay(alignment: appState.hasCompletedOnboarding ? .bottomTrailing : .bottomLeading) {
+            VStack(alignment: appState.hasCompletedOnboarding ? .trailing : .leading, spacing: 10) {
                 if navigation.page == .home { ModelDownloadWhisper(download: download) }
                 if computerSetup.isInstalling && navigation.page == .home {
                     HStack(spacing: 7) {
@@ -116,7 +122,11 @@ struct RootView: View {
                     .transition(.opacity)
                 }
             }
-            .padding(.leading, 22).padding(.bottom, 12)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                backgroundSetupHeight = height
+            }
+            .padding(.horizontal, 22)
+            .padding(.bottom, appState.hasCompletedOnboarding ? max(44, homeBottomDockHeight + 12) : 12)
         }
         .animation(.easeInOut(duration: 0.35), value: computerSetup.isInstalling)
         .animation(.easeInOut(duration: 0.35), value: download.phase)

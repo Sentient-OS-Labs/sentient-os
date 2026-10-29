@@ -29,6 +29,12 @@
 import SwiftUI
 import AppKit
 
+/// Lets RootView keep transient status cards clear of the full-width chat composer.
+struct HomeBottomDockHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct HomeView: View {
     var isPresented = true
 
@@ -1023,6 +1029,12 @@ struct HomeView: View {
         }
         .padding(.horizontal, 38).padding(.top, 8).padding(.bottom, 14)
         .frame(maxWidth: .infinity)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: HomeBottomDockHeightKey.self,
+                                       value: needsPersonalSetup ? 0 : geometry.size.height)
+            }
+        }
     }
 
     private var conversationPeek: some View {
