@@ -44,6 +44,7 @@ test('API key run authentication, actual cumulative usage and upstream credentia
   const run = await f.create();
   assert.equal(run.model, fixtureConfig.model);
   assert.equal(run.remaining_seconds, 3600);
+  assert.equal(run.maximum_output_tokens, fixtureConfig.maximumOutputTokens);
   assert.ok(Date.parse(run.server_time) > 0);
   assert.equal(Date.parse(run.lease_expires_at) - Date.parse(run.server_time), 45_000);
   const response = await f.request('/v1/messages', { token: null, apiKey: run.run_token, body: message(), headers: { 'idempotency-key': 'hello' } });
@@ -208,4 +209,135 @@ test('truncated and cancelled streams settle conservatively without a fake succe
     await stream.done;
     assert.equal(settled.usage, null);
   }
+});
+
+test('usage distinguishes disabled policy, global exhaustion and personal budget exhaustion', async t => {
+  const f = await setup(t);
+  await f.db.query('update public.hosted_inference_policy set enabled=false');
+  let response = await f.request('/v1/usage');
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, 'service_disabled');
+  await f.db.query('update public.hosted_inference_policy set enabled=true,user_daily_microusd=0');
+  assert.equal((await f.request('/v1/usage')).status, 503);
+  await f.db.query('update public.hosted_inference_policy set user_daily_microusd=100');
+  await f.db.query('update public.hosted_inference_daily set charged_microusd=100 where principal_id=$1', [fixturePrincipal]);
+  response = await f.request('/v1/usage');
+  assert.equal(response.status, 429);
+  assert.equal((await response.json()).error.code, 'usage_limit_reached');
+  await f.db.query("insert into public.hosted_inference_global(bucket,charged_microusd) values('day:'||(clock_timestamp() at time zone 'UTC')::date::text,10000000)");
+  response = await f.request('/v1/usage');
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error.code, 'service_budget_reached');
+});
+
+test('no-header retries use body fingerprint, including after SDK-style retry', async t => {
+  const f = await setup(t);
+  const run = await f.create();
+  await (await f.request('/v1/messages', { token: run.run_token, body: message() })).text();
+  const duplicate = await f.request('/v1/messages', { token: run.run_token, body: message() });
+  assert.equal((await duplicate.json()).error.code, 'request_already_dispatched');
+  assert.equal(f.calls.filter(call => call.url.endsWith('/messages')).length, 1);
+});
+
+test('provider file references are refused but ordinary tool argument file IDs remain data', async t => {
+  const f = await setup(t);
+  const run = await f.create();
+  const bad = { ...message(), messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'file', file_id: 'someone-elses-provider-file' } }] }] };
+  assert.equal((await f.request('/v1/messages', { token: run.run_token, body: bad })).status, 400);
+  const good = { ...message(), messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'read_drive', input: { file_id: 'a-local-connector-file' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'Example result' }] }] };
+  const response = await f.request('/v1/messages', { token: run.run_token, body: good });
+  assert.equal(response.status, 200);
+  await response.text();
+});
+
+test('server remaining-time deadline cancels inference before the normal provider timeout', async () => {
+  const settled = [];
+  const run = { run_id: crypto.randomUUID(), model: fixtureConfig.model, purpose: 'sidekick', remaining_seconds: 0.025 };
+  const ledger = { call: async (operation, args) => {
+    if (operation === 'settle') { settled.push(args); return {}; }
+    return { ...run, request_id: crypto.randomUUID() };
+  } };
+  const gateway = createGateway({ ledger, authenticate: async () => fixturePrincipal,
+    config: { ...fixtureConfig, requestTimeoutMS: 3000 },
+    upstream: async url => url.endsWith('count_tokens') ? Response.json({ input_tokens: 10 })
+      : new Response(new ReadableStream({ start() {} })) });
+  const start = performance.now();
+  const response = await gateway(new Request('https://fixture.invalid/v1/messages', { method: 'POST',
+    headers: { authorization: `Bearer hrt_${'a'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify(message()) }));
+  assert.match(await response.text(), /hosted_stream_interrupted/);
+  assert.ok(performance.now() - start < 1000);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].actual_microusd, null);
+});
+
+test('an aborted idle downstream gets a terminal stream and conservative settlement', async () => {
+  const abort = new AbortController();
+  const receipts = [];
+  const body = new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode('data: {"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":1}}}\n\n'));
+  } });
+  const stream = streamWithAccounting(body, { signal: abort.signal, abort: () => abort.abort(), finalize: async (usage, status) => receipts.push({ usage, status }) });
+  // Let the stream fill its high-water mark without a downstream consumer.
+  await new Promise(resolve => setTimeout(resolve, 5));
+  abort.abort();
+  await stream.done;
+  assert.match(await new Response(stream.readable).text(), /hosted_stream_interrupted/);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].usage, null);
+});
+
+test('a model deployment change cannot reuse stale run pricing', async t => {
+  const f = await setup(t);
+  const run = await f.create();
+  await f.db.query('update public.hosted_inference_runs set model=$1 where id=$2', ['old-model', run.run_id]);
+  const response = await f.request('/v1/messages', { token: run.run_token, body: message('old-model') });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error.code, 'model_configuration_changed');
+  assert.equal(f.calls.length, 0);
+});
+
+test('SDK beta routing marker is accepted without allowing arbitrary queries or headers', async t => {
+  const f = await setup(t);
+  const run = await f.create();
+  const response = await f.request('/v1/messages?beta=true', { token: run.run_token, body: message(), headers: { 'anthropic-beta': 'unapproved-feature' } });
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.equal(f.calls.find(call => call.url.endsWith('/messages')).init.headers['anthropic-beta'], undefined);
+  for (const path of ['/v1/messages?beta=false','/v1/messages?beta=true&beta=true','/v1/messages?override=1','/v1/runs?beta=true']) {
+    assert.equal((await f.request(path, { token: run.run_token, body: message() })).status, 400);
+  }
+});
+
+test('terminal usage settles before message_stop is delivered even when upstream EOF stalls', async () => {
+  const abort = new AbortController();
+  let release;
+  const settlement = new Promise(resolve => { release = resolve; });
+  const events = [
+    { type: 'message_start', message: { usage: { input_tokens: 2, output_tokens: 1 } } },
+    { type: 'message_delta', usage: { output_tokens: 5 } },
+    { type: 'message_stop' },
+  ];
+  const body = new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')));
+    // Deliberately no close: message_stop itself is the terminal provider receipt.
+  } });
+  const stream = streamWithAccounting(body, { signal: abort.signal, abort: () => abort.abort(), finalize: async () => settlement });
+  const reader = stream.readable.getReader();
+  let delivered = '';
+  let stopped = false;
+  const consume = (async () => {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      delivered += new TextDecoder().decode(part.value);
+      if (delivered.includes('message_stop')) stopped = true;
+    }
+  })();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(stopped, false);
+  release();
+  await consume;
+  await stream.done;
+  assert.equal(stopped, true);
 });
