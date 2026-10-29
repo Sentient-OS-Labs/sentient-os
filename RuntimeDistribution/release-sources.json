@@ -1,0 +1,20 @@
+{
+  "checkedOn": "2026-10-27",
+  "cli": {
+    "version": "0.164.0",
+    "metadataURL": "https://releases.openai.com/codex/channels/latest",
+    "archiveURL": "https://releases.openai.com/codex/releases/0.164.0/codex-package-aarch64-apple-darwin.tar.gz",
+    "upstreamSHA256": "dd99e9092270691a67bdde7be04ac283dea9da8e86cbde356c2cc851a79205fa"
+  },
+  "helper": {
+    "version": "26.1021.1001631",
+    "build": 1001631,
+    "installerURL": "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg",
+    "installerSHA256": "bb7f21330af3ef7d3f814cb12b2b969683aa2ccbdab7c1239db3adc23db94bdb",
+    "installerAppVersion": "26.1021.31345",
+    "installerAppBuild": "21828",
+    "payloadPath": "ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app",
+    "signingTeam": "2DC432GLL2",
+    "minimumMacOS": "14.4"
+  }
+}

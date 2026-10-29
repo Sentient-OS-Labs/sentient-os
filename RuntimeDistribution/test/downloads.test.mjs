@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { byteRange, release } from '../src/index.mjs';
+import previous from '../previous-artifacts.json' with { type: 'json' };
 
 const artifact = release.cli;
 const url = `https://downloads.example/releases/${artifact.filename}`;
@@ -103,4 +104,27 @@ test('public release information contains only distribution metadata', async () 
   assert.deepEqual(Object.keys(value.cli).sort(), ['bytes', 'path', 'sha256', 'version']);
   assert.equal(value.cli.sha256, release.cli.sha256);
   assert.equal(value.helper.sha256, release.helper.sha256);
+});
+
+test('previous app versions retain immutable downloads, resume, and cache validation', async () => {
+  assert.ok(previous.length >= 2);
+  for (const older of previous) {
+    assert.ok(![release.cli.filename, release.helper.filename].includes(older.filename));
+    const env = bucket({ metadata: { size: older.bytes } });
+    const oldURL = `https://downloads.example/releases/${older.filename}`;
+    const head = await worker.fetch(new Request(oldURL, { method: 'HEAD' }), env);
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get('Content-Length'), String(older.bytes));
+    assert.equal(head.headers.get('ETag'), `"sha256-${older.sha256}"`);
+    const resumed = await worker.fetch(new Request(oldURL, {
+      headers: { Range: 'bytes=100-109', 'If-Range': head.headers.get('ETag') },
+    }), env);
+    assert.equal(resumed.status, 206);
+    assert.equal(resumed.headers.get('Content-Range'), `bytes 100-109/${older.bytes}`);
+    assert.deepEqual([...new Uint8Array(await resumed.arrayBuffer())], Array.from({ length: 10 }, (_, i) => i + 100));
+    assert.equal((await worker.fetch(new Request(oldURL, {
+      headers: { 'If-None-Match': head.headers.get('ETag') },
+    }), env)).status, 304);
+    assert.ok(env.calls.every(call => call[1] === `releases/${older.filename}`));
+  }
 });
