@@ -117,16 +117,19 @@ enum FrontierRun {
                     return try await DirectMCPRuntime.execute(direct) {
                         Diagnostics.step(.request)
                         let result: CodexCLI.Envelope
-                        result = try await ResearchToolServer.withConnection(mail: prepared.appleMailResearch, vault: prepared.cwd) {
-                            try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
-                                var interactive = prepared
-                                if let connection = SidekickToolServer.connection {
-                                    interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
-                                    interactive.configOverrides += connection.codexOverrides
-                                }
-                                switch backend {
-                                case .claude, .sentient: return try await ClaudeCLI.shared.run(interactive, onLine: onLine)
-                                case .chatgpt, .custom: return try await CodexCLI.shared.run(interactive, onLine: onLine)
+                        result = try await HostedVaultToolServer.withConnection(root: prepared.hostedVaultRoot) {
+                            try await ResearchToolServer.withConnection(mail: prepared.appleMailResearch, vault: prepared.cwd) {
+                                try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
+                                    var interactive = prepared
+                                    if HostedVaultToolServer.connection != nil { interactive.prompt += "\n\n" + HostedVaultToolServer.instructions }
+                                    if let connection = SidekickToolServer.connection {
+                                        interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
+                                        interactive.configOverrides += connection.codexOverrides
+                                    }
+                                    switch backend {
+                                    case .claude, .sentient: return try await ClaudeCLI.shared.run(interactive, onLine: onLine)
+                                    case .chatgpt, .custom: return try await CodexCLI.shared.run(interactive, onLine: onLine)
+                                    }
                                 }
                             }
                         }

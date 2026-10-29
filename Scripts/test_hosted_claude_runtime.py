@@ -17,7 +17,7 @@ extension URL {
     static var sentientSupport: URL { fatalError("Tests must provide a temporary profile explicitly") }
 }
 nonisolated enum HostedInference {
-    struct Run: Sendable { let model: String; let token: String; let gatewayURL: URL }
+    struct Run: Sendable { let model: String; let token: String; let gatewayURL: URL; var maximumOutputTokens = 8_192 }
     @TaskLocal static var currentRun: Run?
 }
 @main struct Test {
@@ -37,6 +37,10 @@ nonisolated enum HostedInference {
         check(env["ANTHROPIC_BASE_URL"] == gateway.absoluteString, "base URL is explicit")
         check(env["CLAUDE_CODE_OAUTH_TOKEN"] == "", "subscription OAuth is disabled")
         check(env["CLAUDE_CONFIG_DIR"] == profile.path, "profile is isolated")
+        check(env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "8192", "default output bound is explicit")
+        let bounded = try HostedClaudeRuntime.environment(gatewayURL: gateway, token: token, model: model, profile: profile, maxOutputTokens: 4096)
+        check(bounded["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "4096", "server output bound wins")
+        check(rejects { _ = try HostedClaudeRuntime.environment(gatewayURL: gateway, token: token, model: model, profile: profile, maxOutputTokens: 0) }, "invalid output bound rejected")
         for key in ["ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"] {
             check(env[key] == model, "implicit model calls stay on the admitted model")
         }

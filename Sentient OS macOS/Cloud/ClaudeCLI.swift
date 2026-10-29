@@ -112,7 +112,7 @@ actor ClaudeCLI {
     /// Kill switches for EVERY claude spawn: their auto-updater (ours runs the updates) and
     /// their telemetry and error reporting (never on a Sentient user's machine on our behalf).
     /// Merged over the sanitized/rich env by the shared plumbing.
-    /// ⚠️ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC must NEVER be "1" here: Claude Code counts
+    /// Subscription runs keep CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC unset here: Claude Code counts
     /// the claude.ai CONNECTOR FETCH as non-essential traffic, so the flag starts every run
     /// connector-blind and the Gmail/Calendar probes read an honest-but-wrong NO [FIELD-FOUND
     /// 2026-08-23, the first live connector link]. It's pinned to "" instead: the spawn env
@@ -469,6 +469,7 @@ actor ClaudeCLI {
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
         try ResearchToolServer.validateInvocation(inv)
+        try HostedVaultToolServer.validateInvocation(inv)
         let inv = inv.canonicalConnectorTargets()
         let direct = DirectMCPRuntime.current
         if ModelBackend.current == .sentient {
@@ -573,6 +574,9 @@ actor ClaudeCLI {
             recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
         }
 
+        if let connection = HostedVaultToolServer.connection {
+            recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
+        }
         if let connection = ResearchToolServer.connection {
             recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
             recipeDenies += ["Bash", "Read", "Glob", "Grep", "Write", "Edit", "Agent", "Task"]
@@ -637,7 +641,9 @@ actor ClaudeCLI {
             skippedPermissions = true
         } else {
             let mode: String
-            if inv.configOverrides == CodexCLI.Invocation.approveConnectorWrites {
+            if HostedVaultToolServer.connection != nil {
+                mode = "dontAsk"
+            } else if inv.configOverrides == CodexCLI.Invocation.approveConnectorWrites {
                 mode = "dontAsk"
                 allowed.append("mcp__*")
             } else {
@@ -649,7 +655,9 @@ actor ClaudeCLI {
             args += ["--permission-mode", mode]
         }
 
-        if inv.sandbox == .readOnly, !skippedPermissions {
+        if HostedVaultToolServer.connection != nil {
+            args += ["--tools", ""]
+        } else if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
             var tools = inv.connectorOnlyRead || inv.toolsDisabled || ResearchToolServer.connection != nil || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
@@ -668,7 +676,8 @@ actor ClaudeCLI {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
-        return try LocalMCPServer.addToClaudeArguments(SidekickToolServer.addToClaudeArguments(args), connection: ResearchToolServer.connection)
+        let connected = try LocalMCPServer.addToClaudeArguments(SidekickToolServer.addToClaudeArguments(args), connection: ResearchToolServer.connection)
+        return try LocalMCPServer.addToClaudeArguments(connected, connection: HostedVaultToolServer.connection)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —
