@@ -341,3 +341,26 @@ test('terminal usage settles before message_stop is delivered even when upstream
   await stream.done;
   assert.equal(stopped, true);
 });
+
+test('Claude safeguard context and per-turn output settings survive with server-owned betas', async t => {
+  const betas = 'context-management-2025-06-27,mid-conversation-output-config-2026-07-01,dangerous-tool-use-2026-09-03';
+  const f = await setup(t, { config: { betas } });
+  const run = await f.create();
+  const body = { ...message(),
+    messages: [...message().messages, { role: 'system', content: [], output_config: { effort: 'low' } }],
+    context_management: { edits: [{ type: 'clear_thinking_20251015', keep: 'all' }] },
+    thinking: { type: 'adaptive', display: 'omitted' },
+    safeguards: [{ type: 'dangerous_tool_use', classifier_context: { v: 1, permission_mode: 'auto' } }] };
+  const response = await f.request('/v1/messages?beta=true', { token: run.run_token, body,
+    headers: { 'anthropic-beta': 'unreviewed-client-beta' } });
+  assert.equal(response.status, 200);
+  await response.text();
+  const dispatch = f.calls.find(call => call.url.endsWith('/messages'));
+  assert.deepEqual(JSON.parse(dispatch.init.body).safeguards, body.safeguards);
+  assert.deepEqual(JSON.parse(dispatch.init.body).messages[1].output_config, { effort: 'low' });
+  assert.equal(dispatch.init.headers['anthropic-beta'], betas);
+  const rejected = await f.request('/v1/messages', { token: run.run_token,
+    body: { ...body, safeguards: [{ type: 'dangerous_tool_use', classifier_context: {}, disabled: true }] } });
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json()).error.code, 'safeguard_configuration_not_allowed');
+});

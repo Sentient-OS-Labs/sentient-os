@@ -19,7 +19,7 @@ export function validateConfiguration(config) {
 export function prepareMessage(body, model, config) {
   const allowed = new Set(['model', 'messages', 'system', 'tools', 'tool_choice', 'max_tokens', 'stream',
     'temperature', 'top_p', 'top_k', 'stop_sequences', 'thinking', 'output_config', 'metadata',
-    'context_management', 'service_tier']);
+    'context_management', 'service_tier', 'safeguards']);
   for (const key of Object.keys(body)) if (!allowed.has(key)) throw new ServiceError('unsupported_parameter');
   if (body.model !== model) throw new ServiceError('model_not_allowed');
   if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 1000) throw new ServiceError('invalid_messages');
@@ -28,6 +28,14 @@ export function prepareMessage(body, model, config) {
   }
   if (body.stream !== true) throw new ServiceError('stream_required');
   if (body.service_tier && body.service_tier !== 'auto' && body.service_tier !== 'standard_only') throw new ServiceError('service_tier_not_allowed');
+  // Preserve Claude Code's dangerous-tool-use safeguard context. This never changes
+  // local authorization, and the operator must enable its matching provider beta.
+  if (body.safeguards !== undefined && (!Array.isArray(body.safeguards) || body.safeguards.length > 8
+    || body.safeguards.some(item => !item || item.type !== 'dangerous_tool_use'
+      || Object.keys(item).some(key => !['type', 'classifier_context'].includes(key))
+      || !item.classifier_context || typeof item.classifier_context !== 'object' || Array.isArray(item.classifier_context)))) {
+    throw new ServiceError('safeguard_configuration_not_allowed');
+  }
   const tools = body.tools ?? [];
   if (!Array.isArray(tools) || tools.length > 128) throw new ServiceError('invalid_tools');
   // Server tools can have separate usage charges. No hosted execution/search/uploads without
