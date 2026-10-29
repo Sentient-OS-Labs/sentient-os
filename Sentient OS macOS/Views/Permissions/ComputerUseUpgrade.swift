@@ -189,6 +189,9 @@ final class ComputerUseUpgrade {
     /// Open/reopen only the setup window while the upgrade is pending.
     func maybePresent(activate: Bool = true) {
         guard isBlockingInterface else { return }
+        // Activation caused by an owned capability check must not give its key window
+        // back to migration before the helper has read it.
+        guard !NativePermissionCheckWindow.isPresenting else { return }
         if let window {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)

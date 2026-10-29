@@ -204,7 +204,8 @@ with tempfile.TemporaryDirectory(prefix='sentient-doctor-tests-') as directory:
     (folder/'Tests.swift').write_text(tests)
     sources = ['Diagnostics/NativeComputerUseFailure.swift', 'Diagnostics/ComputerUseCheckReport.swift',
                'Diagnostics/ComputerUseCheckProbe.swift', 'Diagnostics/ComputerUseReportUpload.swift',
-               'Diagnostics/BuildIdentity.swift', 'Driver/OpenAIComputerUseProbe.swift']
+               'Diagnostics/BuildIdentity.swift', 'Driver/OpenAIComputerUseProbe.swift',
+               'Driver/NativePermissionReadiness.swift']
     executable = folder/'tests'
     subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','5','-target',
                     f'{platform.machine()}-apple-macos15.0', str(folder/'Support.swift'), str(folder/'Tests.swift'),

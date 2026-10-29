@@ -179,7 +179,7 @@ enum PermissionRelaunchDraft {
 }
 enum PermissionWaitDraft { static func clear() {} }
 enum SidekickInstructionStore { static func resetLearning() {} }
-@MainActor final class NativePermissionCheck { static let shared = NativePermissionCheck(); var isChecking=false; func close() async {} }
+@MainActor final class NativePermissionCheck { static let shared = NativePermissionCheck(); var isChecking=false; func close() async {}; func beginTeardown() async {}; func endTeardown() {} }
 @MainActor final class ComputerUseDoctor { static let shared = ComputerUseDoctor(); var isRunning=false; func clear(defaults: UserDefaults) async {} }
 @MainActor enum HostedConnectorSetup {
     static var active = false
@@ -206,7 +206,7 @@ enum CodexAuth {
     static let kbOnlyKey = "plan.kbOnly", assertedPlusKey = "plan.assertedPlus"
     static var knowledgeBaseOnly: Bool { UserDefaults.standard.bool(forKey: kbOnlyKey) }
 }
-enum ComputerUseGate { static let micSpeechOfferedKey = "mic" }
+@MainActor final class ComputerUseGate { static let micSpeechOfferedKey = "mic"; static let shared=ComputerUseGate(); func beginTeardown() async {}; func endTeardown() {} }
 enum HealthCaution { static let nativeComputerUseEverReadyKey = "native"; static let computerUseEverReadyKey = "legacy" }
 enum SidekickHistory { static func reset() {} }
 enum SourceHealth { static let readStatusKey = "health" }

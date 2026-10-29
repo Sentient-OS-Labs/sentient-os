@@ -48,7 +48,7 @@ struct ComputerUseGateView: View {
         if gate.showingVoiceRepair { return "Done" }
         if gate.allRequiredGranted { return "Continue" }
         if gate.backend == .openAI {
-            return gate.checkingAutomation ? "Checking computer use…" : "Finish setup to continue"
+            return gate.checkingCapabilities || gate.requestingAutomation ? "Checking computer use…" : "Finish setup to continue"
         }
         return "Grant permissions to continue"
     }
@@ -110,7 +110,7 @@ struct NativeComputerUsePermissionRows: View {
     @Environment(\.settingsFormStyle) private var formStyle
     let gate: ComputerUseGate
     private var automationNote: String {
-        if gate.requestingAutomation || gate.checkingAutomation { return "checking…" }
+        if gate.automation != .granted, gate.requestingAutomation || gate.checkingAutomation { return "checking…" }
         switch gate.automation {
         case .granted: return "granted"
         case .denied: return "not allowed"
@@ -122,7 +122,7 @@ struct NativeComputerUsePermissionRows: View {
         switch state {
         case .verified: "verified"
         case .denied: "not allowed"
-        case .unknown: "not checked"
+        case .unknown: gate.checkingCapabilities ? "checking…" : (gate.capabilityCheckFailed ? "couldn’t verify" : "not checked")
         }
     }
     var body: some View {
@@ -157,7 +157,7 @@ struct NativeComputerUsePermissionRows: View {
                 })
                 if gate.restartingNative {
                     SettingsProse("Restarting computer use…")
-                } else if gate.requestingAutomation {
+                } else if gate.requestingAutomation || gate.checkingCapabilities {
                     SettingsProse(gate.automation == .granted ? "Checking computer use…" : "Choose Allow in the macOS permission prompt.")
                 } else if gate.automation == .denied {
                     SettingsProse("In System Settings → Privacy & Security → Automation, expand Sentient OS and turn on ChatGPT Computer Use (called Codex Computer Use in some versions).")
