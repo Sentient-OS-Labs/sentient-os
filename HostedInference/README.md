@@ -105,7 +105,8 @@ accounting when no complete usage receipt exists.
 The database records active wall time through a server-issued lease. Default running leases
 last 45 seconds, shortened to the remaining daily allowance. The client should heartbeat about
 every eight seconds while local tools run and cancel local actions at the acknowledged lease
-deadline if renewal fails. The gateway also checks/renews the lease during upstream inference.
+deadline if renewal fails. The gateway also checks/renews the lease during upstream inference and cancels at the last
+acknowledged deadline if a renewal stalls, independently of the provider request timeout.
 `server_time` permits a monotonic local deadline based on `lease_expires_at - server_time`,
 anchored conservatively to the request's local send time without trusting the device wall clock.
 This server clock cannot prove how a modified client uses its own local tools.

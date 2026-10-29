@@ -253,7 +253,8 @@ test('provider file references are refused but ordinary tool argument file IDs r
 
 test('server remaining-time deadline cancels inference before the normal provider timeout', async () => {
   const settled = [];
-  const run = { run_id: crypto.randomUUID(), model: fixtureConfig.model, purpose: 'sidekick', remaining_seconds: 0.025 };
+  const run = { run_id: crypto.randomUUID(), model: fixtureConfig.model, purpose: 'sidekick', remaining_seconds: 0.025,
+    server_time: new Date().toISOString(), lease_expires_at: new Date(Date.now() + 45000).toISOString() };
   const ledger = { call: async (operation, args) => {
     if (operation === 'settle') { settled.push(args); return {}; }
     return { ...run, request_id: crypto.randomUUID() };
@@ -363,4 +364,43 @@ test('Claude safeguard context and per-turn output settings survive with server-
     body: { ...body, safeguards: [{ type: 'dangerous_tool_use', classifier_context: {}, disabled: true }] } });
   assert.equal(rejected.status, 400);
   assert.equal((await rejected.json()).error.code, 'safeguard_configuration_not_allowed');
+});
+
+test('a stalled heartbeat cannot extend inference past its acknowledged lease', async () => {
+  let heartbeatCount = 0;
+  const settled = [];
+  const run = { run_id: crypto.randomUUID(), model: fixtureConfig.model, purpose: 'knowledge_update', remaining_seconds: 3600,
+    server_time: new Date().toISOString(), lease_expires_at: new Date(Date.now() + 60).toISOString() };
+  const ledger = { call: async (operation, args) => {
+    if (operation === 'settle') { settled.push(args); return {}; }
+    if (operation === 'heartbeat') { heartbeatCount++; return new Promise(() => {}); }
+    return { ...run, request_id: crypto.randomUUID() };
+  } };
+  const gateway = createGateway({ ledger, authenticate: async () => fixturePrincipal,
+    config: { ...fixtureConfig, requestTimeoutMS: 3000 },
+    upstream: async url => url.endsWith('count_tokens') ? Response.json({ input_tokens: 10 })
+      : new Response(new ReadableStream({ start() {} })) });
+  const start = performance.now();
+  const response = await gateway(new Request('https://fixture.invalid/v1/messages', { method: 'POST',
+    headers: { authorization: `Bearer hrt_${'a'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify(message()) }));
+  assert.match(await response.text(), /hosted_stream_interrupted/);
+  assert.ok(performance.now() - start < 1000);
+  assert.equal(heartbeatCount, 1);
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].actual_microusd, null);
+});
+
+test('a terminal stream with missing input usage retains the full reservation', async () => {
+  const abort = new AbortController();
+  const receipts = [];
+  const body = new Response([
+    'data: {"type":"message_start","message":{"usage":{"output_tokens":1}}}\n\n',
+    'data: {"type":"message_delta","usage":{"output_tokens":5}}\n\n',
+    'data: {"type":"message_stop"}\n\n',
+  ].join('')).body;
+  const stream = streamWithAccounting(body, { signal: abort.signal, abort: () => abort.abort(),
+    finalize: async (usage, status) => receipts.push({ usage, status }) });
+  assert.match(await new Response(stream.readable).text(), /hosted_stream_interrupted/);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].usage, null);
 });

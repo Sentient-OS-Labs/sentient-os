@@ -98,6 +98,9 @@ begin
     perform pg_temp.check_true(total=10000,'old UTC day charge');
     select active_ms into total from public.hosted_inference_daily where principal_id=principal and day='2026-10-02';
     perform pg_temp.check_true(total=10000,'new UTC day charge');
+    perform public.hosted_inference_clock(run_id,'2026-10-02 00:00:00+00');
+    perform pg_temp.check_true((select last_accounted_at='2026-10-02 00:00:10+00' from public.hosted_inference_runs where id=run_id),
+        'an older request timestamp cannot move accounting backwards');
     perform public.hosted_inference_clock(run_id,'2026-10-02 00:10:00+00');
     select active_ms into total from public.hosted_inference_daily where principal_id=principal and day='2026-10-02';
     perform pg_temp.check_true(total=30000,'crash charges only through lease');

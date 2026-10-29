@@ -110,6 +110,7 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
         : config.requestTimeoutMS;
       const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(config.requestTimeoutMS, quotaDeadlineMS));
       let leaseTimer;
+      let leaseDeadline;
       let finalized = false;
       let finalizePromise;
       const finalize = (usage, status) => {
@@ -117,6 +118,7 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
         finalized = true;
         clearTimeout(deadline);
         clearTimeout(leaseTimer);
+        clearTimeout(leaseDeadline);
         finalizePromise = ledger.call('settle', { ...auth, request_id: reservation.request_id,
           actual_microusd: usage ? estimateCost(usage, config.pricing) : null,
           usage: usage ?? {}, status }).catch(() => {
@@ -125,13 +127,25 @@ export function createGateway({ ledger, authenticate, config, upstream = fetch, 
           });
         return finalizePromise;
       };
+      const acknowledgeLease = (snapshot, sentAt) => {
+        clearTimeout(leaseDeadline);
+        const remaining = Date.parse(snapshot.lease_expires_at) - Date.parse(snapshot.server_time)
+          - (performance.now() - sentAt);
+        if (!Number.isFinite(remaining) || remaining <= 0) { controller.abort(); return; }
+        // A stalled renewal RPC may outlast the lease. Cancel at the last acknowledged
+        // deadline independently, even when the normal heartbeat interval is longer.
+        leaseDeadline = setTimeout(() => controller.abort(), remaining);
+        leaseTimer = setTimeout(checkLease, Math.min(config.leaseCheckMS, Math.max(1, remaining / 2)));
+      };
       const checkLease = async () => {
         if (finalized) return;
-        try { await ledger.call('heartbeat', auth); }
+        const sentAt = performance.now();
+        let renewed;
+        try { renewed = await ledger.call('heartbeat', auth); }
         catch { controller.abort(); return; }
-        if (!finalized) leaseTimer = setTimeout(checkLease, config.leaseCheckMS);
+        if (!finalized && !controller.signal.aborted) acknowledgeLease(renewed, sentAt);
       };
-      leaseTimer = setTimeout(checkLease, config.leaseCheckMS);
+      acknowledgeLease(reservation, reservationStarted);
       let response;
       try {
         response = await upstream('https://api.anthropic.com/v1/messages', {
@@ -238,6 +252,7 @@ export function streamWithAccounting(body, { signal, abort, finalize, maximumEve
                 if (sawStart) throw new Error('duplicate_message_start');
                 sawStart = true;
                 usage = cleanUsage(event.message?.usage);
+                if (!Object.hasOwn(usage, 'input_tokens') || !Object.hasOwn(usage, 'output_tokens')) throw new Error('incomplete_start_usage');
               } else if (event.type === 'message_delta' && event.usage) {
                 // Anthropic usage fields in stream deltas are cumulative, never additive.
                 const next = cleanUsage(event.usage);
