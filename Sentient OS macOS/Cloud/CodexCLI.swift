@@ -283,8 +283,8 @@ actor CodexCLI {
             // user-visible surfaces (the notch's failure line, the takeover) — so the engine is
             // named at render time from the live backend. staleClient stays codex-worded: only
             // the codex spine ever throws it.
-            let claude = ModelBackend.current == .claude
-            let engine = claude ? "Claude Code" : "Codex"
+            let claude = ModelBackend.hasClaudeRuntime
+            let engine = ModelBackend.current == .sentient ? "Sentient hosted inference" : (claude ? "Claude Code" : "Codex")
             let binary = claude ? "claude" : "codex"
             switch self {
             case .notAvailable(let a):            return "\(engine) unavailable: \(a)"
@@ -293,6 +293,7 @@ actor CodexCLI {
             case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
             case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
             case .usageLimit(let m, _):
+                if ModelBackend.current == .sentient { return "Sentient hosted inference has reached its usage allowance. Try again after it resets." }
                 if ModelBackend.current == .custom { return "Model usage limit: \(m.prefix(200))" }
                 return "You're out of your \(claude ? "Claude" : "Codex") subscription 5 hour usage, try again later."
             case .inputTooLarge(let c):           return claude
@@ -706,7 +707,7 @@ actor CodexCLI {
                                providerOverrides: [String] = [],
                                nativeConfiguration: OpenAIComputerUse.Configuration? = nil,
                                nativeConnection: LocalMCPServer.Connection? = nil) throws -> [String] {
-        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
+        var args = (ModelBackend.hasClaudeRuntime ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
@@ -762,6 +763,7 @@ actor CodexCLI {
         let (modelID, effortArg): (String, String)
         switch backend {
         case .claude: (modelID, effortArg) = ClaudeCLI.agentTuned()
+        case .sentient: (modelID, effortArg) = (try HostedClaudeRuntime.model(), "low")
         case .chatgpt: (modelID, effortArg) = (model.rawValue, effort.rawValue)
         case .custom: (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
         }
@@ -783,7 +785,7 @@ actor CodexCLI {
             try Task.checkCancellation()
             var overrides = SidekickToolServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
-            if backend == .claude {
+            if backend.hasClaudeRuntime {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
                 // Claude supplies readable progress; Codex's structured events still carry
                 // tool activity needed by Sidekick recovery.
@@ -791,7 +793,9 @@ actor CodexCLI {
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName }
                     + (SidekickToolServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
-                    timeout: timeout, namespaces: namespaces, onProgress: onLine)
+                    timeout: timeout, namespaces: namespaces,
+                    hostedEnvironment: backend == .sentient ? try HostedClaudeRuntime.environment() : nil,
+                    onProgress: onLine)
                 bridge = relay
                 let configuration = try await relay.start()
                 overrides += configuration.overrides
@@ -806,7 +810,7 @@ actor CodexCLI {
             let out = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await ComputerUseStream.run(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
-                    extraEnv: environment, narrate: backend != .claude, onLine: onLine)
+                    extraEnv: environment, narrate: !backend.hasClaudeRuntime, onLine: onLine)
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
@@ -913,12 +917,12 @@ actor CodexCLI {
                 extra["helper_build"] = String(CodexRuntime.release.helperBuild)
             }
         }
-        if ModelBackend.current != .claude { extra.merge(auth.extras) { cur, _ in cur } }
+        if !ModelBackend.hasClaudeRuntime { extra.merge(auth.extras) { cur, _ in cur } }
 
         var tags: [String: String] = [
             "feature": feature,
             "error": caseName,
-            "model": ModelBackend.current == .claude ? "claude_subscription" : (custom ? "custom" : modelID),
+            "model": ModelBackend.current == .sentient ? "sentient_hosted" : (ModelBackend.current == .claude ? "claude_subscription" : (custom ? "custom" : modelID)),
             "backend": ModelBackend.current.rawValue,
             "phase": phase,
             "availability": availability,
@@ -931,6 +935,8 @@ actor CodexCLI {
         if ModelBackend.current == .claude {
             tags["login_mode"] = "claude_subscription"
             tags["plan"] = ClaudeAuth.cachedPlan ?? "unknown"
+        } else if ModelBackend.current == .sentient {
+            tags["login_mode"] = "sentient_hosted"
         } else { tags.merge(auth.tags) { cur, _ in cur } }
         Diagnostics.current?.markReported(error)
         CrashReporting.captureEvent(event, level: level, tags: tags, extra: extra,

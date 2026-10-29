@@ -92,7 +92,7 @@ final class UserDefaults: @unchecked Sendable {
     func reset() { lock.lock(); defer { lock.unlock() }; values.removeAll() }
 }
 enum ModelBackend: String, Sendable, CaseIterable {
-    case chatgpt, claude, custom
+    case chatgpt, claude, custom, sentient
     @TaskLocal static var runOverride: Self?
     static var current: Self { runOverride ?? Self(rawValue: UserDefaults.standard.string(forKey: "backend") ?? "") ?? .chatgpt }
 }

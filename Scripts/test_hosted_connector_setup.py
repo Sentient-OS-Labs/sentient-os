@@ -16,7 +16,8 @@ FIXTURE = r'''
 import Foundation
 
 nonisolated enum ModelBackend: String, Sendable {
-    case chatgpt, claude, custom
+    case chatgpt, claude, custom, sentient
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
     @TaskLocal static var runOverride: ModelBackend?
     nonisolated(unsafe) static var selected: ModelBackend = .claude
     static var current: ModelBackend { runOverride ?? selected }
@@ -157,6 +158,8 @@ func ErrorLabel(_ error: Error) -> String { "fixture_error" }
         try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail", backend: .claude), "wrong backend cannot save selection")
         ModelBackend.selected = .custom
         try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "custom backend cannot declare a hosted source")
+        ModelBackend.selected = .sentient
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "Sentient funding cannot declare a subscription connector")
         ModelBackend.selected = .claude
         try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "declaration remains available after returning to correct backend")
         Fixture.contactBlocked = true

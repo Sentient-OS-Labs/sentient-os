@@ -83,7 +83,7 @@ enum ConnectorReadFailure {
             }
             guard let prefix = prefixes.first(where: call.tool.hasPrefix) else { return false }
             return pack.codexReadTools?.contains(String(call.tool.dropFirst(prefix.count))) == true
-        case .custom: return false
+        case .custom, .sentient: return false
         }
     }
 

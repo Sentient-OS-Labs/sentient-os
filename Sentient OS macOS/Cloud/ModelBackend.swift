@@ -29,6 +29,7 @@ import AppKit
 
 /// Which frontier engine powers the cloud ~10% of Sentient (the on-device model does the rest).
 nonisolated enum ModelBackend: String, Sendable {
+    case sentient // Sentient-funded Anthropic inference through a metered gateway
     case chatgpt   // the user's own ChatGPT subscription through their codex login (default)
     case claude    // the user's own Claude subscription through their Claude Code login (ClaudeCLI)
     case custom    // a user-supplied OpenAI-Responses-compatible endpoint
@@ -48,7 +49,10 @@ nonisolated enum ModelBackend: String, Sendable {
     /// ChatGPT connectors, or claude.ai connectors on the Claude engine (connected by the user at
     /// claude.ai → Settings → Connectors). A custom endpoint has neither. (Everything else —
     /// vault, proactive, Sidekick/computer use — works on all three.)
-    static var connectorsAvailable: Bool { current != .custom }
+    var hasClaudeRuntime: Bool { self == .claude || self == .sentient }
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
+    static var hasClaudeRuntime: Bool { current.hasClaudeRuntime }
+    static var connectorsAvailable: Bool { current.hasSubscriptionConnectors }
 }
 
 /// The saved custom endpoint. All fields live in UserDefaults except the API key (Keychain).

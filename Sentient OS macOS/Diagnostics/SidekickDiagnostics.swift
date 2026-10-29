@@ -38,7 +38,7 @@ nonisolated enum SidekickDiagnostics {
             }
         }
     }
-    enum Backend: String, CaseIterable, Sendable { case chatgpt, claude, custom, unknown }
+    enum Backend: String, CaseIterable, Sendable { case chatgpt, claude, custom, sentient, unknown }
     enum Source: String, CaseIterable, Sendable {
         case command, promptBar, notchTyped, voice, proactive, compactor, memoryEditor, startup, reset, unknown
     }

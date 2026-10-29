@@ -24,6 +24,24 @@ enum FrontierRun {
     /// The structured spine — vault, judge, research, connectors, gift letter.
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            if backend == .sentient {
+                let targets = invocation.mcpReadConnectors + [invocation.mcpActionServer, invocation.mcpAttachServer].compactMap { $0 }
+                guard targets.allSatisfy({ $0.hasPrefix("direct-") }),
+                      invocation.configOverrides != CodexCLI.Invocation.approveConnectorWrites else {
+                    throw CodexCLI.CLIError.notAvailable(.notWorking("This connected account is unavailable with Sentient hosted inference."))
+                }
+                return try await HostedInference.withRun(purpose: .background) {
+                    try await runPrepared(invocation, onLine: onLine)
+                }
+            }
+            return try await runPrepared(invocation, onLine: onLine)
+        }
+    }
+
+    private static func runPrepared(_ invocation: CodexCLI.Invocation,
+                                    onLine: (@Sendable (String) -> Void)?) async throws -> CodexCLI.Envelope {
         return try await Diagnostics.withOperation("frontier_run") {
           try await AgentRunDiagnostics.withRun(action: invocation.mcpActionServer != nil, feature: invocation.feature, result: { $0.result }) {
             return try await Diagnostics.boundary(.connectorFailed, phase: .identity, reason: "frontier_setup") {
@@ -107,7 +125,7 @@ enum FrontierRun {
                                     interactive.configOverrides += connection.codexOverrides
                                 }
                                 switch backend {
-                                case .claude: return try await ClaudeCLI.shared.run(interactive, onLine: onLine)
+                                case .claude, .sentient: return try await ClaudeCLI.shared.run(interactive, onLine: onLine)
                                 case .chatgpt, .custom: return try await CodexCLI.shared.run(interactive, onLine: onLine)
                                 }
                             }
@@ -167,6 +185,19 @@ enum FrontierRun {
     static func runAgentCommand(_ prompt: String, imagePaths: [String] = [],
                                 timeout: TimeInterval = 0,
                                 onLine: @escaping @Sendable (String) -> Void) async throws -> String {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            if backend == .sentient {
+                return try await HostedInference.withRun(purpose: .sidekick) {
+                    try await runAgentPrepared(prompt, imagePaths: imagePaths, timeout: timeout, onLine: onLine)
+                }
+            }
+            return try await runAgentPrepared(prompt, imagePaths: imagePaths, timeout: timeout, onLine: onLine)
+        }
+    }
+
+    private static func runAgentPrepared(_ prompt: String, imagePaths: [String], timeout: TimeInterval,
+                                         onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         return try await Diagnostics.withOperation("computer_run") {
           try await AgentRunDiagnostics.withRun(action: true, computer: true, result: { $0 }) {
             let backend = ModelBackend.current
@@ -221,7 +252,7 @@ enum FrontierRun {
     /// Is the ACTIVE engine usable right now? (The availability probe behind health surfaces.)
     static func validate(force: Bool = false) async -> CodexCLI.Availability {
         switch ModelBackend.current {
-        case .claude:           return await ClaudeCLI.shared.validate(force: force)
+        case .claude, .sentient: return await ClaudeCLI.shared.validate(force: force)
         case .chatgpt, .custom: return await CodexCLI.shared.validate(force: force)
         }
     }

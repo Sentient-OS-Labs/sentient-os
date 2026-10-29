@@ -45,11 +45,12 @@ fixture = '\n'.join((
     'static var current = CustomProvider(modelName: "fixture-model")',
     'static var reasoning = "xhigh"',
     '}',
+    'enum HostedClaudeRuntime { static func model() throws -> String { \"hosted-server-model\" } }',
     'enum CodexCLI {',
     member(codex, 'enum Model:'),
     member(codex, 'enum Effort:'),
     member(codex, 'private static func backendTuned('),
-    'static func agentSelection() -> (modelID: String, effortArg: String) {',
+    'static func agentSelection() throws -> (modelID: String, effortArg: String) {',
     'let backend = ModelBackend.current',
     selection,
     'return (modelID, effortArg)',
@@ -102,7 +103,7 @@ checks = r'''
                     let pair = speed.codexModelAndEffort
                     check(pair.model.rawValue == expectedModel && pair.effort.rawValue == expectedEffort,
                           "\(context): plan selects supported model and effort")
-                    let execution = CodexCLI.agentSelection()
+                    let execution = try! CodexCLI.agentSelection()
                     check(execution.modelID == expectedModel && execution.effortArg == expectedEffort,
                           "\(context): executor uses the resolved pair")
                     let expectedLabel = limited ? "GPT-6 Luna · \(lunaThinking[index]) thinking"
@@ -110,13 +111,19 @@ checks = r'''
                     check(speed.modelLine == expectedLabel, "\(context): Settings matches execution")
 
                     ModelBackend.$runOverride.withValue(.claude) {
-                        let execution = CodexCLI.agentSelection()
+                        let execution = try! CodexCLI.agentSelection()
                         check(execution.modelID == claudeModels[index] && execution.effortArg == claudeEfforts[index],
                               "\(context): Claude routing is independent of the ChatGPT plan")
                         check(speed.modelLine == claudeLabels[index], "\(context): Claude readout is unchanged")
                     }
+                    ModelBackend.$runOverride.withValue(.sentient) {
+                        let execution = try! CodexCLI.agentSelection()
+                        check(execution.modelID == "hosted-server-model" && execution.effortArg == "low",
+                              "\(context): hosted execution uses the server model independently of subscriptions and speed")
+                        check(speed.modelLine == "Sentient managed model", "\(context): hosted readout makes no unsupported model promise")
+                    }
                     ModelBackend.$runOverride.withValue(.custom) {
-                        let execution = CodexCLI.agentSelection()
+                        let execution = try! CodexCLI.agentSelection()
                         check(execution.modelID == "fixture-model" && execution.effortArg == "xhigh",
                               "\(context): custom model and effort win")
                         check(speed.modelLine == "fixture-model · xhigh thinking",
@@ -130,7 +137,7 @@ checks = r'''
         CodexAuth.plan = CodexAuth.Plan(raw: "free")
         for rawSpeed in ["", "unknown-speed"] {
             select(rawSpeed)
-            let execution = CodexCLI.agentSelection()
+            let execution = try! CodexCLI.agentSelection()
             check(ComputerUseSpeed.current == .faster && execution.modelID == "gpt-6-luna"
                     && execution.effortArg == "low", "missing/invalid speed defaults to Free's Luna low")
         }
@@ -138,7 +145,7 @@ checks = r'''
         select("smarter")
         for plan in ["free", "plus", "go"] {
             CodexAuth.plan = CodexAuth.Plan(raw: plan)
-            let execution = CodexCLI.agentSelection()
+            let execution = try! CodexCLI.agentSelection()
             check(execution.modelID == (plan == "plus" ? "gpt-6-astra" : "gpt-6-luna"),
                   "plan changes take effect on the next run")
         }
