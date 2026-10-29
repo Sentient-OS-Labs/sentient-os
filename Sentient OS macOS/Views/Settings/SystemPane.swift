@@ -52,7 +52,7 @@ struct SystemPane: View {
 
             }
         }
-        .task { launchAtLogin = LoginItem.isEnabled }   // live status — revocable in System Settings
+        .task { launchAtLogin = await LoginItem.refresh() }
     }
 
     // MARK: - General
@@ -78,7 +78,8 @@ struct SystemPane: View {
         }
         .onChange(of: launchAtLogin) { _, on in
             if on {
-                if !LoginItem.enable() { launchAtLogin = false }
+                guard !LoginItem.isEnabled else { return }
+                Task { launchAtLogin = await LoginItem.enable() }
             } else if LoginItem.isEnabled {
                 launchAtLogin = true          // hold the switch until the user confirms
                 confirmLoginOff = true

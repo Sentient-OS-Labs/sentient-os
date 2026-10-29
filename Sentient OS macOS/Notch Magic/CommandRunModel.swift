@@ -62,6 +62,8 @@ final class CommandRunModel {
     private(set) var runID = UUID()
     @ObservationIgnored private var retryAction: ((String) -> Void)?
     @ObservationIgnored private var queuedRetry: (() -> Void)?
+    @ObservationIgnored private var hostedCompletionGeneration: UUID?
+    @ObservationIgnored private var pendingHostedCompletion: (() -> Void)?
     let conversation: SidekickConversation
     init(conversation: SidekickConversation = .shared) { self.conversation = conversation }
     private var conversationTask: SidekickConversationRun?
@@ -151,6 +153,9 @@ final class CommandRunModel {
                         try await ComputerUseGate.shared.waitUntilReady()
                         try Task.checkCancellation()
                         try owner.finishPermissionWait()
+                        if ModelBackend.current == .sentient { owner.hostedCompletionGeneration = generation }
+                        try await HostedInference.withRun(purpose: .sidekick) { @MainActor [weak self] in
+                        guard self?.runID == generation else { throw CancellationError() }
                         owner.isPreparing = false
                         owner.statusLine = CommandRouter.isActive ? "Thinking through your task"
                                                                  : "Starting \(mode.promptPhrase)…"
@@ -237,7 +242,18 @@ final class CommandRunModel {
                             self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
                                            board: .refused, statusPresent: false, interruption: .unconfirmed)
                         }
+                        }
+                        try Task.checkCancellation()
+                        if self?.runID == generation {
+                            self?.hostedCompletionGeneration = nil
+                            let completed = self?.pendingHostedCompletion
+                            self?.pendingHostedCompletion = nil
+                            completed?()
+                        }
                     } catch {
+                        guard self?.runID == generation else { return }
+                        self?.hostedCompletionGeneration = nil
+                        self?.pendingHostedCompletion = nil
                         self?.endPermissionWaitAfterFailure()
                         let secs = Int(Date().timeIntervalSince(started))
                         if Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled {
@@ -414,6 +430,8 @@ final class CommandRunModel {
         } catch {
             try Task.checkCancellation()   // the user's STOP → the caller's honest "stopped"
             if error is CancellationError { throw error }
+            if error is HostedInference.Failure { throw error }
+            if ModelBackend.current == .sentient, case CodexCLI.CLIError.usageLimit = error { throw error }
             // Losing the durable conversation is not a connector obstacle. Do not start
             // another acting executor after recording failed or the history was reset.
             if error is SidekickConversationStore.Failure || error is SidekickConversationRun.Failure { throw error }
@@ -885,6 +903,14 @@ final class CommandRunModel {
                           board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true, error: Error? = nil,
                           interruption: SidekickTaskEnd.Failure? = nil) {
         guard isRunning else { return }
+        if let generation = hostedCompletionGeneration, generation == runID {
+            pendingHostedCompletion = { [weak self] in
+                guard let self, self.runID == generation else { return }
+                self.complete(outcome, line: line, board: board, statusPresent: statusPresent,
+                              error: error, interruption: interruption)
+            }
+            return
+        }
         let end = SidekickTaskEnd(outcome: outcome, stop: stopCause,
                                  failure: interruption ?? error.map(SidekickTaskEnd.Failure.error))
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).

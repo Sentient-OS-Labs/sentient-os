@@ -37,7 +37,10 @@ extension MCPSource {
                 inv.mcpReadToolNames = ["get_profile"]
                 inv.effort = .low
                 inv.timeout = 60
-                let result = try await FrontierRun.run(inv)
+                let request = inv
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 meter.withLock { values in
                     var total = values[slug] ?? (0, 0)

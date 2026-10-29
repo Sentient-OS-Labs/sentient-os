@@ -48,7 +48,11 @@ assert ".onDisappear(perform: cancelOperation)" in generic
 source = r'''
 import Foundation
 
-@MainActor enum ModelBackend: String { case chatgpt, claude, custom; static var current: Self = .chatgpt }
+@MainActor enum ModelBackend: String {
+    case chatgpt, claude, custom, sentient
+    static var current: Self = .chatgpt
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
+}
 @MainActor enum CodexAuth { static let connectorLockedTip = "Locked" }
 @MainActor final class MemoryDefaults {
     var values: [String: Bool] = [:]
@@ -67,11 +71,12 @@ import Foundation
         enum Origin {
             case chatgpt, claude
             init?(backend: ModelBackend) {
-                switch backend { case .chatgpt: self = .chatgpt; case .claude: self = .claude; case .custom: return nil }
+                switch backend { case .chatgpt: self = .chatgpt; case .claude: self = .claude; case .custom, .sentient: return nil }
             }
         }
         let slug: String
         var canAttempt = true
+        var healthy = true
     }
     static var records: [DetectedConnector] = []
     static func cached(for origin: DetectedConnector.Origin) -> [DetectedConnector] { records }
@@ -156,11 +161,12 @@ __GENERIC__
     struct Source {
         let serviceSlug: String
         let connector: ConnectorCensus.DetectedConnector?
+        var usesHostedConnection = true
     }
     var source: Source
     var knowledgeEnabled = true
-    var selected = true
     var locked = false
+    var isSelected: Bool { selected }
     var detailText: String? { detail }
     var statusText: String { status }
 __PILL__
@@ -206,7 +212,7 @@ __PILL__
                 check(HostedConnectorSetup.calls.isEmpty && generic.dismissals == 0, "Opening generic settings confirmed or dismissed the source")
             }
         }
-        for (captured, current) in [(ModelBackend.chatgpt, ModelBackend.claude), (.claude, .chatgpt), (.custom, .custom)] {
+        for (captured, current) in [(ModelBackend.chatgpt, ModelBackend.claude), (.claude, .chatgpt), (.custom, .custom), (.sentient, .sentient)] {
             reset(); ModelBackend.current = current
             let sheet = DedicatedFixture("gmail"); sheet.backend = captured
             sheet.openSettings()
@@ -217,6 +223,13 @@ __PILL__
             check(NSWorkspace.shared.urls.isEmpty && HostedConnectorSetup.settingsCalls.isEmpty, "Stale/custom generic sheet opened settings")
             check(!generic.openedConnectorPage && generic.dismissals == 1, "Stale/custom generic sheet remained active")
         }
+        reset(); ModelBackend.current = .sentient
+        let hostedDedicated = DedicatedFixture("gmail"); hostedDedicated.backend = .sentient
+        hostedDedicated.tapDone()
+        let hostedGeneric = GenericFixture("slack"); hostedGeneric.hostedBackend = .sentient
+        hostedGeneric.tapDone()
+        check(HostedConnectorSetup.calls.isEmpty && NSWorkspace.shared.urls.isEmpty,
+              "Sentient funding claimed access to subscription connectors")
         for slug in ["gmail", "google-calendar"] {
             reset()
             let sheet = DedicatedFixture(slug)
@@ -287,14 +300,30 @@ __PILL__
         direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == false, "Direct Settings opt-out was overwritten")
         var pill = PillFixture(source: .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive")))
-        check(pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
               "Explicit Done still appeared to need verification in the source list")
         pill.source = .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive", canAttempt: false))
-        check(pill.detailText == "Connection needs attention · Manage", "Actual read failure lost its source warning")
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Cached read failure overrode the selected source chip")
         pill.source = .init(serviceSlug: "google-drive", connector: nil)
-        check(pill.detailText != nil, "Missing account lost its source warning")
-        pill.knowledgeEnabled = false; pill.selected = false
-        check(pill.detailText == nil && !pill.statusText.hasPrefix("Selected"), "Unselected source appeared selected or broken")
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Missing catalog entry overrode the selected source chip")
+        pill.source = .init(serviceSlug: "direct-fixture", connector: nil, usesHostedConnection: false)
+        check(!pill.isSelected && pill.detailText == "Connection needs attention · Manage"
+              && pill.statusText == "Selected, but review this connection before analysis can use it.",
+              "Direct catalog-only KB selection appeared available without a stored account")
+        pill.source = .init(serviceSlug: "direct-fixture",
+                            connector: .init(slug: "direct-fixture", canAttempt: false), usesHostedConnection: false)
+        check(!pill.isSelected && pill.detailText == "Connection needs attention · Manage",
+              "Stale direct catalog metadata appeared available without a stored account")
+        pill.source = .init(serviceSlug: "direct-fixture",
+                            connector: .init(slug: "direct-fixture", canAttempt: true, healthy: false),
+                            usesHostedConnection: false)
+        check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Stored direct account's cached failure overrode the selected source chip")
+        pill.knowledgeEnabled = false
+        check(!pill.isSelected && pill.detailText == nil && !pill.statusText.hasPrefix("Selected"),
+              "Unselected source appeared selected or broken")
         pill.locked = true
         check(pill.statusText == CodexAuth.connectorLockedTip && pill.detailText == nil, "Locked connector lost its plan guidance")
         print("PASS: \(checks) hosted sheet confirmation, state, provider and direct-route checks")
@@ -307,7 +336,8 @@ __PILL__
     declaration(generic, "private func stopHostedReading()"),
     declaration(generic, "private var hostedCanRead: Bool"),
     declaration(generic, "private var hostedConnected: Bool"),
-])).replace("__PILL__", declaration(pills, "private var detail: String?") + "\n" +
+])).replace("__PILL__", declaration(pills, "private var selected: Bool") + "\n" +
+    declaration(pills, "private var detail: String?") + "\n" +
     declaration(pills, "private var status: String"))
 
 with tempfile.TemporaryDirectory(prefix="sentient-hosted-sheet-tests-") as directory:

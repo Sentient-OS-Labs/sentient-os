@@ -1,6 +1,6 @@
 //
 // OutlookMailSource.swift
-// Bounded primary-mailbox prompts and receipt validation. MCPSource owns parallel windows,
+// Bounded primary-mailbox prompts and native policy helpers. MCPSource owns parallel windows,
 // account checks, retries and atomic commits; this file owns Outlook's selection semantics.
 // Doc: Documentation - Sources - Cloud (Gmail, Calendar).md
 //
@@ -125,7 +125,7 @@ nonisolated enum OutlookMailSource {
         OUTPUT
         Return exactly item_count, notable, has_action_items, summary, tool_failure as JSON.
         item_count is the number of distinct in-window message IDs considered, including discarded
-        candidates; never a mailbox total or an invented thread count. The app verifies it.
+        candidates; never a mailbox total or an invented thread count.
         At most \(wordCap(mode)) words. Begin a notable summary with "The user". Third person only;
         never address you/your. Use no em dashes. Each factual paragraph and action needs its actual
         observed Outlook message link. Never output tracking links or reconstruct an unobserved link.
@@ -141,126 +141,6 @@ nonisolated enum OutlookMailSource {
         """
     }
 
-    struct Discovery {
-        let ids: Set<String>
-        let links: Set<String>
-    }
-
-    static func discovery(raw: String, backend: ModelBackend, mode: MCPSource.ReadMode,
-                          window: MCPSource.Window) throws -> Discovery {
-        let calls = MCPCallEvidence.receipts(raw: raw, backend: backend)
-            .filter { OutlookMailConnector.bareName($0, backend: backend) != nil }
-        let search = backend == .claude ? "outlook_email_search" : "list_messages"
-        let fetch = backend == .claude ? "read_resource" : "fetch_message"
-        var searchCount = 0, openCount = 0, ids = Set<String>(), links = Set<String>()
-        var discoveredLinks: [String: String] = [:]
-        var nextOffset = 0, nextCursor: String?, hasMore = true
-        for call in calls {
-            guard call.status == .succeeded, let name = OutlookMailConnector.bareName(call, backend: backend),
-                  let arguments = OutlookMailConnector.object(call.arguments) else { throw invalid("tool_failure") }
-            if name == search {
-                searchCount += 1
-                guard searchCount <= discoveryCap(mode), hasMore else { throw invalid("discovery_budget") }
-                let payloads = OutlookMailConnector.payloads(call)
-                guard !payloads.contains(where: {
-                    !absent($0, "error") || $0["partial"] as? Bool == true || $0["incomplete"] as? Bool == true
-                        || $0["status"] as? String == "partial"
-                }) else { throw invalid("partial_search") }
-                let messages: [[String: Any]]
-                if backend == .chatgpt {
-                    guard arguments["filter"] as? String == codexFilter(window),
-                          arguments["order_by"] as? String == "receivedDateTime desc",
-                          (arguments["skip"] as? Int ?? 0) == nextOffset,
-                          absent(arguments, "folder_id"), let limit = arguments["top"] as? Int,
-                          (1...pageSize).contains(limit), payloads.count == 1,
-                          let page = payloads.first, let values = page["value"] as? [[String: Any]],
-                          let more = page["has_more"] as? Bool, values.count <= limit else { throw invalid("search_contract") }
-                    messages = values; hasMore = more
-                    if more {
-                        guard let next = page["next_from_index"] as? Int, next > nextOffset else { throw invalid("pagination") }
-                        nextOffset = next
-                    }
-                } else {
-                    let bounds = claudeBounds(window)
-                    guard let output = OutlookMailConnector.object(call.output) else { throw invalid("unknown_search_output") }
-                    let empty = output["content"] as? String == "(\(OutlookMailConnector.claudePrefix)outlook_email_search completed with no output)"
-                    guard empty || (output["content"] as? [[String: Any]])?.count == payloads.count else { throw invalid("unknown_search_output") }
-                    guard arguments["query"] as? String == "*", absent(arguments, "mailboxOwnerEmail"),
-                          arguments["afterDateTime"] as? String == bounds.after,
-                          arguments["beforeDateTime"] as? String == bounds.before,
-                          let limit = arguments["limit"] as? Int, (1...pageSize).contains(limit) else { throw invalid("search_contract") }
-                    if let nextCursor {
-                        guard arguments["cursor"] as? String == nextCursor, absent(arguments, "offset") else { throw invalid("pagination") }
-                    } else {
-                        guard (arguments["offset"] as? Int ?? 0) == nextOffset, absent(arguments, "cursor") else { throw invalid("pagination") }
-                    }
-                    messages = payloads.filter { $0["id"] != nil }
-                    guard messages.count <= limit else { throw invalid("page_size") }
-                    hasMore = false
-                    for page in payloads where page["id"] == nil {
-                        if let cursor = page["nextCursor"] as? String, !cursor.isEmpty {
-                            guard cursor != nextCursor else { throw invalid("pagination") }
-                            nextCursor = cursor; hasMore = true
-                        } else if let offset = page["nextOffset"] as? Int {
-                            guard offset > nextOffset else { throw invalid("pagination") }
-                            nextOffset = offset; nextCursor = nil; hasMore = true
-                        } else { throw invalid("unknown_search_output") }
-                    }
-                    if payloads.isEmpty {
-                        guard empty || (output["content"] as? [Any])?.isEmpty == true else { throw invalid("empty_search_evidence") }
-                    }
-                }
-                for message in messages {
-                    guard let id = message["id"] as? String, !id.isEmpty,
-                          let stamp = message["receivedDateTime"] as? String, let received = date(stamp) else { throw invalid("message_metadata") }
-                    guard received >= window.lower && received < window.upper else {
-                        if backend == .claude, received >= window.lower.addingTimeInterval(-0.001), received <= window.upper { continue }
-                        throw invalid("message_window")
-                    }
-                    if backend == .claude {
-                        guard let uri = message["uri"] as? String, mailID(uri) == id else { throw invalid("mail_scope") }
-                    }
-                    ids.insert(id)
-                    let link = (message["webLink"] ?? message["web_link"]) as? String
-                    if let link, validLink(link) {
-                        discoveredLinks[id] = link
-                        if backend == .chatgpt { links.insert(link) }
-                    }
-                }
-            } else if name == fetch {
-                openCount += 1
-                let id = backend == .claude ? (arguments["uri"] as? String).flatMap(mailID) : arguments["message_id"] as? String
-                guard openCount <= openCap(mode), let id, ids.contains(id),
-                      let message = OutlookMailConnector.payloads(call).first(where: { $0["id"] as? String == id && $0["body"] != nil }) else { throw invalid("selected_read") }
-                if backend == .claude, message["isDraft"] as? Bool == false {
-                    if let link = discoveredLinks[id] { links.insert(link) }
-                    if let link = message["webLink"] as? String, validLink(link) { links.insert(link) }
-                }
-            } else { throw invalid("unexpected_tool") }
-        }
-        guard searchCount > 0, ids.count <= discoveryCap(mode) * pageSize else { throw invalid("read_evidence") }
-        return Discovery(ids: ids, links: links)
-    }
-
-    static func validate(raw: String, backend: ModelBackend, mode: MCPSource.ReadMode,
-                         window: MCPSource.Window, outcome: MCPSource.ReadOutcome) throws -> MCPSource.ReadOutcome {
-        let observed = try discovery(raw: raw, backend: backend, mode: mode, window: window)
-        guard let result = outcome.result else { return .quiet(itemCount: observed.ids.count) }
-        guard !observed.ids.isEmpty, result.summary.split(whereSeparator: \.isWhitespace).count <= wordCap(mode) else { throw invalid("summary_budget") }
-        guard result.summary.hasPrefix("The user"), !result.summary.contains("—"),
-              result.summary.range(of: "sentient-outlook-|connector test|test artifacts?", options: [.caseInsensitive, .regularExpression]) == nil else { throw invalid("summary_content_rules") }
-        let paragraphs = result.summary.components(separatedBy: "\n").filter {
-            !$0.trimmingCharacters(in: .whitespaces).isEmpty && $0.trimmingCharacters(in: CharacterSet(charactersIn: " #*:\t")).uppercased() != "ACTION ITEMS"
-        }
-        guard paragraphs.allSatisfy({ paragraph in observed.links.contains(where: paragraph.contains) }) else { throw invalid("source_reference") }
-        let regex = try NSRegularExpression(pattern: #"https?://[^\s<>\)\]]+"#)
-        let text = result.summary as NSString
-        let urls = regex.matches(in: result.summary, range: NSRange(location: 0, length: text.length)).map {
-            text.substring(with: $0.range).trimmingCharacters(in: CharacterSet(charactersIn: ".,;"))
-        }
-        guard urls.allSatisfy({ observed.links.contains($0) }) else { throw invalid("unobserved_link") }
-        return .notable(.init(summary: result.summary, hasActionItems: result.hasActionItems, itemCount: observed.ids.count))
-    }
     static func validLink(_ text: String) -> Bool {
         guard let url = URLComponents(string: text), url.scheme == "https", url.user == nil, url.password == nil,
               url.port == nil || url.port == 443,

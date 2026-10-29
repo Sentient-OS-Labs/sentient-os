@@ -117,8 +117,9 @@ nonisolated enum Diagnostics {
         }
     }
 
-    /// Optional work keeps its own failures and correlation, without failing its parent's result
-    /// or suppressing a later required failure with the same error type.
+    /// Optional work and retry attempts can keep failures local without failing their parent
+    /// or suppressing a later required failure with the same error type. The caller reports
+    /// any final required failure after its recovery policy is exhausted.
     static func withOperation<T>(_ name: StaticString, propagatesFailure: Bool = true,
                                  isolation: isolated (any Actor)? = #isolation,
                                  _ body: () async throws -> T) async rethrows -> T {
@@ -137,11 +138,12 @@ nonisolated enum Diagnostics {
                 }
                 return try await body()
             } catch {
-                operation.finish(outcome: isCancellation(error) ? "cancelled" : (isExpected(error) ? "blocked" : "failed"))
-                if !isCancellation(error), !isExpected(error), !ConnectorClassificationDiagnostics.ownsFailures {
+                let failure: Error = Task.isCancelled ? CancellationError() : error
+                operation.finish(outcome: isCancellation(failure) ? "cancelled" : (isExpected(failure) ? "blocked" : "failed"))
+                if !isCancellation(failure), !isExpected(failure), !ConnectorClassificationDiagnostics.ownsFailures {
                     _ = operation.claim("thrown_error")
                 }
-                throw error
+                throw failure
             }
         }
     }
@@ -224,6 +226,7 @@ nonisolated enum Diagnostics {
         switch error {
         case CodexRuntime.Failure.busy, OpenAIComputerUse.RuntimeError.helperRunning,
              OpenAIComputerUse.RuntimeError.permissionRequired, OpenAIComputerUse.RuntimeError.restartRequired,
+             OpenAIComputerUse.RuntimeError.cliUnavailable,
              WritingStyle.Failure.noVault, WritingStyle.Failure.busy, WritingStyle.Failure.permissions, WritingStyle.Failure.changed,
              DirectMCPError.authorizationDenied, DirectMCPError.connectionChanged, DirectMCPError.reconnectRequired,
              DirectMCPError.accountSetupRequired, DirectMCPError.duplicateLabel, DirectMCPError.busy: return true
@@ -240,14 +243,15 @@ nonisolated enum Diagnostics {
                             _ body: () async throws -> T) async rethrows -> T {
         do { return try await body() }
         catch {
+            let failure: Error = Task.isCancelled ? CancellationError() : error
             if ConnectorClassificationDiagnostics.ownsFailures {
-                CrashReporting.diagnosticBreadcrumb("connector.classification.runtime_failure", data: errorFields(error).merging(
-                    ["phase": (current?.phase ?? phase).rawValue, "cancelled": String(isCancellation(error))]) { _, new in new })
-            } else if isExpected(error) {
-                CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(error).merging(
-                    ["reason": reason.description, "cancelled": String(isCancellation(error))]) { _, new in new })
-            } else { report(event, phase: current?.phase ?? phase, reason: reason, error: error, source: source, terminal: true) }
-            throw error
+                CrashReporting.diagnosticBreadcrumb("connector.classification.runtime_failure", data: errorFields(failure).merging(
+                    ["phase": (current?.phase ?? phase).rawValue, "cancelled": String(isCancellation(failure))]) { _, new in new })
+            } else if isExpected(failure) {
+                CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(failure).merging(
+                    ["reason": reason.description, "cancelled": String(isCancellation(failure))]) { _, new in new })
+            } else { report(event, phase: current?.phase ?? phase, reason: reason, error: failure, source: source, terminal: true) }
+            throw failure
         }
     }
 
@@ -271,6 +275,11 @@ nonisolated enum Diagnostics {
                        counts: [Count: Int] = [:], flags: [Flag: Bool] = [:],
                        terminal: Bool = false, cooldown: TimeInterval = 900) {
         if let error, isCancellation(error) { return }
+        if let error, isExpected(error) {
+            CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(error).merging(
+                ["phase": phase.rawValue, "reason": reason.description]) { _, value in value })
+            return
+        }
         if terminal {
             if let error, current?.wasReported(error) == true { return }
             if error == nil, current?.hasFailure == true { return }

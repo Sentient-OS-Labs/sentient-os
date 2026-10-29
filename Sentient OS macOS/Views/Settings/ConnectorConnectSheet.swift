@@ -170,7 +170,11 @@ struct ConnectorConnectSheet: View {
                 Button("Stop reading \(name)", action: stopHostedReading)
                     .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 14)
             }
-            if !hostedConnected {
+            if !hostedBackend.hasSubscriptionConnectors {
+                Text("This connection is supplied by a ChatGPT or Claude subscription. Choose a supported direct connection to use this service with Sentient.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).padding(.top, 14)
+            } else if !hostedConnected {
                 Text(hostedInstructions)
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
@@ -187,7 +191,7 @@ struct ConnectorConnectSheet: View {
             ConnectorActionButton(title: hostedConnected ? "Open connector settings" : "Connect \(name)",
                                   action: connect)
                 .padding(.top, 26)
-                .disabled(hostedBackend == .custom || (hostedSelected && !hostedCanRead))
+                .disabled(!hostedBackend.hasSubscriptionConnectors || (hostedSelected && !hostedCanRead))
 
             if hostedConnected {
                 if hostedCanRead {
@@ -310,7 +314,7 @@ struct ConnectorConnectSheet: View {
     }
 
     private func openConnectorPage() {
-        guard ModelBackend.current == hostedBackend, hostedBackend != .custom else { dismiss(); return }
+        guard ModelBackend.current == hostedBackend, hostedBackend.hasSubscriptionConnectors else { dismiss(); return }
         if NSWorkspace.shared.open(ConnectorLinks.page(for: source.serviceSlug, backend: hostedBackend)) {
             openedConnectorPage = true
             HostedConnectorSetup.settingsOpened(slug: source.serviceSlug, backend: hostedBackend)
@@ -343,6 +347,7 @@ struct ConnectorConnectSheet: View {
     private func done() {
         guard !busy else { return }
         if !usesDirect {
+            guard hostedBackend.hasSubscriptionConnectors else { dismiss(); return }
             guard HostedConnectorSetup.confirm(slug: source.serviceSlug, backend: hostedBackend,
                 reconnected: openedConnectorPage) else { dismiss(); return }
             connectors = ConnectorRegistry.detectedForCurrentBackend()

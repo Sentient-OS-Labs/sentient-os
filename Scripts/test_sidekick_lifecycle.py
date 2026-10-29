@@ -2,6 +2,8 @@
 """Exercise complete production Sidekick lifecycle types with inert providers/platforms.
 Uses isolated SQLite/defaults, real Swift Tasks/recovery continuations and cancellation barriers.
 No source extraction, app/UI launch, real provider, screen capture, credentials, or telemetry.
+SENTIENT_TEST_SOURCE_ROOT optionally selects a different checkout's production Swift sources;
+fixture support and assertions always come from this script's checkout.
 """
 from pathlib import Path
 import subprocess
@@ -9,14 +11,15 @@ import tempfile
 import os
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = ROOT / "Sentient OS macOS"
+PRODUCTION_ROOT = Path(os.environ.get("SENTIENT_TEST_SOURCE_ROOT", ROOT)).resolve()
+APP = PRODUCTION_ROOT / "Sentient OS macOS"
 SUPPORT = r'''
 import Foundation
 import Observation
 import Synchronization
 
 nonisolated enum ModelBackend: String, Sendable {
-    case chatgpt, claude, custom
+    case chatgpt, claude, custom, sentient
     @TaskLocal static var runOverride: Self?
     static var current: Self { runOverride ?? .claude }
 }
@@ -55,6 +58,7 @@ nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"
     static func route(_ task: String, cardContext: String, standingInstructions: String) async -> Route { .computer }
     static func recordOutcome(route: String, slug: String?, ms: Int, fellBack: Bool) { }
 }
+nonisolated enum ClaudeAuth { struct LoginRequired: Error {} }
 nonisolated enum CodexCLI {
     enum Effort: Sendable { case medium }
     struct Invocation: Sendable {
@@ -513,6 +517,58 @@ import SQLite3
         model.recovery.cancel()
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
+    static func hostedCleanupCompletion(root: URL, defaults: UserDefaults) async throws {
+        let conversation = SidekickConversation(url: root.appendingPathComponent("hosted-cleanup.sqlite"), defaults: defaults)
+        let model = CommandRunModel(conversation: conversation)
+        let store = conversation.store!
+        let baselineCalls = Fixture.providerCalls
+        defer { Fixture.provider = nil; Fixture.providerCalls = baselineCalls }
+        var finishes = 0
+        model.onFinished = { _ in finishes += 1 }
+        Fixture.provider = { _ in "Hosted provider finished.\nSTATUS: DONE" }
+        for shouldStop in [false, true] {
+            let enteredCleanup = Latch(), releaseCleanup = Latch()
+            let previousFinishes = finishes, previousCalls = Fixture.providerCalls
+            ModelBackend.$runOverride.withValue(.sentient) {
+                HostedInference.$afterOperation.withValue({
+                    await enteredCleanup.signal()
+                    await releaseCleanup.wait() // intentionally ignores task cancellation while draining
+                }) {
+                    model.start(shouldStop ? "Stop during hosted cleanup" : "Complete hosted cleanup", mode: .computer)
+                }
+            }
+            let taskID = model.runID
+            await enteredCleanup.wait()
+            try check(model.isRunning && model.runID == taskID && Fixture.providerCalls == previousCalls + 1,
+                "hosted provider success retains task ownership until withRun cleanup returns")
+            try check(try finishes == previousFinishes && store.records(taskID: taskID).allSatisfy { $0.event.kind != .taskFinished },
+                "hosted provider outcome cannot publish a terminal history event or callback before cleanup")
+            let sequence = try store.latestSequence
+            model.start("Must not overlap hosted cleanup", mode: .computer)
+            await Task.yield()
+            try check(try model.runID == taskID && store.latestSequence == sequence && Fixture.providerCalls == previousCalls + 1,
+                "hosted cleanup lock rejects a new command without creating history or another provider call")
+            if shouldStop {
+                model.stop(); model.stop()
+                try check(model.isRunning && model.statusLine == "Stopping…" && finishes == previousFinishes,
+                    "Stop during hosted cleanup stays owned and waits for the drain")
+                try check(try store.records(taskID: taskID).allSatisfy { $0.event.kind != .taskFinished },
+                    "Stop during hosted cleanup does not prematurely persist a terminal outcome")
+            }
+            await releaseCleanup.signal()
+            try await eventually { !model.isRunning }
+            let records = try store.records(taskID: taskID)
+            let terminals = records.filter { $0.event.kind == .taskFinished }
+            try check(terminals.count == 1 && terminals.first?.event.outcome == (shouldStop ? .stopped : .success),
+                "cleanup records exactly one final outcome; cancellation beats deferred provider success")
+            try check(finishes == previousFinishes + 1 && !model.recovery.isPending,
+                "hosted cleanup releases the task and invokes its completion callback exactly once")
+            await Task.yield()
+            try check(try store.records(taskID: taskID).filter { $0.event.kind == .taskFinished }.count == 1,
+                "late hosted completion cannot duplicate the terminal history event")
+        }
+        conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+    }
     static func networkRecovery(root: URL, defaults: UserDefaults) async throws {
         let conversation = SidekickConversation(url: root.appendingPathComponent("network-recovery.sqlite"), defaults: defaults)
         let model = CommandRunModel(conversation: conversation)
@@ -609,6 +665,7 @@ import SQLite3
         let suite = "sidekick-lifecycle-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         try await completionContract(root: root, defaults: defaults)
+        try await hostedCleanupCompletion(root: root, defaults: defaults)
         try await networkRecovery(root: root, defaults: defaults)
         try await recoveryPresentation(root: root, defaults: defaults)
         try await clearChat(root: root, defaults: defaults)
@@ -956,7 +1013,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
     names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
-    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift"]
+    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift", ROOT / "Scripts/Fixtures/HostedInferenceStub.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault"), "FIXTURE_PERMISSION_SUPPORT": str(tmp / "permission-support")})

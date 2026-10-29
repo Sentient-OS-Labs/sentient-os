@@ -65,6 +65,8 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
     /// user's own model is the one doing the thinking, so it gets the credit.
     var modelLine: String {
         switch ModelBackend.current {
+        case .sentient:
+            return "Sentient managed model"
         case .custom:
             // The slider doesn't drive custom models — the pane's reasoning level does, so the
             // readout under the (dimmed) slider tells the truth about what actually runs.

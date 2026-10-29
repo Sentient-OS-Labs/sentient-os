@@ -146,7 +146,9 @@ actor VaultCloud {
                 onLine: (@Sendable (String) -> Void)? = nil) async throws -> VaultGenerator.Result {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await createPinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            try await HostedInference.withRun(purpose: .bootstrap) {
+                try await self.createPinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            }
         }
     }
 
@@ -193,7 +195,9 @@ actor VaultCloud {
                 onLine: (@Sendable (String) -> Void)? = nil) async throws -> Int {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await updatePinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            try await HostedInference.withRun(purpose: .background) {
+                try await self.updatePinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            }
         }
     }
 
@@ -297,6 +301,11 @@ actor VaultCloud {
 
             // Feed the remaining slices, one fresh merge session each, over the same staging.
             while next < slices.count {
+                if ModelBackend.current == .sentient, Task.isCancelled {
+                    throw VaultGenerator.VaultError.interrupted(resume: .init(sessionID: nil, stagingPath: staging.path,
+                        sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                        sessionScope: VaultGenerator.ResumeToken.scope(for: .sentient)))
+                }
                 try Task.checkCancellation()                     // the user's STOP, between slices
                 if slices.count > 1 { onProgress(.folding(part: next + 1, of: slices.count)) }
                 var invocation = configure(Self.updatePrompt(skeleton: Self.skeleton(of: staging), notes: slices[next]))
@@ -321,6 +330,11 @@ actor VaultCloud {
             // in the Knowledge editor during the run? If so, our staging snapshot is stale and swapping
             // would CLOBBER their edit. Discard staging instead; the notes stay in CycleStore and the
             // next cycle re-seeds from the now-current vault (their edit included).
+            if ModelBackend.current == .sentient, Task.isCancelled {
+                throw VaultGenerator.VaultError.interrupted(resume: .init(sessionID: nil, stagingPath: staging.path,
+                    sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    sessionScope: VaultGenerator.ResumeToken.scope(for: .sentient)))
+            }
             try Task.checkCancellation()
             guard VaultGenerator.vaultFingerprint(vault) == baseline else {
                 Log("VaultCloud.update: ⚠️ vault changed during the run (editor?) — swap aborted, re-run next cycle")

@@ -62,6 +62,7 @@ nonisolated enum CodexFailureReason: String, Sendable {
     /// Classify a typed spine error. Typed cases are certain; `notAvailable(.notWorking(detail))`,
     /// `exitFailure(_, message)` and `badEnvelope(message)` fall through to the text classifier.
     static func classify(_ error: Error) -> CodexFailureReason {
+        if let failure = error as? ClaudeAuth.LoginRequired { return failure.reason }
         if case VaultGenerator.VaultError.interrupted = error { return .timeoutOurs }
         if let failure = error as? NativeComputerUseFailure {
             switch failure.kind {

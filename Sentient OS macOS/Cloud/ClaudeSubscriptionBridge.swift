@@ -1,4 +1,4 @@
-// Owns one Claude subscription-backed Codex computer task: loopback provider, CLI, and MCP relay.
+// Owns one Claude-backed Codex computer task: loopback provider, CLI, and MCP relay.
 // Claude authenticates and reasons; Codex executes every advertised tool and returns its real result.
 // Doc: Documentation - Cloud - ClaudeCLI (the claude -p engine).md
 
@@ -18,6 +18,7 @@ actor ClaudeSubscriptionBridge {
     private let binary: String
     private let model: String
     private let effort: String
+    private let hostedEnvironment: [String: String]?
     private let interaction: SidekickInteraction?
     // Network callbacks create fresh Tasks; retain the originating helper diagnostics scope.
     private let diagnosticDirectory = ChildProcessDiagnostics.directory
@@ -60,15 +61,16 @@ actor ClaudeSubscriptionBridge {
     private var retiredRequests = Set<String>()
 
     init(binary: String, model: String, effort: String, timeout: TimeInterval,
-         namespaces: Set<String>, onProgress: @escaping @Sendable (String) -> Void) {
+         namespaces: Set<String>, hostedEnvironment: [String: String]? = nil, onProgress: @escaping @Sendable (String) -> Void) {
         self.interaction = SidekickInteraction.current
         self.binary = binary; self.model = model; self.effort = effort; self.timeout = timeout
         self.namespaces = namespaces; self.onProgress = onProgress
+        self.hostedEnvironment = hostedEnvironment
     }
 
     func start() async throws -> Configuration {
         guard !closed, listener == nil,
-              [ClaudeCLI.Model.sonnet.rawValue, ClaudeCLI.Model.opus.rawValue].contains(model),
+              (hostedEnvironment == nil ? [ClaudeCLI.Model.sonnet.rawValue, ClaudeCLI.Model.opus.rawValue].contains(model) : HostedClaudeRuntime.validModel(model)),
               ["low", "medium", "high"].contains(effort) else { throw Failure.unavailable }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])
@@ -98,7 +100,7 @@ actor ClaudeSubscriptionBridge {
         let mcp: [String: Any] = ["mcpServers": ["sentient_relay": ["type": "http", "url": base + "/mcp",
             "headers": ["Authorization": "Bearer " + secret]]]]
         try writePrivate(Wire.json(mcp), to: directory.appendingPathComponent("mcp.json"))
-        let table = "model_providers.sentient_claude={name=\"Claude subscription\",base_url=\"\(base)/v1\","
+        let table = "model_providers.sentient_claude={name=\"Claude inference\",base_url=\"\(base)/v1\","
             + "wire_api=\"responses\",env_key=\"\(Self.environmentKey)\",requires_openai_auth=false,"
             + "supports_websockets=false,request_max_retries=2,stream_max_retries=2,stream_idle_timeout_ms=\(timeouts.transportMilliseconds)}"
         return Configuration(overrides: [table, "model_provider=\"sentient_claude\"",
@@ -285,26 +287,38 @@ actor ClaudeSubscriptionBridge {
     }
 
     private func launch(_ payload: [String: Any]) throws {
+        let webInstructions = hostedEnvironment == nil
+            ? "Use your built-in WebSearch and WebFetch tools for web research, and the relay tools for app and file actions."
+            : "Use the advertised native browser tools for web research. Built-in WebSearch and WebFetch are unavailable in this hosted run."
+        let authRevision: UUID?
+        do { authRevision = hostedEnvironment == nil ? try ClaudeAuth.usableRevision() : nil }
+        catch {
+            // Preserve the typed reason for the owner even when rejection was already known
+            // before the first inference process (the HTTP response itself is intentionally generic).
+            fail(error)
+            throw error
+        }
         let system = (payload["instructions"] as? String ?? Wire.instructions) + """
 
         The sentient_relay MCP tools correspond to this Codex client's tools. Codex executes
         them and supplies the actual results. Use only the advertised tools for the user's task.
-        Use your built-in WebSearch and WebFetch tools for web research, and the relay tools
-        for app and file actions. You can alternate between them throughout the same task.
+        \(webInstructions) You can alternate research and app actions throughout the same task.
         Prefer set_value for editable text fields; verify accents, emoji, and other Unicode text.
         Never infer success from an attempted call. Do not obtain credentials or change permissions.
         """
         let systemFile = directory.appendingPathComponent("instructions.txt")
         try writePrivate(Data(system.utf8), to: systemFile)
         let input = try Wire.initialInput(payload)
-        let arguments = ["-p", "--model", model, "--effort", effort,
+        var arguments = ["-p", "--model", model, "--effort", effort,
             "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--permission-mode", "dontAsk", "--tools", "WebSearch,WebFetch",
-            "--allowedTools", "mcp__sentient_relay__*", "WebSearch", "WebFetch",
+            "--permission-mode", "dontAsk", "--tools", hostedEnvironment == nil ? "WebSearch,WebFetch" : "",
+            "--allowedTools", hostedEnvironment == nil ? "mcp__sentient_relay__*,WebSearch,WebFetch" : "mcp__sentient_relay__*",
             "--strict-mcp-config", "--mcp-config", directory.appendingPathComponent("mcp.json").path,
             "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence",
             "--system-prompt-file", systemFile.path]
+        if hostedEnvironment != nil { arguments += ["--bare"] }
         var environment = ClaudeCLI.baseEnv
+        if let hostedEnvironment { environment.merge(hostedEnvironment) { _, hosted in hosted } }
         environment.merge(["ENABLE_TOOL_SEARCH": "false", "MCP_CONNECTION_NONBLOCKING": "0",
             "MCP_TIMEOUT": "30000", "MCP_CONNECT_TIMEOUT_MS": "30000", "MCP_TOOL_TIMEOUT": String(timeouts.transportMilliseconds),
             "MAX_MCP_OUTPUT_TOKENS": "50000"]) { _, new in new }
@@ -316,6 +330,8 @@ actor ClaudeSubscriptionBridge {
         claudeTask = Task {
             let began = Date()
             do {
+                try Task.checkCancellation()
+                if let authRevision, ClaudeAuth.revision != authRevision { throw CancellationError() }
                 let result = try await ChildProcessDiagnostics.$directory.withValue(diagnosticDirectory) {
                     try await ChildProcessDiagnostics.$intentionalStops.withValue(diagnosticStops) {
                         try await SidekickInteraction.$current.withValue(interaction) {
@@ -330,9 +346,12 @@ actor ClaudeSubscriptionBridge {
                 }
                 try Task.checkCancellation()
                 if result.status == 124 { throw CodexCLI.CLIError.timedOut(after: timeout) }
-                let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000))
+                let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000), hosted: hostedEnvironment != nil)
                 complete(envelope)
-            } catch { fail(error) }
+            } catch {
+                if let authRevision { ClaudeAuth.rejected(error, after: authRevision) }
+                fail(error)
+            }
         }
     }
 

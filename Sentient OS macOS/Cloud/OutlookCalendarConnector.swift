@@ -20,15 +20,16 @@ nonisolated enum OutlookCalendarConnector {
     static let codexReads = ["get_profile", "get_mailbox_settings", "list_events", "fetch_event",
                              "find_available_slots", "get_schedule", "list_event_instances"]
     static func reads(_ backend: ModelBackend) -> [String] {
-        switch backend { case .claude: claudeReads; case .chatgpt: codexReads; case .custom: [] }
+        switch backend { case .claude: claudeReads; case .chatgpt: codexReads; case .custom, .sentient: [] }
     }
     static func knowledgeTools(_ backend: ModelBackend) -> [String] {
-        backend == .claude ? ["outlook_calendar_search", "read_resource"] : ["list_events", "fetch_event"]
+        guard backend.hasSubscriptionConnectors else { return [] }
+        return backend == .claude ? ["outlook_calendar_search", "read_resource"] : ["list_events", "fetch_event"]
     }
     static func profileTool(_ backend: ModelBackend) -> String { backend == .claude ? "get_me" : "get_profile" }
     static func createTool(_ backend: ModelBackend) -> String { backend == .claude ? "outlook_create_event" : "create_event" }
     static func actionTools(_ backend: ModelBackend, operation: Operation) -> [String] {
-        reads(backend) + (operation == .create && backend != .custom ? [createTool(backend)] : [])
+        reads(backend) + (operation == .create && backend.hasSubscriptionConnectors ? [createTool(backend)] : [])
     }
     static func codexPolicy(operation: Operation, exclusive: Bool = true) throws -> String {
         guard let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
@@ -48,7 +49,7 @@ nonisolated enum OutlookCalendarConnector {
         case .claude: prefixes = [Microsoft365Connector.prefix]
         case .chatgpt: prefixes = ["microsoft_outlook_calendar.", "mcp__codex_apps__microsoft_outlook_calendar__",
                                    "mcp__codex_apps__microsoft_outlook_calendar_", "mcp__codex_apps__microsoft_outlook_calendar."]
-        case .custom: return nil
+        case .custom, .sentient: return nil
         }
         guard let prefix = prefixes.first(where: name.hasPrefix) else { return nil }
         return String(name.dropFirst(prefix.count))
@@ -98,7 +99,7 @@ nonisolated enum OutlookCalendarConnector {
     }
     @MainActor static func readIdentity(onReceipt: MCPSource.ReceiptObserver? = nil, trackUsage: Bool = true) async throws -> Identity {
         let backend = ModelBackend.current
-        guard backend != .custom else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+        guard backend.hasSubscriptionConnectors else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
         let prompt = """
         Verify the connected Outlook Calendar account by calling \(profileTool(backend)) once
         with no arguments. Tool discovery and WaitForMcpServers are allowed. Do not read events,
@@ -111,7 +112,10 @@ nonisolated enum OutlookCalendarConnector {
             var envelope: CodexCLI.Envelope?
             do {
                 try Task.checkCancellation()
-                let result = try await FrontierRun.run(inv)
+                let request = inv
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 let account = try identity(raw: result.raw, backend: backend)
                 let origin = ConnectorRegistry.readOrigin(slug: slug, backend: backend)

@@ -19,7 +19,7 @@ args = parser.parse_args()
 
 source = (APP / 'Cloud/ClaudeCLI.swift').read_text()
 start = source.index('    static func startLogin(')
-end = source.index('\n    /// The login ground truth', start)
+end = source.index('\n    /// Effective login state', start)
 login = source[start:end]
 
 fixture = r'''
@@ -145,7 +145,7 @@ nonisolated final class Observations: @unchecked Sendable {
 
         if ClaudeCLI.locateBinary() != nil {
             let live = Observations()
-            let proc = try ClaudeCLI.startLogin(onURL: { live.receive($0) }, onExit: { live.end() })
+            let proc = try ClaudeCLI.startLogin(onURL: { live.receive($0) }, onExit: { _ in live.end() })
             defer { if proc.isRunning { proc.terminate(); proc.waitUntilExit() } }
             await until { !live.links.isEmpty || !proc.isRunning }
             check(live.links.count == 1 && proc.isRunning, "Real Claude captures a link and stays waiting")
@@ -196,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix="sentient login's ") as tmp:
 (deny mach-lookup (global-name "com.apple.securityd"))
 (deny process-exec (literal "/usr/bin/open") (literal "/usr/bin/osascript"))
 ''')
-    env = {'HOME': str(home), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'TMPDIR': str(directory),
+    env = {'HOME': str(profile), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'TMPDIR': str(directory),
            'CLAUDE_CONFIG_DIR': str(profile), 'DISABLE_AUTOUPDATER': '1', 'DISABLE_TELEMETRY': '1',
            'DISABLE_ERROR_REPORTING': '1', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'TERM': 'dumb'}
     if args.claude:

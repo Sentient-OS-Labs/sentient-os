@@ -8,11 +8,11 @@ import Foundation
 enum HostedConnectorSetup {
     private static var collectionJobs: [String: Task<Void, Never>] = [:]
     private static var teardownDepth = 0
-    /// Done saves the user's declaration immediately. Actual reads establish connection health;
+    /// Done saves the user's declaration immediately. Actual reads record health observations;
     /// provider discovery and optional contact collection never gate source selection.
     @discardableResult
     static func confirm(slug: String, backend: ModelBackend = .current, reconnected: Bool = false) -> Bool {
-        guard teardownDepth == 0, !Task.isCancelled, backend != .custom, ModelBackend.current == backend else { return false }
+        guard teardownDepth == 0, !Task.isCancelled, backend.hasSubscriptionConnectors, ModelBackend.current == backend else { return false }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return false }
         ConnectorCensus.confirmSelection(slug: slug, reconnected: reconnected)
@@ -42,7 +42,7 @@ enum HostedConnectorSetup {
     /// The existing checkpoint and notes remain intact until a subsequent read succeeds.
     /// This is not a new declaration or consent to collect an address: no background work runs.
     static func settingsOpened(slug: String, backend: ModelBackend = .current) {
-        guard teardownDepth == 0, backend != .custom, ModelBackend.current == backend else { return }
+        guard teardownDepth == 0, backend.hasSubscriptionConnectors, ModelBackend.current == backend else { return }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return }
         let defaults = UserDefaults.standard
@@ -59,7 +59,7 @@ enum HostedConnectorSetup {
         defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
     }
 
-    /// Source selection is synchronous, so no delayed verification can undo this opt-out.
+    /// Source selection is synchronous, so no delayed provider response can undo this opt-out.
     /// Keep the provider connection and existing knowledge; retire pending contact consent.
     static func stopReading(slug: String, backend: ModelBackend = .current) {
         guard teardownDepth == 0, ModelBackend.current == backend else { return }

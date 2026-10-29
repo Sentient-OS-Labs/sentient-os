@@ -63,7 +63,7 @@ nonisolated enum SlackToolPolicy {
 
     /// Runs before app initialization. Inputs are never printed, stored, or sent anywhere.
     static func runHelper(arguments: [String]) -> Int32 {
-        guard arguments.count == 6, let backend = ModelBackend(rawValue: arguments[2]), backend != .custom,
+        guard arguments.count == 6, let backend = ModelBackend(rawValue: arguments[2]), backend.hasSubscriptionConnectors,
               let operation = SlackConnector.Operation(rawValue: arguments[3]),
               let runID = UUID(uuidString: arguments[4]), arguments[5] == "-"
                 || arguments[5].range(of: "^[0-9a-f]{64}\\z", options: .regularExpression) != nil else { return reject() }

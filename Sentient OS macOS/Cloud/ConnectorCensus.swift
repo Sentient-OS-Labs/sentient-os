@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  Hosted connector declarations and separately observed connection health. Explicit Done
-//  permits a source read; only successful reads or native diagnostics verify the connection.
+//  permits a source read; actual reads record success or authentication-failure observations.
 //  Listing/refresh remains available to lab diagnostics and tool-address resolution.
 //
 //  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
@@ -36,7 +36,7 @@ nonisolated enum ConnectorCensus {
                 switch backend {
                 case .claude:  self = .claude
                 case .chatgpt: self = .chatgpt
-                case .custom:  return nil
+                case .custom, .sentient:  return nil
                 }
             }
         }
@@ -53,27 +53,17 @@ nonisolated enum ConnectorCensus {
         let iconPath: String?
         let healthy: Bool
         let lastSeen: Date
-        /// Missing on older caches: a declaration/catalog entry is not connection evidence.
+        /// Legacy cache field retained for compatibility; true records a successful read.
         var readinessVerified: Bool? = nil
         /// Claude's shared CLI login can change independently of the chosen backend. Keep
-        /// only its local fingerprint beside proof, never its email or native link identifier.
+        /// only its local fingerprint beside the observation, never its email or native link identifier.
         var readinessAccountIdentity: String? = nil
-        var isReady: Bool {
-            guard healthy, origin == .direct || readinessVerified == true else { return false }
-            if origin == .claude {
-                return readinessAccountIdentity != nil && readinessAccountIdentity == ClaudeAuth.cachedAccountIdentity
-            }
-            return true
-        }
-        /// A user's declaration permits the first read without claiming verified OAuth.
-        /// Real authentication failures stop later reads until the user reconnects.
+        /// Hosted selections remain available to attempt regardless of cached health or
+        /// account metadata. The caller owns reading consent; the actual reader owns errors
+        /// and account-bound checkpoints. A direct selection must still name a stored account;
+        /// its prior health cannot prevent another attempt using the actual OAuth grant.
         var canAttempt: Bool {
-            guard healthy else { return false }
-            if origin == .claude {
-                let owner = readinessAccountIdentity ?? ClaudeAuth.legacyConnectorAccountIdentity
-                return owner != nil && owner == ClaudeAuth.cachedAccountIdentity
-            }
-            return true
+            origin != .direct || DirectMCPStore.connection(slug) != nil
         }
 
         var id: String { "\(origin.rawValue):\(slug)" }
@@ -138,7 +128,7 @@ nonisolated enum ConnectorCensus {
             guard !Task.isCancelled else { return [] }
             return persist(connectors, for: .claude)
         case .chatgpt: return persist(listCodex(), for: .chatgpt)
-        case .custom:
+        case .custom, .sentient:
             return []
         }
     }
@@ -155,59 +145,16 @@ nonisolated enum ConnectorCensus {
         return await list()
     }
 
-    /// Explicit diagnostics only; never a prerequisite for Done or the first source read.
-    /// No model turn or content tool is called by this path.
-    static func verifyConnection(slug: String, backend: ModelBackend) async -> Bool {
-        guard ModelBackend.current == backend, let origin = DetectedConnector.Origin(backend: backend) else { return false }
-        let claudeScope: ClaudeAuth.ReadinessScope?
-        if backend == .claude {
-            let status = await ClaudeAuth.refresh()
-            guard let scope = ClaudeAuth.readinessScope, scope.accountIdentity == status.accountIdentity else { return false }
-            claudeScope = scope
-        } else { claudeScope = nil }
-        guard !Task.isCancelled, let account = readinessAccountIdentity(for: backend) else { return false }
-        do {
-            var observed = try await HostedConnectorReadinessProbe.verify(slug: slug, backend: backend)
-            if backend == .claude {
-                // Catch external Claude Code logins as well as Sentient's own login button.
-                let status = await ClaudeAuth.refresh()
-                guard status.accountIdentity == account else { return false }
-                observed.readinessAccountIdentity = account
-            }
-            let verified = observed
-            return await MainActor.run {
-                guard !Task.isCancelled, ModelBackend.current == backend,
-                      account == readinessAccountIdentity(for: backend),
-                      backend != .claude || claudeScope == ClaudeAuth.readinessScope else { return false }
-                // Concurrent diagnostics serialize their cache merge.
-                var records = cached(for: origin)
-                records.removeAll { $0.slug == slug }
-                records.append(verified)
-                persist(records, for: origin)
-                return verified.isReady
-            }
-        } catch { return false }
-    }
-
     static func readinessAccountIdentity(for backend: ModelBackend) -> String? {
         switch backend {
         case .chatgpt: CodexRuntime.accountIdentity
         case .claude: ClaudeAuth.cachedAccountIdentity
-        case .custom: nil
+        case .custom, .sentient: nil
         }
     }
 
-    static func checkConnection(slug: String) async -> Bool {
-        await verifyConnection(slug: slug, backend: ModelBackend.current)
-    }
-
-    static func isReady(slug: String, backend: ModelBackend) -> Bool {
-        guard let origin = DetectedConnector.Origin(backend: backend) else { return false }
-        return cached(for: origin).contains { $0.slug == slug && $0.isReady }
-    }
-
-    /// Existing opted-in sources may be read before their old cache has a verification marker.
-    /// Only the source reader's validated success or authentication failure updates this proof.
+    /// Record success or authentication failure observed during an actual read. Cached
+    /// health remains informational and does not override the user's source selection.
     static func recordReadOutcome(slug: String, backend: ModelBackend, connected: Bool) {
         guard let origin = DetectedConnector.Origin(backend: backend) else { return }
         let records = cached(for: origin).map { record in
@@ -221,7 +168,7 @@ nonisolated enum ConnectorCensus {
     }
 
     /// Explicit Done permits another read, including after a reconnect. Preserve provider and
-    /// account scope, but leave OAuth verification to the actual reader or diagnostics.
+    /// account scope, but leave connection-health observations to the actual reader.
     static func confirmSelection(slug: String, reconnected: Bool = false) {
         guard let origin = DetectedConnector.Origin(backend: ModelBackend.current) else { return }
         var records = cached(for: origin)

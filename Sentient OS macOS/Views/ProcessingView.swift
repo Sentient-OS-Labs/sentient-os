@@ -487,11 +487,15 @@ struct ProcessingView: View {
     /// (kind `.diskFull`, no message of its own). Classified kinds get a friendly title/body and,
     /// where there's something to click, the fix next to Retry.
     private func failedView(kind: OvernightCaution.Kind?, message: String) -> some View {
-        VStack(spacing: 20) {
+        let checkingClaude = kind == .loggedOut && ModelBackend.current == .claude && claude.verificationPending
+        return VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 46))
                 .foregroundStyle(.orange.opacity(0.85))
-            Text(Self.failTitle(kind)).font(.title3.weight(.semibold)).foregroundStyle(.white)
-            Text(Self.failBody(kind: kind, message: message)).font(.caption).foregroundStyle(.white.opacity(0.5))
+            Text(checkingClaude ? "Check your Claude sign-in" : Self.failTitle(kind))
+                .font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text(checkingClaude
+                 ? "Your browser sign-in finished. Sentient needs to confirm that Claude can run analysis before continuing. Your progress is saved."
+                 : Self.failBody(kind: kind, message: message)).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
                 Button(action: onExitEarly ?? onDone) {
@@ -501,8 +505,14 @@ struct ProcessingView: View {
                 if kind == .loggedOut {
                     Button("Retry") { session.retry() }
                         .buttonStyle(.bordered).tint(.white)
-                    if ModelBackend.current == .claude {
-                        Button("Sign in to Claude") { loginStarted = true; claude.startLogin(force: true) }
+                        .disabled(ModelBackend.current == .claude && (ClaudeAuth.requiresVerification || claude.loggingIn))
+                    if ModelBackend.current == .sentient {
+                        Button("Manage Sentient") {
+                            MainNavigation.shared.show(.settings, settingsPane: .frontierModel)
+                        }
+                        .buttonStyle(.borderedProminent).tint(.white)
+                    } else if ModelBackend.current == .claude {
+                        Button(claude.loginActionTitle) { loginStarted = true; claude.startLogin(force: true) }
                             .buttonStyle(.borderedProminent).tint(.white)
                             .disabled(claude.loggingIn)
                     } else {
@@ -520,24 +530,30 @@ struct ProcessingView: View {
                         .buttonStyle(.borderedProminent).tint(.white)
                 }
             }
-            if loginStarted, (ModelBackend.current == .claude ? claude.loggingIn : codex.loggingIn) {
+            if loginStarted, ModelBackend.current == .claude, let line = claude.loginStatusLine {
+                Text(line).font(.caption).foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center).frame(maxWidth: 360)
+            } else if loginStarted, codex.loggingIn {
                 Text("A browser window opened. Finish signing in there; I'll retry on my own.")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
         }
-        // The browser-login auto-notice, same as Settings → Health and onboarding: while our
-        // login is out, poll the active engine's login status (the login process self-exits
-        // once the sign-in lands, no confirm button); the moment it reads logged-in, retry the
-        // cycle on our own. Leaving the failed state cancels the poll.
-        .task(id: loginStarted) {
-            guard loginStarted else { return }
-            let isClaude = ModelBackend.current == .claude
-            while !Task.isCancelled, !(isClaude ? claude.loggedIn : codex.loggedIn) {
+        // ClaudeSetup owns OAuth and verification. Resume only after it publishes ready;
+        // a failed check leaves this screen idle until the user retries verification.
+        .task(id: "\(loginStarted)-\(claude.loggingIn)") {
+            let backend = ModelBackend.current
+            guard loginStarted, backend == .chatgpt || backend == .claude else { return }
+            let isClaude = backend == .claude
+            while !Task.isCancelled, ModelBackend.current == backend,
+                  !(isClaude ? claude.loggedIn : codex.loggedIn) {
+                if isClaude, !claude.loggingIn { return }
                 try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled, ModelBackend.current == backend else { return }
                 if isClaude { await claude.refreshLoginStatus() }
                 else { await codex.refreshLoginStatus() }
             }
-            guard !Task.isCancelled, (isClaude ? claude.loggedIn : codex.loggedIn) else { return }
+            guard !Task.isCancelled, ModelBackend.current == backend,
+                  (isClaude ? claude.loggedIn : codex.loggedIn) else { return }
             loginStarted = false
             // Unstructured on purpose: the retry flips state out of .failed, which tears THIS
             // task down — the run must survive that.
@@ -546,9 +562,16 @@ struct ProcessingView: View {
     }
 
     private static func failTitle(_ kind: OvernightCaution.Kind?) -> String {
+        if ModelBackend.current == .sentient {
+            switch kind {
+            case .loggedOut: return "Sentient needs to reconnect"
+            case .usageLimit: return "Hosted usage is temporarily limited"
+            default: break
+            }
+        }
         let claude = ModelBackend.current == .claude
         return switch kind {
-        case .loggedOut:      claude ? "Claude isn't signed in" : "Codex isn't logged in"
+        case .loggedOut:      claude ? "Claude needs a fresh sign-in" : "Codex isn't logged in"
         case .usageLimit:     claude ? "We hit Claude's usage limit" : "We hit ChatGPT's usage limit"
         case .noInternet:     "No internet connection"
         case .inputTooLarge:  "This batch was too big to send"
@@ -562,10 +585,23 @@ struct ProcessingView: View {
     /// Classified failures get a friendly, actionable line (the raw detail is in the log +
     /// Sentry); unclassified ones show the step's own message, as before.
     private static func failBody(kind: OvernightCaution.Kind?, message: String) -> String {
+        if ModelBackend.current == .sentient {
+            switch kind {
+            case .loggedOut:
+                return "Reconnect in Frontier Model Choice, then retry. Your saved knowledge stays on this Mac. No ChatGPT or Claude sign-in is needed."
+            case .usageLimit:
+                return "Hosted knowledge work has its own allowance and service limits. Check Frontier Model Choice for your connection and usage, then retry when available. Your saved knowledge stays on this Mac."
+            case .inputTooLarge:
+                return "This batch exceeded the hosted model’s request limit. Your saved knowledge stays on this Mac. Try again after updating Sentient."
+            case .connectorAuth:
+                return "A connected service needs attention. Reconnect it in Knowledge Sources, then retry."
+            default: break
+            }
+        }
         let claude = ModelBackend.current == .claude
         return switch kind {
         case .loggedOut:      claude
-            ? "Sentient runs on your own Claude account through Claude Code, and that sign-in has stopped working. Sign back in and I'll pick up right where we stopped."
+            ? "Claude Code needs a fresh sign-in before analysis can continue. Sign in to Claude below; your progress is saved. This is separate from your Gmail and Outlook connections."
             : "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
         case .usageLimit:     "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
         case .noInternet:     "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."

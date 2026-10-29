@@ -21,7 +21,9 @@ source += '\nenum ConnectorRegistry {\n' + '\n'.join(member(registry, signature)
     ['static func readOrigin(', 'static func readGenerationKey(']) + '\n}\n'
 fixture = r'''
 import Foundation
-enum ModelBackend: String { case chatgpt, claude, custom }
+enum ModelBackend: String { case chatgpt, claude, custom, sentient
+    var supportsHostedConnectors: Bool { self == .chatgpt || self == .claude }
+}
 enum CodexRuntime { static let sessionScope = "fixture", accountIdentity: String? = "codex-fixture" }
 enum DirectMCPStore {
     struct Connection { let id: String; let generation: Int }
@@ -39,15 +41,23 @@ final class UserDefaults: @unchecked Sendable {
     func removeObject(forKey key: String) { lock.withLock { _ = values.removeValue(forKey: key) } }
     var strings: [String] { lock.withLock { values.values.compactMap { $0 as? String } } }
 }
+enum CodexFailureReason: Sendable { case notLoggedIn, tokenExpired, refreshFailed }
+@MainActor enum ClaudeSetup { static let shared = SelfMock(); final class SelfMock { func authenticationRejected() {} } }
 enum ClaudeCLI {
+    enum Model: String { case sonnet }
+    static func parseEnvelope(_ output: CodexCLI.Output, durationMS: Int) throws {}
     static func locateBinary() -> String? { "inert-claude" }
     static let baseEnv: [String: String] = [:]
     static let rateLimitResetsAtKey = "limit", rateLimitTypeKey = "limit-type"
 }
 enum CodexCLI {
+    enum Availability { case notInstalled }
+    enum CLIError: Error { case notAvailable(Availability) }
     struct Output: Sendable { let stdout: String }
     static func executeAsync(binary: String, args: [String], stdinText: String?, cwd: String?,
-                             timeout: Double, extraEnv: [String: String]) async throws -> Output {
+                             timeout: Double, extraEnv: [String: String], includeCustomProviderKey: Bool = true) async throws -> Output {
+        precondition(!includeCustomProviderKey)
+        if args.contains("--max-turns") { return .init(stdout: "OK") }
         precondition(binary == "inert-claude" && args == ["auth", "status"])
         return try await NativeStatus.shared.read()
     }
@@ -103,12 +113,15 @@ actor NativeStatus {
         let failed = await ClaudeAuth.refresh()
         check(failed.accountIdentity == nil && ClaudeAuth.readinessScope == scopeA,
               "failed status cannot certify a new proof or erase the last known working account")
+        let retiredAuthRevision = ClaudeAuth.revision
         ClaudeAuth.beginAccountChange()
         check(ClaudeAuth.readinessScope == nil, "explicit login invalidates proof before auth changes")
         await NativeStatus.shared.configure(a)
         _ = await ClaudeAuth.refresh()
         check(ClaudeAuth.readinessScope?.accountIdentity == scopeA.accountIdentity && ClaudeAuth.readinessScope != scopeA,
               "same-account relogin changes the in-flight proof revision")
+        ClaudeAuth.rejected(ClaudeAuth.LoginRequired(), after: retiredAuthRevision)
+        check(!ClaudeAuth.requiresVerification, "old auth failure cannot revoke an explicitly changed account")
         await NativeStatus.shared.configure(a, blocked: true)
         let obsolete = Task { await ClaudeAuth.refresh() }
         while !(await NativeStatus.shared.entered) { await Task.yield() }
@@ -119,7 +132,8 @@ actor NativeStatus {
         check(ConnectorRegistry.readOrigin(slug: "gmail", backend: .claude) != originA,
               "Claude account changes invalidate source checkpoints and writing-style origins")
         await NativeStatus.shared.release()
-        _ = await obsolete.value
+        let obsoleteStatus = await obsolete.value
+        check(obsoleteStatus.accountIdentity == nil, "stale status cannot report the old account as current")
         check(ClaudeAuth.readinessScope == scopeB && scopeB.accountIdentity != scopeA.accountIdentity,
               "old delayed auth result cannot restore account A after login to B")
         check(ClaudeAuth.legacyConnectorAccountIdentity == scopeA.accountIdentity,
@@ -132,6 +146,27 @@ actor NativeStatus {
         _ = await ClaudeAuth.refresh()
         check(ClaudeAuth.cachedLoggedIn && ClaudeAuth.readinessScope == nil,
               "missing account identity cannot certify connectors despite a logged-in plan")
+        // Exercise concurrent identity reads and status commits. A lock inversion would
+        // deadlock this fixture, whose process has a bounded timeout.
+        await NativeStatus.shared.configure(b)
+        await withTaskGroup(of: Void.self) { tasks in
+            for _ in 0..<8 {
+                tasks.addTask {
+                    for _ in 0..<50 {
+                        _ = ClaudeAuth.readinessScope
+                        _ = await ClaudeAuth.refresh()
+                        _ = ClaudeAuth.cachedLoggedIn
+                    }
+                }
+            }
+        }
+        check(ClaudeAuth.readinessScope != nil, "concurrent auth refresh and identity reads complete")
+        let repair = ClaudeAuth.beginLogin()
+        _ = await ClaudeAuth.refresh()
+        check(ClaudeAuth.readinessScope == nil, "local account status cannot bypass runtime verification")
+        try! await ClaudeAuth.verifyLogin(revision: repair)
+        check(ClaudeAuth.readinessScope?.accountIdentity == scopeB.accountIdentity,
+              "successful verification restores the account with its organization identity")
         ClaudeAuth.destroy()
         check(ClaudeAuth.readinessScope == nil && ClaudeAuth.legacyConnectorAccountIdentity == nil,
               "teardown clears only local account proof state")
