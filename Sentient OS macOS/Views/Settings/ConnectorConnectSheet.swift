@@ -1,6 +1,6 @@
 //
 // ConnectorConnectSheet.swift
-// Hosted connection popups verify native linked-account metadata before saving selection. Direct accounts retain their
+// Hosted connection popups save the user's explicit selection immediately. Direct accounts retain their
 // browser OAuth, account IDs, knowledge toggle and cancellation lifecycle.
 // Doc: Documentation - Settings.md
 //
@@ -21,7 +21,6 @@ struct ConnectorConnectSheet: View {
     @State private var newConnectionID: UUID?
     @State private var connectionCompleted = false
     @State private var disconnecting = false
-    @State private var verifyingHosted = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
     @AppStorage private var hostedSelected: Bool
@@ -63,7 +62,7 @@ struct ConnectorConnectSheet: View {
 
     private var selectionSlug: String { connector?.slug ?? source.serviceSlug }
     private var connecting: Bool { connectionPhase != nil }
-    private var busy: Bool { connecting || disconnecting || verifyingHosted }
+    private var busy: Bool { connecting || disconnecting }
     private var connectTitle: String {
         switch connectionPhase {
         case .openingBrowser: "Opening sign-in…"
@@ -202,13 +201,8 @@ struct ConnectorConnectSheet: View {
                 }
             }
             if openedConnectorPage {
-                ConnectorActionButton(title: verifyingHosted ? "Checking connection…" : "Done", kind: .done,
-                    isLoading: verifyingHosted, action: done)
+                ConnectorActionButton(title: "Done", kind: .done, action: done)
                     .padding(.top, 14).disabled(busy)
-            }
-            if let message {
-                Text(message).font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
         }
     }
@@ -349,19 +343,10 @@ struct ConnectorConnectSheet: View {
     private func done() {
         guard !busy else { return }
         if !usesDirect {
-            verifyingHosted = true; message = nil
-            operation = Task { @MainActor in
-                let ready = await HostedConnectorSetup.verifyAndConfirm(slug: source.serviceSlug, backend: hostedBackend,
-                    reconnected: openedConnectorPage)
-                guard !Task.isCancelled else { return }
-                verifyingHosted = false; operation = nil
-                guard ready else {
-                    message = "This connection is not verified yet. Finish signing in, then try Done again. No source was added."
-                    return
-                }
-                connectors = ConnectorRegistry.detectedForCurrentBackend()
-                dismiss()
-            }
+            guard HostedConnectorSetup.confirm(slug: source.serviceSlug, backend: hostedBackend,
+                reconnected: openedConnectorPage) else { dismiss(); return }
+            connectors = ConnectorRegistry.detectedForCurrentBackend()
+            dismiss()
             return
         }
         if ConnectorRegistry.kbEligible(selectionSlug),

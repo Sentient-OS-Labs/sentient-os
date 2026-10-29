@@ -24,6 +24,7 @@ def declaration(source, signature):
 
 dedicated = (ROOT / "Views/CloudConnectSheet.swift").read_text()
 generic = (ROOT / "Views/Settings/ConnectorConnectSheet.swift").read_text()
+pills = (ROOT / "Views/Settings/ConnectorsSection.swift").read_text()
 dedicated_done = declaration(dedicated, "private func done()")
 generic_done = declaration(generic, "private func done()")
 dedicated_open = declaration(dedicated, "private func openConnectorPage()")
@@ -33,8 +34,9 @@ for name, source in (("dedicated", dedicated), ("generic", generic)):
     assert "MailAccountCollection.collect" not in source, name
     assert '"Open connector settings"' in source, name
 for action in (dedicated_done, generic_done):
-    assert "Task" in action and "await " in action
-    assert "HostedConnectorSetup.verifyAndConfirm" in action
+    assert "Task" not in action and "await " not in action
+    assert "HostedConnectorSetup.confirm" in action
+    assert "verifyAndConfirm" not in action
 for action in (dedicated_open, generic_open):
     assert "Task" not in action and "await " not in action
     assert "HostedConnectorSetup.settingsOpened" in action
@@ -47,6 +49,7 @@ source = r'''
 import Foundation
 
 @MainActor enum ModelBackend: String { case chatgpt, claude, custom; static var current: Self = .chatgpt }
+@MainActor enum CodexAuth { static let connectorLockedTip = "Locked" }
 @MainActor final class MemoryDefaults {
     var values: [String: Bool] = [:]
     func object(forKey key: String) -> Any? { values[key] }
@@ -68,6 +71,7 @@ import Foundation
             }
         }
         let slug: String
+        var canAttempt = true
     }
     static var records: [DetectedConnector] = []
     static func cached(for origin: DetectedConnector.Origin) -> [DetectedConnector] { records }
@@ -79,7 +83,7 @@ import Foundation
     static var onConfirm: () -> Void = {}
     static var onStop: () -> Void = {}
     static var stopCalls: [(String, ModelBackend)] = []
-    static func verifyAndConfirm(slug: String, backend: ModelBackend, reconnected: Bool) async -> Bool {
+    static func confirm(slug: String, backend: ModelBackend, reconnected: Bool) -> Bool {
         calls.append((slug, backend, reconnected))
         guard accepted, backend == ModelBackend.current, backend != .custom else { return false }
         onConfirm()
@@ -118,14 +122,11 @@ import Foundation
     var backend: ModelBackend = .chatgpt
     var connected = false
     var selected = false
-    var checkingConnection = false
-    var connectionProblem: String?
-    var verification: Task<Void, Never>?
     var openedConnectorPage = false
     var dismissals = 0
     init(_ slug: String) { service = Service(slug: slug) }
     func dismiss() { dismissals += 1 }
-    func tapDone() async { done(); let pending = verification; await pending?.value }
+    func tapDone() { done() }
     func openSettings() { openConnectorPage() }
     func tapStopReading() { stopReading() }
 __DEDICATED__
@@ -138,8 +139,6 @@ __DEDICATED__
     var hostedSelected = false
     var usesDirect = false
     var busy = false
-    var verifyingHosted = false
-    var message: String?
     var operation: Task<Void, Never>?
     var connectors: [ConnectorCensus.DetectedConnector] = []
     var name: String { source.serviceSlug }
@@ -148,10 +147,23 @@ __DEDICATED__
     var connected: Bool { hostedConnected }
     init(_ slug: String) { source = Source(serviceSlug: slug) }
     func dismiss() { dismissals += 1 }
-    func tapDone() async { done(); let pending = operation; await pending?.value }
+    func tapDone() { done() }
     func stopReading() { stopHostedReading() }
     func openSettings() { openConnectorPage() }
 __GENERIC__
+}
+@MainActor struct PillFixture {
+    struct Source {
+        let serviceSlug: String
+        let connector: ConnectorCensus.DetectedConnector?
+    }
+    var source: Source
+    var knowledgeEnabled = true
+    var selected = true
+    var locked = false
+    var detailText: String? { detail }
+    var statusText: String { status }
+__PILL__
 }
 
 @main struct SheetTests {
@@ -210,11 +222,11 @@ __GENERIC__
             let sheet = DedicatedFixture(slug)
             HostedConnectorSetup.onConfirm = { sheet.connected = true }
             sheet.openedConnectorPage = true
-            await sheet.tapDone()
-            check(sheet.connected && sheet.dismissals == 1, "Dedicated Done did not confirm/dismiss after verification")
+            sheet.tapDone()
+            check(sheet.connected && sheet.dismissals == 1, "Dedicated Done did not immediately confirm/dismiss")
             check(HostedConnectorSetup.calls.first?.0 == slug && HostedConnectorSetup.calls.first?.2 == true, "Dedicated confirmation lost its source/reconnect")
             check(Analytics.signals == 1, "First confirmation telemetry missing")
-            await sheet.tapDone()
+            sheet.tapDone()
             check(Analytics.signals == 1, "Existing connection counted again")
             sheet.selected = true
             HostedConnectorSetup.onStop = { sheet.selected = false }
@@ -227,8 +239,8 @@ __GENERIC__
                   "Stale dedicated sheet revoked the current provider selection")
             reset()
             let stale = DedicatedFixture(slug); ModelBackend.current = .claude
-            await stale.tapDone()
-            check(!stale.connected && stale.dismissals == 0 && stale.connectionProblem != nil && Analytics.signals == 0, "Stale provider confirmed or signaled")
+            stale.tapDone()
+            check(!stale.connected && stale.dismissals == 1 && Analytics.signals == 0, "Stale provider confirmed or signaled")
         }
         for slug in ["google-drive", "outlook-mail", "outlook-calendar", "slack"] {
             reset()
@@ -238,8 +250,8 @@ __GENERIC__
             ConnectorCensus.records = [.init(slug: slug)]
             check(!sheet.connected, "Cached discovery overrode false reading preference")
             sheet.openedConnectorPage = true
-            await sheet.tapDone()
-            check(sheet.hostedSelected && sheet.dismissals == 1, "Hosted Done did not verify then dismiss")
+            sheet.tapDone()
+            check(sheet.hostedSelected && sheet.dismissals == 1, "Hosted Done did not immediately confirm/dismiss")
             check(HostedConnectorSetup.calls.first?.0 == slug && HostedConnectorSetup.calls.first?.2 == true, "Hosted confirmation lost its source/reconnect")
             ConnectorCensus.records = []
             check(sheet.connected, "Missing cache undid explicit source selection")
@@ -248,7 +260,7 @@ __GENERIC__
             check(!sheet.hostedSelected && HostedConnectorSetup.calls.count == 1
                   && HostedConnectorSetup.stopCalls.first?.0 == slug,
                   "Hosted Stop reading bypassed shared consent cancellation")
-            await sheet.tapDone()
+            sheet.tapDone()
             check(sheet.hostedSelected, "Done did not delegate re-enabling a stored false selection")
             ModelBackend.current = .claude
             sheet.stopReading()
@@ -256,8 +268,8 @@ __GENERIC__
         }
         reset()
         let stale = GenericFixture("slack"); ModelBackend.current = .claude
-        await stale.tapDone()
-        check(!stale.hostedSelected && stale.dismissals == 0 && stale.message != nil, "Stale generic sheet confirmed")
+        stale.tapDone()
+        check(!stale.hostedSelected && stale.dismissals == 1, "Stale generic sheet confirmed")
         reset()
         ConnectorRegistry.eligible = false
         let taskOnly = GenericFixture("task-only")
@@ -266,14 +278,25 @@ __GENERIC__
         check(taskOnly.connected && !taskOnly.hostedSelected, "Task-only declaration invented reading state")
         reset()
         let direct = GenericFixture("direct-fixture"); direct.usesDirect = true
-        direct.busy = true; await direct.tapDone()
+        direct.busy = true; direct.tapDone()
         check(direct.dismissals == 0 && HostedConnectorSetup.calls.isEmpty, "Direct OAuth lost its busy guard")
-        direct.busy = false; await direct.tapDone()
+        direct.busy = false; direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == true, "Direct initial selection changed")
         check(HostedConnectorSetup.calls.isEmpty, "Direct OAuth was routed through hosted trust")
         UserDefaults.standard.values["mcp.direct-fixture.kb"] = false
-        await direct.tapDone()
+        direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == false, "Direct Settings opt-out was overwritten")
+        var pill = PillFixture(source: .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive")))
+        check(pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
+              "Explicit Done still appeared to need verification in the source list")
+        pill.source = .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive", canAttempt: false))
+        check(pill.detailText == "Connection needs attention · Manage", "Actual read failure lost its source warning")
+        pill.source = .init(serviceSlug: "google-drive", connector: nil)
+        check(pill.detailText != nil, "Missing account lost its source warning")
+        pill.knowledgeEnabled = false; pill.selected = false
+        check(pill.detailText == nil && !pill.statusText.hasPrefix("Selected"), "Unselected source appeared selected or broken")
+        pill.locked = true
+        check(pill.statusText == CodexAuth.connectorLockedTip && pill.detailText == nil, "Locked connector lost its plan guidance")
         print("PASS: \(checks) hosted sheet confirmation, state, provider and direct-route checks")
     }
 }
@@ -284,7 +307,8 @@ __GENERIC__
     declaration(generic, "private func stopHostedReading()"),
     declaration(generic, "private var hostedCanRead: Bool"),
     declaration(generic, "private var hostedConnected: Bool"),
-]))
+])).replace("__PILL__", declaration(pills, "private var detail: String?") + "\n" +
+    declaration(pills, "private var status: String"))
 
 with tempfile.TemporaryDirectory(prefix="sentient-hosted-sheet-tests-") as directory:
     directory = Path(directory)

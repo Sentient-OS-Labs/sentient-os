@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run actual hosted verification, census confirmation and setup against native protocol fixtures.
+"""Run hosted declarations and optional native diagnostics against protocol fixtures.
 Only the subprocess transport and preferences are inert. No account, model, network or source
 content is accessed. Exercises successful metadata, malformed/wrong grants and cancellation.
 """
@@ -30,9 +30,11 @@ final class UserDefaults {
     func bool(forKey k:String)->Bool{values[k] as? Bool ?? false}
     func integer(forKey k:String)->Int{values[k] as? Int ?? 0}
     func string(forKey k:String)->String?{values[k] as? String}
+    func data(forKey k:String)->Data?{values[k] as? Data}
     func removeObject(forKey k:String){values.removeValue(forKey:k)}
 }
-enum CodexRuntime { static var accountIdentity:String?="synthetic-account" }
+enum CodexRuntime { static var accountIdentity:String?="synthetic-account"; static let sessionScope="fixture" }
+enum Analytics { static func signal(_ name:String,parameters:[String:String]){} }
 enum ClaudeAuth {
     struct ReadinessScope:Equatable,Sendable { let accountIdentity:String;let revision:Int }
     struct Status { let accountIdentity:String? }
@@ -69,9 +71,17 @@ enum ConnectorRegistry {
 }
 enum ConnectorCensus {
 // DETECTED
-    static var records:[DetectedConnector]=[]
-    static func cached(for origin:DetectedConnector.Origin)->[DetectedConnector]{records.filter{$0.origin==origin}}
-    @discardableResult static func persist(_ values:[DetectedConnector],for origin:DetectedConnector.Origin)->[DetectedConnector]{records.removeAll{$0.origin==origin};records+=values;return values}
+    static var records:[DetectedConnector] {
+        get { cached(for:.chatgpt)+cached(for:.claude) }
+        set {
+            for origin in [DetectedConnector.Origin.chatgpt,.claude] {
+                if let key=storageKey(for:origin) {
+                    UserDefaults.standard.set(try! JSONEncoder().encode(newValue.filter{$0.origin==origin}),forKey:key)
+                }
+            }
+        }
+    }
+    static func logicalServices(_ values:[DetectedConnector])->[DetectedConnector]{values}
     static func titleCased(_ s:String)->String{s}
     static func slugify(_ s:String)->String{s.lowercased().replacingOccurrences(of:" ",with:"-")}
 // CENSUS_METHODS
@@ -122,7 +132,7 @@ nonisolated final class MailProbeProcess:@unchecked Sendable {
 }
 '''
 fixture=fixture.replace('// DETECTED',member(census,'struct DetectedConnector:'))
-fixture=fixture.replace('// CENSUS_METHODS','\n'.join(member(census,s)for s in('static func verifyConnection(','static func readinessAccountIdentity(','static func isReady(','static func invalidateReadiness(','static func recordReadOutcome(','static func confirmSelection(','static func preservingReadiness(')))
+fixture=fixture.replace('// CENSUS_METHODS','\n'.join(member(census,s)for s in('static func verifyConnection(','static func readinessAccountIdentity(','static func isReady(','static func recordReadOutcome(','static func confirmSelection(','static func preservingReadiness(','static func persist(','static func cached(','private static func storageKey(')))
 checks=r'''
 @main struct Test {
     @MainActor static func main()async throws{
@@ -133,76 +143,121 @@ checks=r'''
             ClaudeAuth.nativeIdentity="claude-a";ClaudeAuth.cachedAccountIdentity="claude-a";ClaudeAuth.legacyConnectorAccountIdentity="claude-a";ClaudeAuth.revision=0
             MailProbeProcess.state.withLock{$0.invalid=false;$0.missingLink=false;$0.wrongTool=false;$0.wrongService=false;$0.blocked=false;$0.started=0;$0.methods=[]}
         }
-        clear()
-        for slug in ["gmail","google-calendar","google-drive"]{
-            ConnectorCensus.confirmSelection(slug:slug)
-            check(!HostedConnectorSetup.confirm(slug:slug),"browser declaration alone cannot select "+slug)
+        for backend in [ModelBackend.chatgpt,.claude] {
+            clear();ModelBackend.current=backend
+            MailProbeProcess.state.withLock{$0.invalid=true;$0.blocked=true}
+            for slug in ["gmail","google-calendar","google-drive"] {
+                check(HostedConnectorSetup.confirm(slug:slug),"Done immediately selects \(backend.rawValue)/\(slug) despite unavailable metadata")
+            }
+            check(ConnectorCensus.records.count==3 && ConnectorCensus.records.allSatisfy{$0.canAttempt && !$0.isReady},
+                  "declarations permit first reads without fabricating verified OAuth")
+            check(UserDefaults.standard.bool(forKey:"dbg.run.gmail") && UserDefaults.standard.bool(forKey:"dbg.run.calendar")
+                && UserDefaults.standard.bool(forKey:"mcp.google-drive.kb"),"all source opt-ins are saved")
+            check(MailProbeProcess.state.withLock{$0.started}==0 && MailAccountCollection.calls==0,
+                  "Done launches no metadata probe, model turn or contact collection")
+            let origin=ConnectorCensus.DetectedConnector.Origin(backend:backend)!
+            ConnectorCensus.persist([],for:origin)
+            check(ConnectorCensus.records.count==3 && ConnectorCensus.records.allSatisfy(\.canAttempt),
+                  "empty catalog refresh cannot erase explicit selections for \(backend.rawValue)")
+            let metadata=ConnectorCensus.records.map { record in
+                ConnectorCensus.DetectedConnector(slug:record.slug,displayName:record.displayName,origin:origin,
+                    serverURL:backend == .claude ? ConnectorRegistry.pack(forSlug:record.slug)?.claudeServerURL:nil,
+                    catalogID:backend == .chatgpt ? ConnectorRegistry.pack(forSlug:record.slug)?.codexCatalogID:nil,
+                    iconPath:nil,healthy:false,lastSeen:.now)
+            }
+            ConnectorCensus.persist(metadata,for:origin)
+            check(ConnectorCensus.records.allSatisfy{$0.canAttempt && !$0.isReady},
+                  "catalog refresh retains current-provider declarations despite stale health for \(backend.rawValue)")
+            HostedConnectorSetup.settingsOpened(slug:"gmail")
+            check(ConnectorCensus.records.first{$0.slug=="gmail"}!.canAttempt && UserDefaults.standard.bool(forKey:"dbg.run.gmail"),
+                  "opening connector settings cannot disable an already selected source")
+            ConnectorCensus.recordReadOutcome(slug:"gmail",backend:backend,connected:false)
+            check(!ConnectorCensus.records.first{$0.slug=="gmail"}!.canAttempt,"real authentication failure stops later reads")
+            check(HostedConnectorSetup.confirm(slug:"gmail",reconnected:true),"explicit reconnect permits retry after authentication failure")
+            check(ConnectorCensus.records.first{$0.slug=="gmail"}!.canAttempt && !ConnectorCensus.records.first{$0.slug=="gmail"}!.isReady,
+                  "reconnect clears failed health without inventing verified OAuth")
+            ConnectorCensus.recordReadOutcome(slug:"gmail",backend:backend,connected:true)
+            check(ConnectorCensus.records.first{$0.slug=="gmail"}!.isReady,"successful actual read establishes verified health")
         }
-        check(ConnectorCensus.records.allSatisfy{!$0.isReady},"three fabricated healthy declarations cannot become verified ready")
+        // Metadata diagnostics remain strict, but never select a source or gate explicit Done.
         for flag in ["link","tool","service","malformed"]{
             clear();MailProbeProcess.state.withLock{f in
                 f.missingLink=flag=="link";f.wrongTool=flag=="tool";f.wrongService=flag=="service";f.invalid=flag=="malformed"
             }
-            check(!(await HostedConnectorSetup.verifyAndConfirm(slug:"gmail")),"invalid "+flag+" evidence cannot save source")
-            check(!UserDefaults.standard.bool(forKey:"dbg.run.gmail"),"failed verification leaves selection unchanged")
+            check(!(await ConnectorCensus.verifyConnection(slug:"gmail",backend:.chatgpt)),"diagnostics reject invalid "+flag+" evidence")
+            check(!UserDefaults.standard.bool(forKey:"dbg.run.gmail"),"diagnostics never imply reading consent")
+            let before=MailProbeProcess.state.withLock{$0.started}
+            check(HostedConnectorSetup.confirm(slug:"gmail"),"Done still works after a failed optional diagnostic")
+            check(MailProbeProcess.state.withLock{$0.started}==before,"Done does not retry the failing diagnostic")
         }
         clear()
         for slug in ["gmail","google-calendar","google-drive"]{
-            check(await HostedConnectorSetup.verifyAndConfirm(slug:slug),"live linked read metadata selects "+slug)
+            check(await ConnectorCensus.verifyConnection(slug:slug,backend:.chatgpt),"live linked read metadata verifies "+slug)
         }
-        check(ConnectorCensus.records.filter(\.isReady).count==3,"three actual metadata proofs become three ready services")
-        check(MailAccountCollection.calls==0,"verification performs no email/contact collection")
+        check(ConnectorCensus.records.filter(\.isReady).count==3,"actual metadata proofs remain independently verified")
+        check(!UserDefaults.standard.bool(forKey:"dbg.run.gmail"),"successful diagnostics never opt the user into reading")
         let methods=MailProbeProcess.state.withLock{$0.methods}
-        check(Set(methods).isSubset(of:["initialize","initialized","mcpServerStatus/list"]),"Codex verification uses only model-free inventory controls")
-        HostedConnectorSetup.settingsOpened(slug:"gmail")
-        check(!ConnectorCensus.isReady(slug:"gmail",backend:.chatgpt) && UserDefaults.standard.bool(forKey:"dbg.run.gmail"),"opening reconnect preserves selection but invalidates old proof")
-        check(!(await HostedConnectorSetup.verifyAndConfirm(slug:"gmail",backend:.claude)),"wrong backend cannot save a late source")
+        check(Set(methods).isSubset(of:["initialize","initialized","mcpServerStatus/list"]),"Codex diagnostic uses only model-free controls")
+        check(!HostedConnectorSetup.confirm(slug:"gmail",backend:.claude),"wrong backend cannot save a source")
         clear();MailProbeProcess.state.withLock{$0.blocked=true}
-        let cancelled=Task{await HostedConnectorSetup.verifyAndConfirm(slug:"gmail")}
+        let cancelled=Task{await ConnectorCensus.verifyConnection(slug:"gmail",backend:.chatgpt)}
         while MailProbeProcess.state.withLock({$0.started})==0{await Task.yield()}
         cancelled.cancel()
-        check(!(await cancelled.value) && ConnectorCensus.records.isEmpty && !UserDefaults.standard.bool(forKey:"dbg.run.gmail"),"cancelled verification saves neither readiness nor source selection")
-        clear();MailProbeProcess.state.withLock{$0.blocked=true}
-        let reset=Task{await HostedConnectorSetup.verifyAndConfirm(slug:"gmail")}
-        while MailProbeProcess.state.withLock({$0.started})==0{await Task.yield()}
-        await HostedConnectorSetup.beginTeardown();HostedConnectorSetup.endTeardown()
-        check(!(await reset.value) && ConnectorCensus.records.isEmpty,"reset drains verification before late readiness can repopulate state")
+        check(!(await cancelled.value) && ConnectorCensus.records.isEmpty,"cancelled diagnostic cannot persist readiness")
         clear();ModelBackend.current = .claude
-        check(await HostedConnectorSetup.verifyAndConfirm(slug:"gmail",backend:.claude),"Claude requires connected matching server with a reviewed read tool")
-        check(Set(MailProbeProcess.state.withLock{$0.methods}).isSubset(of:["initialize","mcp_status"]),"Claude verification sends control requests only and no user/model prompt")
+        check(await ConnectorCensus.verifyConnection(slug:"gmail",backend:.claude),"Claude diagnostics verify matching connected read metadata")
+        check(Set(MailProbeProcess.state.withLock{$0.methods}).isSubset(of:["initialize","mcp_status"]),"Claude diagnostic sends no model prompt")
         let claudeProof=ConnectorCensus.records.first!
-        check(claudeProof.readinessAccountIdentity=="claude-a" && claudeProof.isReady,"Claude proof records its verified account scope")
+        check(claudeProof.readinessAccountIdentity=="claude-a" && claudeProof.isReady,"Claude proof retains its account scope")
         ClaudeAuth.cachedAccountIdentity="claude-b"
-        check(!claudeProof.isReady && !claudeProof.canAttempt(legacyCompleted:true),"account A proof never authorizes account B")
+        check(!claudeProof.isReady && !claudeProof.canAttempt,"account A proof never authorizes account B")
+        check(HostedConnectorSetup.confirm(slug:"gmail"),"account B can explicitly choose its own Gmail")
+        let declaredB=ConnectorCensus.records.first!
+        check(declaredB.canAttempt && !declaredB.isReady && declaredB.readinessAccountIdentity=="claude-b", "new account declaration replaces old-account proof")
+        ClaudeAuth.cachedAccountIdentity="claude-a"
+        check(!declaredB.canAttempt,"new account declaration is not inherited on switching back")
         clear();ModelBackend.current = .claude;MailProbeProcess.state.withLock{$0.blocked=true}
-        let switched=Task{await HostedConnectorSetup.verifyAndConfirm(slug:"gmail",backend:.claude)}
+        let switched=Task{await ConnectorCensus.verifyConnection(slug:"gmail",backend:.claude)}
         while MailProbeProcess.state.withLock({$0.started})==0{await Task.yield()}
         ClaudeAuth.nativeIdentity="claude-b";MailProbeProcess.state.withLock{$0.blocked=false}
-        check(!(await switched.value) && ConnectorCensus.records.isEmpty && !UserDefaults.standard.bool(forKey:"dbg.run.gmail"),"external Claude login during verification cannot save old-account proof")
+        check(!(await switched.value) && ConnectorCensus.records.isEmpty,"external Claude login during diagnostics cannot save old-account proof")
         clear();ModelBackend.current = .claude;MailProbeProcess.state.withLock{$0.blocked=true}
-        let relogin=Task{await HostedConnectorSetup.verifyAndConfirm(slug:"gmail",backend:.claude)}
+        let relogin=Task{await ConnectorCensus.verifyConnection(slug:"gmail",backend:.claude)}
         while MailProbeProcess.state.withLock({$0.started})==0{await Task.yield()}
         ClaudeAuth.beginAccountChange();MailProbeProcess.state.withLock{$0.blocked=false}
-        check(!(await relogin.value) && ConnectorCensus.records.isEmpty,"explicit same-account login invalidates an in-flight proof scope")
+        check(!(await relogin.value) && ConnectorCensus.records.isEmpty,"explicit login invalidates an in-flight diagnostic scope")
         let claudeLegacy=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:.claude,serverURL:nil,catalogID:nil,iconPath:nil,healthy:true,lastSeen:.now)
-        check(claudeLegacy.canAttempt(legacyCompleted:true),"legacy selected Claude sources retain first-account reading")
+        check(claudeLegacy.canAttempt,"legacy declaration stays bound to the first observed account")
         ClaudeAuth.cachedAccountIdentity="claude-b"
-        check(!claudeLegacy.canAttempt(legacyCompleted:true),"legacy Claude cache is not inherited by a later account")
+        check(!claudeLegacy.canAttempt,"legacy Claude cache is not inherited by a later account")
         clear();ModelBackend.current = .claude;MailProbeProcess.state.withLock{$0.wrongTool=true}
-        check(!(await HostedConnectorSetup.verifyAndConfirm(slug:"gmail",backend:.claude)),"Claude connected status without reviewed reads cannot count")
+        check(!(await ConnectorCensus.verifyConnection(slug:"gmail",backend:.claude)),"diagnostics do not certify an unrecognized read tool")
         let old=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:.chatgpt,serverURL:nil,catalogID:nil,iconPath:nil,healthy:true,lastSeen:.now)
-        check(!old.isReady && old.canAttempt(legacyCompleted:true) && !old.canAttempt(legacyCompleted:false),"legacy healthy selection remains attemptable only for an established completed user")
-        let legacyData=try JSONEncoder().encode(old)
-        let decoded=try JSONDecoder().decode(ConnectorCensus.DetectedConnector.self,from:legacyData)
-        check(decoded.healthy && decoded.readinessVerified == nil && !decoded.isReady,"legacy cache decoding retains unknown evidence without falsely counting it")
+        check(!old.isReady && old.canAttempt,"legacy healthy selections can attempt a first analysis without verification")
+        let legacyData=try JSONEncoder().encode(old);let decoded=try JSONDecoder().decode(ConnectorCensus.DetectedConnector.self,from:legacyData)
+        check(decoded.healthy && decoded.readinessVerified == nil && !decoded.isReady,"legacy cache stays compatible without claiming OAuth proof")
         var verified=old;verified.readinessVerified=true
-        check(ConnectorCensus.preservingReadiness(old,previous:verified).isReady,"catalog refresh preserves a real verification marker")
-        let disconnected=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:.chatgpt,serverURL:nil,catalogID:nil,iconPath:nil,healthy:false,lastSeen:.now,readinessVerified:false)
-        check(!ConnectorCensus.preservingReadiness(old,previous:disconnected).healthy,"catalog presence cannot undo an actual authentication failure")
-        print("Hosted source readiness: \(checks) checks passed")
+        check(ConnectorCensus.preservingReadiness(old,previous:verified).isReady,"catalog refresh preserves actual verification")
+        for origin in [ConnectorCensus.DetectedConnector.Origin.chatgpt,.claude] {
+            let catalog=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:origin,serverURL:nil,catalogID:nil,iconPath:nil,healthy:true,lastSeen:.now)
+            let disconnected=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:origin,serverURL:nil,catalogID:nil,iconPath:nil,healthy:false,lastSeen:.now,readinessVerified:false)
+            check(!ConnectorCensus.preservingReadiness(catalog,previous:disconnected).canAttempt,"catalog presence cannot undo actual authentication failure for \(origin.rawValue)")
+            let staleCatalog=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:origin,serverURL:nil,catalogID:nil,iconPath:nil,healthy:false,lastSeen:.now)
+            let declared=ConnectorCensus.DetectedConnector(slug:"gmail",displayName:"Gmail",origin:origin,serverURL:nil,catalogID:nil,iconPath:nil,healthy:true,lastSeen:.now,readinessVerified:false,readinessAccountIdentity:origin == .claude ? "claude-a":nil)
+            let refreshed=ConnectorCensus.preservingReadiness(staleCatalog,previous:declared)
+            check(refreshed.canAttempt && !refreshed.isReady,"a stale catalog health check cannot re-block explicit Done for \(origin.rawValue)")
+        }
+        clear();ModelBackend.current = .chatgpt
+        HostedConnectorSetup.confirm(slug:"gmail")
+        CodexRuntime.accountIdentity="other-account"
+        check(ConnectorCensus.cached(for:.chatgpt).isEmpty,"another ChatGPT account cannot inherit a declaration")
+        CodexRuntime.accountIdentity="synthetic-account"
+        check(ConnectorCensus.cached(for:.chatgpt).first?.canAttempt == true,"returning ChatGPT account retains its declaration")
+        print("Hosted declarations and diagnostics: \(checks) checks passed")
     }
 }
 '''
+
 with tempfile.TemporaryDirectory(prefix='sentient-hosted-readiness-') as directory:
     path=Path(directory);(path/'main.swift').write_text('\n'.join((fixture,probe,setup,checks)))
     subprocess.run(['xcrun','swiftc','-D','DEBUG','-parse-as-library',str(path/'main.swift'),'-o',str(path/'check')],check=True)
