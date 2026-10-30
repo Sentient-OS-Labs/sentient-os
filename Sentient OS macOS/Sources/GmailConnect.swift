@@ -10,6 +10,7 @@
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
 //  trust their confirmation. Connection problems are handled by the actual processing read.
 //
+//  During first analysis, interrupted imports replay all windows within their original bounds.
 //  Reads save each validated window with durable coverage in CycleStore. Initial imports cover
 //  four weeks with at most two concurrent reads; retries resume only unfinished windows. Everyday
 //  reads use a fixed range since the last fully covered watermark. Saved notes can reach the
@@ -101,6 +102,17 @@ enum GmailConnect {
 
     private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
         let origin = GoogleSourceRead.origin(bucket: bucketKey)
+        if InitialAnalysisRecovery.replayCloudStages {
+            let pending = try await CycleStore.shared.gmailReadState()
+            let completed = try await CycleStore.shared.mcpCheckpoint(bucketKey)
+            // A whole completed stage is retained. An unfinished stage starts all its windows
+            // again; beginGmailRead retires its partial notes and preserves the original bounds.
+            if pending == nil, let completed, completed.origin == origin, completed.mark.order > 0 {
+                guard completed.mark.order <= Date().timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
+                return 0
+            }
+            return try await readInitial(onProgress: onProgress, replaceNotes: false)
+        }
         // Resume coverage before consulting the global watermark, which deliberately does not
         // advance over gaps. The stored bounds never move with the retry's date or time zone.
         if let state = try await CycleStore.shared.gmailReadState(), state.origin == origin {

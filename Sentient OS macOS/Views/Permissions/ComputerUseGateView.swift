@@ -14,7 +14,8 @@ struct ComputerUseGateView: View {
                             continueTitle: continueTitle,
                             canContinue: gate.showingVoiceRepair || (gate.requiresPermissionRestart
                                 ? gate.canRestartAfterPermissions : gate.isReadyForTask),
-                            onContinue: gate.continueNow, compact: !gate.showingVoiceRepair) {
+                            onContinue: gate.continueNow, compact: !gate.showingVoiceRepair,
+                            edgeGlow: !gate.showingVoiceRepair) {
             if !gate.showingVoiceRepair {
                 SentientPermissionRows(gate: gate, compact: true)
                 if gate.backend == .cua, !gate.sentientScreen, SafeAppRelaunch.shared.canRelaunchPermissionWait {

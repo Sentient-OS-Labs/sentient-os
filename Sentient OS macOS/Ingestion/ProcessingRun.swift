@@ -42,6 +42,7 @@ final class ProcessingRun {
         var progress: RunProgress
         var failure: CycleFailure?
         var hadDiagnostics = false
+        var deviceProgress: RunProgress?
         var complete: Bool {
             failure == nil && !progress.diskFull && progress.sourceReadFailures.isEmpty
                 && progress.failed == 0 && progress.extractionFailed == 0 && progress.parseFailures == 0
@@ -52,6 +53,7 @@ final class ProcessingRun {
     let request: ProcessingRequest
     let scheduled: Bool
     private var unavailableConnectors: Set<String> = []
+    private var deviceProgress = RunProgress()
     private var mode: IterativeRun.Mode { request.mode }
     init(request: ProcessingRequest, scheduled: Bool) {
         self.request = request; self.scheduled = scheduled
@@ -61,7 +63,7 @@ final class ProcessingRun {
     func execute(progress: @escaping @Sendable (RunProgress) -> Void,
                  phase: @escaping @Sendable (ProactiveCyclePhase) -> Void,
                  onLine: @escaping @Sendable (String) -> Void) async -> Result {
-        await Diagnostics.withOperation("processing") {
+        var result = await Diagnostics.withOperation("processing") {
             var p = RunProgress()
             if !request.connectors.isEmpty {
                 if let path = request.modelPath {
@@ -70,6 +72,7 @@ final class ProcessingRun {
                     p.failSourceRead(name: "On-device sources", message: "The on-device model is unavailable. Retry when its download finishes.")
                 }
             }
+            deviceProgress = p
             for (name, message) in request.unavailableSources.sorted(by: { $0.key < $1.key }) {
                 p.failSourceRead(name: name, message: message)
             }
@@ -95,6 +98,8 @@ final class ProcessingRun {
             }
             return Result(progress: p, failure: failure, hadDiagnostics: Diagnostics.current?.hasFailure == true)
         }
+        if InitialAnalysisRecovery.replayCloudStages { result.deviceProgress = deviceProgress }
+        return result
     }
 
     private func recordConnectionOutcome(slug: String, connected: Bool) {

@@ -176,6 +176,17 @@ import Darwin
 
         // A successful merge is remembered even if the later proactive research fails or the app
         // restarts. Only exact consumed source inputs are covered; new arrivals remain pending.
+        let largeInputs=(0..<10_001).map {input("large:\($0)")}
+        let largeCheckpoint=VaultMergeCheckpoint(file:root.appendingPathComponent("large-checkpoint.json"))
+        try largeCheckpoint.recordSuccessfulMerge(inputs:largeInputs,consumedSourceIDs:Set(largeInputs.map(\.sourceID)),resultingVaultFingerprint:valid.fingerprint)
+        check(largeCheckpoint.coveredSourceIDs(in:largeInputs,vaultFingerprint:valid.fingerprint).count == largeInputs.count,
+              "Large completed initial stage did not survive restart")
+        check(try Data(contentsOf:largeCheckpoint.file).count < 1024,"Large-stage checkpoint should remain bounded")
+        check(largeCheckpoint.coveredSourceIDs(in:Array(largeInputs.dropLast()),vaultFingerprint:valid.fingerprint).isEmpty,
+              "Changed large-stage input set reused stale completion")
+        var editedLarge=largeInputs;editedLarge[0]=input("large:0",text:"Changed content")
+        check(largeCheckpoint.coveredSourceIDs(in:editedLarge,vaultFingerprint:valid.fingerprint).isEmpty,
+              "Changed large-stage content reused stale completion")
         let checkpointURL = root.appendingPathComponent("checkpoint.json")
         let checkpoint = VaultMergeCheckpoint(file: checkpointURL)
         let a = input(), b = input("mail:second", kind: "mail", text: "Another summary")

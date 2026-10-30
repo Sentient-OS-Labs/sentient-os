@@ -34,6 +34,7 @@ def main():
             APP / "Sources/GmailReadState.swift",
             APP / "Sources/GmailConnect.swift",
             ROOT / "Scripts/test_gmail_import_recovery.swift",
+            APP / "Ingestion/InitialAnalysisRecovery.swift",
         ]
         compiler = [
             "xcrun", "swiftc", "-DDEBUG", "-parse-as-library",
@@ -71,7 +72,7 @@ def main():
         subprocess.run([*compiler, str(sources[0]), str(sources[2]), str(legacy), str(old_main), "-o", str(old_binary)],
                        check=True, env=environment)
         subprocess.run([str(old_binary), str(root / "migration.store")], check=True, env=environment, timeout=30)
-        for phase in ["migration", "write-partial", "reopen-partial", "finish-partial", "reopen-complete", "transactions", "pipeline", "origins"]:
+        for phase in ["migration", "write-partial", "reopen-partial", "finish-partial", "reopen-complete", "transactions", "pipeline", "origins", "initial-write", "initial-restart", "initial-reopen-complete"]:
             # Recovery crosses a real process boundary and a different calendar/timezone.
             phase_environment = dict(environment, TZ="Pacific/Kiritimati" if phase == "reopen-partial" else "UTC")
             subprocess.run([str(binary), phase, str(root)], check=True, env=phase_environment, timeout=90)

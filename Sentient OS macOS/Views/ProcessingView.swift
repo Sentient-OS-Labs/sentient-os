@@ -603,7 +603,7 @@ struct ProcessingView: View {
         case .loggedOut:      claude
             ? "Claude Code needs a fresh sign-in before analysis can continue. Sign in to Claude below; your progress is saved. This is separate from your Gmail and Outlook connections."
             : "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
-        case .usageLimit:     "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
+        case .usageLimit:     "Your plan's window resets on its own. Completed work is kept; retry after the limit resets."
         case .noInternet:     "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."
         case .inputTooLarge:  claude
             ? "Sentient tried to send Claude more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
@@ -660,7 +660,8 @@ struct ProcessingView: View {
             }
             .buttonStyle(.plain)
             .disabled(state == .stopping)
-            Text(paused ? "Your progress is saved. Resume when you're ready."
+            Text(paused ? (session.initialComplete ? "Your progress is saved. Resume when you're ready."
+                    : "On-device progress is saved. Unfinished cloud steps restart when you resume.")
                  : isWaiting ? "Keep Sentient open. Analysis will start when your Mac is ready."
                  : "You can close this window. Analysis continues in the background.")
                 .font(.caption).foregroundStyle(.white.opacity(0.45))

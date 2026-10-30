@@ -100,7 +100,7 @@ final class WakeHelperClient {
         guard !removing else { return .unavailable }
         healthRetryAfter = 0; healthFailures = 0
         let registered = await register()
-        guard !removing else { return .unavailable }
+        guard !removing, !Task.isCancelled else { return .unavailable }
         if registered == .requiresApproval {
             openLoginItemsSettings()
             return .requiresApproval

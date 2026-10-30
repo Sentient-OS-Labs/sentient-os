@@ -11,6 +11,7 @@ struct PermissionSetupView<Content: View>: View {
     let canContinue: Bool
     let onContinue: () -> Void
     var compact = false
+    var edgeGlow = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -37,7 +38,10 @@ struct PermissionSetupView<Content: View>: View {
         .padding(.top, compact ? 26 : 34)
         .padding(.bottom, 24)
         .frame(width: compact ? 480 : 560)
-        .background(Color.black)
+        .background {
+            if edgeGlow { PermissionWindowAtmosphere() }
+            else { Color.black }
+        }
         .preferredColorScheme(.dark)
     }
 }

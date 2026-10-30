@@ -272,6 +272,9 @@ enum MCPSource {
             if !initial, let checkpoint, checkpoint.mark.order > now.timeIntervalSince1970 {
                 throw MCPError.clockMovedBackwards
             }
+            if InitialAnalysisRecovery.replayCloudStages, !initial, (checkpoint?.mark.order ?? 0) > 0 {
+                return 0 // All windows were committed atomically; keep this completed stage.
+            }
             let mode: ReadMode = initial ? .initial : .iterative
             let windows = try windows(slug: slug, mode: mode,
                                       since: checkpoint.map { Date(timeIntervalSince1970: $0.mark.order) }, now: now)

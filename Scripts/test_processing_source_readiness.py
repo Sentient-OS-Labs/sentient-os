@@ -176,6 +176,7 @@ run_fixture = r'''
     let request: ProcessingRequest
     let scheduled: Bool
     var unavailableConnectors: Set<String>
+    var deviceProgress = RunProgress()
     static var calendarCalls = 0, mcpCalls = 0
     var mode: IterativeRun.Mode { request.mode }
     init(request: ProcessingRequest, scheduled: Bool) {
@@ -373,6 +374,11 @@ checks = r'''
         withLocal.mode = .initial
         IterativeRun.next = RunProgress(); IterativeRun.next.total = 5; IterativeRun.next.done = 5
         IterativeRun.next.survivors = 2; IterativeRun.next.quietReads = 1; IterativeRun.next.junk = 1
+        let (replayed,_) = await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {
+            await scenario([started,saved],request:withLocal)
+        }
+        check(replayed.progress.done == 6 && replayed.deviceProgress?.done == 5,
+              "initial pause carries saved device counts without counting cloud windows twice")
         let (partialGmail, partialUpdates) = await scenario([started, saved, later, quiet, anotherSaved],
             error: GmailConnect.GmailError.incomplete(failed: 1, saved: 2), request: withLocal)
         check(partialGmail.progress.total == 9 && partialGmail.progress.done == 8
@@ -447,5 +453,5 @@ source = '\n'.join((fixture, progress, plan, member(chats, 'nonisolated enum Cha
 with tempfile.TemporaryDirectory(prefix='sentient-processing-readiness-') as directory:
     path = Path(directory)
     (path / 'main.swift').write_text(source)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(path / 'main.swift'), '-o', str(path / 'check')], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(path / 'main.swift'), str(APP / 'Ingestion/InitialAnalysisRecovery.swift'), '-o', str(path / 'check')], check=True)
     subprocess.run([str(path / 'check'), str(path)], check=True)

@@ -251,6 +251,27 @@ actor CycleStore {
                 }
             }
         }
+        Generation.shared.reset()
+        await CycleStore.shared.reset(checkpointPresent:false)
+        await ReadGate.shared.reset(paused:true)
+        let interrupted=Task {
+            try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await CalendarConnect.runIterative()}
+        }
+        await ReadGate.shared.waitUntilStarted();interrupted.cancel();await ReadGate.shared.release()
+        do {_ = try await interrupted.value;fatalError("Cancelled Calendar stage accepted")}
+        catch is CancellationError {}
+        let partial=try await CycleStore.shared.mcpCheckpoint("google-calendar")
+        precondition(partial == nil)
+        await ReadGate.shared.reset(paused:false)
+        _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await CalendarConnect.runIterative()}
+        let rereads=await ReadGate.shared.count()
+        precondition(rereads == Source.calendar.initialReads)
+        print("PASS interrupted Calendar stage restarts all monthly windows")
+        await ReadGate.shared.reset(paused:false)
+        _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await CalendarConnect.runIterative()}
+        let preserved=await ReadGate.shared.count();precondition(preserved == 0)
+        print("PASS completed Calendar stage is preserved during initial creation")
+        checks += 2
         print("Checked \(checks) Google read origin and processing-hook cases; failures=0")
     }
 }
@@ -260,5 +281,5 @@ with tempfile.TemporaryDirectory(prefix='sentient-google-read-origin-') as direc
     swift = root / 'Fixture.swift'
     swift.write_text(FIXTURE + '\n' + '\n'.join(production))
     binary = root / 'checks'
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), '-o', str(binary)], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), str(APP / 'Ingestion/InitialAnalysisRecovery.swift'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)

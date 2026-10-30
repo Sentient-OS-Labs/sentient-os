@@ -52,7 +52,13 @@ folders off. Personal setup requires three usable selected sources; unavailable 
 sources do not count. Settings always allows removing a source, including below this minimum.
 Full Disk Access is explained only after choosing a protected local app. Cloud-only setup has no FDA
 gate. Permission grants never opt in other sources, and the source-specific relaunch action waits
-until active tasks have finished. Existing saved source choices and opt-outs survive setup resumption.
+until active tasks have finished. Existing saved source choices and opt-outs survive setup resumption. The
+source-access sheet uses a single Enable access action to open the floating Full Disk Access drag
+guide with Sentient’s own app bundle. Returning from Settings checks only the chosen source’s
+readability, without selecting it or advancing automatically. Continue checks again before opening
+the chat/account picker (or enabling the explicitly chosen Notes source). Restart is offered only
+after an unsuccessful check, remains guarded by SafeAppRelaunch, and never happens automatically.
+Closing the sheet closes only its own drag guide. Existing selections retain Stop reading.
 
 Apple Mail opens `Views/AppleMailPicker.swift` to select accounts already synced in Mail. It needs
 Full Disk Access and processes downloaded bodies through the on-device model. It works with every

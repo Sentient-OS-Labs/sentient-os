@@ -44,6 +44,7 @@ actor VaultCloud {
 
     static let shared = VaultCloud()
 
+    // First analysis discards unfinished cloud staging before retrying. Other runs retain
     // DURABLE resume handles for BOTH build and update (B11): each carries a codex session id + the
     // staging dir holding the work-in-progress, persisted to UserDefaults so a usage limit or an app
     // restart RESUMES instead of re-running the expensive codex call from scratch. Both the build and
@@ -76,6 +77,24 @@ actor VaultCloud {
 
     private func setCreateResume(_ t: VaultGenerator.ResumeToken?) { createResume = t; Self.persistResume(t, Self.createResumeKey) }
     private func setUpdateResume(_ t: VaultGenerator.ResumeToken?) { updateResume = t; Self.persistResume(t, Self.updateResumeKey) }
+
+    /// Initial creation retries a whole cloud build/merge, never a half-written staging tree
+    /// or an old model session. Published knowledge and source summaries are untouched.
+    private func restartInitialCloudStageIfNeeded() throws {
+        guard InitialAnalysisRecovery.replayCloudStages else { return }
+        try Task.checkCancellation()
+        for path in Set([createResume?.stagingPath, updateResume?.stagingPath].compactMap { $0 }) {
+            let staging = URL(fileURLWithPath: path).standardizedFileURL
+            guard staging.deletingLastPathComponent() == VaultGenerator.stagingParent.standardizedFileURL,
+                  staging.lastPathComponent.hasPrefix(VaultGenerator.stagingPrefix),
+                  staging != VaultGenerator.vaultRoot.standardizedFileURL else { continue }
+            if FileManager.default.fileExists(atPath: staging.path) {
+                try FileManager.default.removeItem(at: staging)
+            }
+        }
+        setCreateResume(nil)
+        setUpdateResume(nil)
+    }
 
     private static func mailHashes(_ notes: [CloudNote]) -> [String: String] {
         Dictionary(notes.filter { $0.kind == .appleMail }.map {
@@ -155,6 +174,7 @@ actor VaultCloud {
     private func createPinned(notes: [CloudNote],
                               onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
                               onLine: (@Sendable (String) -> Void)?) async throws -> VaultGenerator.Result {
+        try restartInitialCloudStageIfNeeded()
         let notes = await AppleMailEvidence.validatedCloud(notes)
         setCreateResume(validatedResume(createResume, notes: notes))
         lastConsumedSourceIDs = []
@@ -204,6 +224,7 @@ actor VaultCloud {
     private func updatePinned(notes: [CloudNote],
                               onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
                               onLine: (@Sendable (String) -> Void)?) async throws -> Int {
+        try restartInitialCloudStageIfNeeded()
         let notes = await AppleMailEvidence.validatedCloud(notes)
         setUpdateResume(validatedResume(updateResume, notes: notes))
         lastConsumedSourceIDs = []

@@ -33,6 +33,8 @@ nonisolated struct VaultMergeCheckpoint: Sendable {
         let inputHashes: [String: String]
         let inputDigest: String
         let vaultFingerprint: String
+        /// Large completed stages use one digest instead of an oversized per-source map.
+        let wholeInputCount: Int?
     }
 
     let file: URL
@@ -49,6 +51,10 @@ nonisolated struct VaultMergeCheckpoint: Sendable {
         guard Self.validHash(vaultFingerprint), let snapshot = load(),
               snapshot.vaultFingerprint == vaultFingerprint,
               let current = try? Self.hashes(inputs) else { return [] }
+        if let count = snapshot.wholeInputCount {
+            guard current.count == count, Self.aggregate(current) == snapshot.inputDigest else { return [] }
+            return Set(inputs.map(\.sourceID))
+        }
         return Set(inputs.compactMap { input in
             let key = Self.hash(Data(input.sourceID.utf8))
             return snapshot.inputHashes[key] == current[key] ? input.sourceID : nil
@@ -67,8 +73,10 @@ nonisolated struct VaultMergeCheckpoint: Sendable {
         let selected = inputs.filter { consumedSourceIDs.contains($0.sourceID) }
         guard Set(selected.map(\.sourceID)) == consumedSourceIDs else { throw Failure.invalidInput }
         let hashes = try Self.hashes(selected)
-        let snapshot = Snapshot(version: 1, inputHashes: hashes, inputDigest: Self.aggregate(hashes),
-                                vaultFingerprint: resultingVaultFingerprint)
+        let wholeStage = hashes.count > Self.maximumInputs
+        let snapshot = Snapshot(version: 1, inputHashes: wholeStage ? [:] : hashes, inputDigest: Self.aggregate(hashes),
+                                vaultFingerprint: resultingVaultFingerprint,
+                                wholeInputCount: wholeStage ? hashes.count : nil)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(snapshot)
         guard data.count <= Self.maximumBytes else { throw Failure.checkpointTooLarge }
@@ -96,11 +104,16 @@ nonisolated struct VaultMergeCheckpoint: Sendable {
               let size = attributes[.size] as? Int, size <= Self.maximumBytes,
               let data = try? Data(contentsOf: file), data.count <= Self.maximumBytes,
               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
-              snapshot.version == 1, !snapshot.inputHashes.isEmpty,
+              snapshot.version == 1,
               snapshot.inputHashes.count <= Self.maximumInputs,
               snapshot.inputHashes.allSatisfy({ Self.validHash($0.key) && Self.validHash($0.value) }),
-              Self.validHash(snapshot.vaultFingerprint),
-              snapshot.inputDigest == Self.aggregate(snapshot.inputHashes) else { return nil }
+              Self.validHash(snapshot.vaultFingerprint), Self.validHash(snapshot.inputDigest) else { return nil }
+        if let count = snapshot.wholeInputCount {
+            guard count > Self.maximumInputs, snapshot.inputHashes.isEmpty else { return nil }
+        } else {
+            guard !snapshot.inputHashes.isEmpty,
+                  snapshot.inputDigest == Self.aggregate(snapshot.inputHashes) else { return nil }
+        }
         return snapshot
     }
 
@@ -119,7 +132,6 @@ nonisolated struct VaultMergeCheckpoint: Sendable {
     }
 
     private static func hashes(_ inputs: [Input]) throws -> [String: String] {
-        guard inputs.count <= maximumInputs else { throw Failure.checkpointTooLarge }
         var result: [String: String] = [:]
         for input in inputs {
             guard !input.sourceID.isEmpty, input.itemDate?.timeIntervalSince1970.isFinite != false else {

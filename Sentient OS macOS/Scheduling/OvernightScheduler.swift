@@ -1,5 +1,5 @@
 // Arms the next local overnight wake and asks the shared analysis owner to run.
-// Scheduling never depends on first-analysis completion and never owns a second pipeline.
+// Nightly work waits for first-analysis completion and never owns a second pipeline.
 // Doc: Documentation - Overnight Scheduler & Wake Helper.md
 
 import Foundation
@@ -43,8 +43,8 @@ final class OvernightScheduler {
             || processing.hasPendingFirstNight
     }
 
-    /// Called only after an explicit overnight choice. No implicit helper install or login prompt.
-    /// Existing deliberately disabled schedulers stay disabled; first-night intent is separate.
+    /// Called after completing explicit background setup. No implicit helper install or login prompt.
+    /// Existing deliberately disabled schedulers stay disabled; nightly work waits for initial completion.
     func enableAfterSetup() {
         let d = UserDefaults.standard
         guard d.bool(forKey: AppState.onboardingKey), PersonalSetupProgress.isComplete() else { return }
@@ -114,6 +114,13 @@ final class OvernightScheduler {
     private func loop(id: UUID) async {
         let log = SchedulerLog()
         while !Task.isCancelled && generation == id && isEnabled {
+            if !processing.initialComplete {
+                nextWakeAt = nil
+                statusLine = processing.paused ? "Analysis paused" : "Nightly updates start after your first analysis"
+                _ = await WakeHelperClient.shared.cancelWake()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                continue
+            }
             if processing.paused {
                 nextWakeAt = nil; statusLine = "Analysis paused"
                 _ = await WakeHelperClient.shared.cancelWake()

@@ -32,8 +32,14 @@ panel strands off-screen), the Finder-shaped pasteboard mix, and the CG → AppK
 The Sidekick popup keeps **One-time setup** and uses **Let Sidekick use your computer** as its title.
 Its compact layout keeps muted Computer use and Sentient permissions headings, removes Not granted
 labels, and uses **Grant** buttons for
-remaining steps. Release hides verified rows; Debug deliberately shows all rows. Settings and
-Double Tap keep their existing full permission layouts.
+remaining steps. Release hides verified rows; Debug deliberately shows all rows. Settings keeps its full permission layout. Double Tap uses the same compact layout and Grant
+buttons for Sentient’s own Accessibility and Screen Recording. Its Done button still requires
+both real grants; once ready, a short hint tells the user to focus their reply field and tap again.
+
+The Sidekick and Double Tap gates add a localized, slowly moving indigo/blue rim with a small warm accent. Its
+opaque center separates it from Home’s broader color washes. Only the decorative Canvas updates
+at animation cadence; the effect is noninteractive and stops for Reduce Motion, Low Power Mode,
+or a hidden/inactive window. Voice repair retains its existing background.
 
 ## The grants
 

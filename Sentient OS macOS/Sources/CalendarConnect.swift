@@ -141,6 +141,9 @@ enum CalendarConnect {
         let since = Date(timeIntervalSince1970: mark.order)
         let runStart = Date()
         guard mark.order <= runStart.timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
+        // This checkpoint is written only after the entire read succeeds. During initial
+        // creation, a completed Calendar stage is kept instead of starting another cloud read.
+        if InitialAnalysisRecovery.replayCloudStages, mark.order > 0 { return 0 }
         let sinceLabel = "since \(label(since))"
         let range = "with a start date/time on or after \(iso(since)) and before \(iso(runStart))"
         let prompt = readPrompt(range: range, label: sinceLabel)

@@ -67,7 +67,7 @@ actor VaultCloud {
 ''' + '\n'.join(declaration(cloud, name) for name in [
     'init()', 'private static func loadResume(', 'private func setCreateResume(',
     'private func setUpdateResume(', 'private static func mailHashes(', 'private static func acceptedHashes(',
-    'private func validatedResume(', 'private static func persistResume(',
+    'private func validatedResume(', 'private static func persistResume(', 'private func restartInitialCloudStageIfNeeded(',
     'enum CloudError:', 'func create(', 'private func createPinned(',
     'func update(', 'private func updatePinned(',
 ]) + '\n}\n'
@@ -245,6 +245,29 @@ func ErrorLabel(_ error: Error) -> String { "fixture" }
             }
         }
         for operation in ["create", "update"] {
+            defaults.reset();defaults.set("chatgpt",forKey:"backend")
+            let partial=try VaultGenerator.newStagingDir()
+            try CorpusSlicer.saveCorpus(notes,in:partial)
+            try "partial output".write(to:partial.appendingPathComponent("incomplete.md"),atomically:true,encoding:.utf8)
+            let token=VaultGenerator.ResumeToken(sessionID:"partial-session",stagingPath:partial.path,sliceIndex:1,
+                sessionScope:VaultGenerator.ResumeToken.scope(for:.chatgpt))
+            defaults.set(try JSONEncoder().encode(token),forKey:"vault.\(operation).resume")
+            await FrontierRun.shared.reset()
+            do {
+                try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {
+                    if operation == "create" {_ = try await VaultCloud().create(notes:notes)}
+                    else {_ = try await VaultCloud().update(notes:notes)}
+                }
+                preconditionFailure("Fixture must hit usage limit")
+            } catch VaultCloud.CloudError.usageLimit {}
+            let (call,_)=await FrontierRun.shared.onlyCall()
+            check(call.resumeSessionID == nil && call.diag["slice_index"] == "0",
+                  "initial \(operation) restarts the cloud stage with a new session and first slice")
+            check(!FileManager.default.fileExists(atPath:partial.path),"unfinished staging is retired")
+            check(try String(contentsOf:knowledge,encoding:.utf8) == "User knowledge retained",
+                  "restarting cloud work never deletes published knowledge")
+        }
+        for operation in ["create", "update"] {
             defaults.reset(); defaults.set("chatgpt", forKey: "backend"); defaults.set("claude", forKey: "switch-backend")
             await FrontierRun.shared.reset()
             do {
@@ -284,5 +307,5 @@ with tempfile.TemporaryDirectory(prefix='sentient-private-session-') as director
     source.write_text(FIXTURE + '\n' + production)
     binary = root / 'checks'
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(source),
-                    str(APP.parent / 'Scripts/Fixtures/HostedInferenceStub.swift'), '-o', str(binary)], check=True)
+                    str(APP.parent / 'Scripts/Fixtures/HostedInferenceStub.swift'), str(APP / 'Ingestion/InitialAnalysisRecovery.swift'), '-o', str(binary)], check=True)
     subprocess.run([str(binary), str(root)], check=True, timeout=30)

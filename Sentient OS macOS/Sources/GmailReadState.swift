@@ -30,6 +30,11 @@ nonisolated struct GmailReadState: Codable, Sendable, Equatable {
 
     func sourceID(for index: Int) -> String { "gmail:window:\(id.uuidString):\(index)" }
 
+    /// Preserve the original date range, but retire all partial window receipts and callbacks.
+    func restartingStage() -> Self {
+        Self(id: UUID(), origin: origin, through: through, windows: windows, replaceNotes: replaceNotes)
+    }
+
     static func initial(origin: String, through: Date, replaceNotes: Bool) -> Self {
         let end = Date(timeIntervalSince1970: floor(through.timeIntervalSince1970))
         let week: TimeInterval = 7 * 24 * 60 * 60

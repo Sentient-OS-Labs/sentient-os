@@ -272,17 +272,34 @@ actor CycleStore {
     func beginGmailRead(_ proposed: GmailReadState) throws -> GmailReadState {
         try Task.checkCancellation()
         try proposed.validate()
-        if let active = try gmailReadState(), active.origin == proposed.origin { return active }
-        let data = try JSONEncoder().encode(proposed)
-        let outcome = commit(bucketKey: "gmail", note: nil, apply: { r in
+        let active = try gmailReadState()
+        let restarting = InitialAnalysisRecovery.replayCloudStages && active?.origin == proposed.origin
+        if let active, active.origin == proposed.origin, !restarting { return active }
+        let next = restarting ? active!.restartingStage() : proposed
+        let data = try JSONEncoder().encode(next)
+        let outcome = commit(bucketKey: "gmail", note: nil, prepare: {
+            if restarting, let active {
+                let ids = Set(active.windows.indices.map { active.sourceID(for: $0) })
+                let bucket = "gmail"
+                let previous = try self.modelContext.fetch(FetchDescriptor<CycleNote>(predicate: #Predicate { $0.bucketKey == bucket }))
+                for note in previous where ids.contains(note.sourceID) { self.modelContext.delete(note) }
+            }
+        }, apply: { r in
             r.gmailReadState = data; r.updatedAt = Date()
         }, make: {
             let r = BucketPointer(bucketKey: "gmail", mark: ItemKey(order: 0, tiebreak: ""))
             r.gmailReadState = data
             return r
+        }, beforeSave: {
+            #if DEBUG
+            if restarting && self.failNextHostedCommit {
+                self.failNextHostedCommit = false
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            #endif
         })
         try requireGmailSave(outcome)
-        return proposed
+        return next
     }
 
     /// Save one validated window and its coverage in the same transaction. Gaps never advance

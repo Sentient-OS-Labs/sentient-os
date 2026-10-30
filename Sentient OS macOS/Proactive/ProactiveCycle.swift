@@ -122,7 +122,9 @@ actor ProactiveCycle {
 
             let giftPreexisted = GiftLetter.latest() != nil
             let needsWelcome = GiftLetter.needsWelcome()
-            let mergeCheckpoint = ModelBackend.current == .sentient ? VaultMergeCheckpoint() : nil
+            let mergeCheckpoint = ModelBackend.current == .sentient || InitialAnalysisRecovery.replayCloudStages
+                || FileManager.default.fileExists(atPath: VaultMergeCheckpoint().file.path)
+                ? VaultMergeCheckpoint() : nil
             let mergeInputs = notes.map { VaultMergeCheckpoint.Input(sourceID: $0.sourceID, kind: $0.kind.rawValue,
                 folder: $0.folder, title: $0.title, text: $0.text, itemDate: $0.itemDate) }
             let merged = mergeCheckpoint?.coveredSourceIDs(in: mergeInputs,

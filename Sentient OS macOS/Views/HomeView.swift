@@ -177,8 +177,9 @@ struct HomeView: View {
                         if needsPersonalSetup {
                             personalWorkspace(in: geo.size, width: workspaceWidth)
                             HomePersonalSetupPanel(selectedFeature: selectedPersonalFeature,
-                                                   emphasizeSetup: appState.hasCompletedFirstSidekickTask && !inConversation
-                                                       && !appState.commandCoordinator.run.isRunning,
+                                                   emphasizeSetup: appState.hasCompletedFirstSidekickTask
+                                                       && !appState.commandCoordinator.run.isRunning
+                                                       && !appState.commandCoordinator.run.recovery.isPending,
                                                    active: isPresented && presentation.windowActive && !reducedMotion,
                                                    previewEnabled: !appState.commandCoordinator.run.isRunning && !appState.commandCoordinator.run.recovery.isPending,
                                                    onSelectFeature: selectPersonalFeature,

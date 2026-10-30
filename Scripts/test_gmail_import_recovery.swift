@@ -197,7 +197,7 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
     static func main() async throws {
         let arguments = CommandLine.arguments
         let phase = arguments[1], root = URL(fileURLWithPath: arguments[2])
-        let store = try makeStore(root.appending(path: phase.contains("partial") || phase == "reopen-complete" ? "durable.store" : "\(phase).store"))
+        let store = try makeStore(root.appending(path: phase.hasPrefix("initial-") ? "initial.store" : phase.contains("partial") || phase == "reopen-complete" ? "durable.store" : "\(phase).store"))
         try await CycleStore.$acceptanceStore.withValue(store) {
             switch phase {
             case "migration":
@@ -235,6 +235,43 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
                 try check(try await store.gmailReadState() == nil, "completed import stays completed across process restart")
                 try check(try await store.mcpCheckpoint("gmail")?.mark.order == through.timeIntervalSince1970, "final watermark is durable")
                 try check(await store.notes().count == 1, "only unconsumed successful note remains")
+            case "initial-write":
+                let old=NoteDraft(kind:.gmail,sourceID:"gmail:prior",folder:"Gmail",itemDate:through,
+                                  text:"Previous completed work",title:nil,reminderFlagged:false)
+                _ = await store.commitMCPRead(bucketKey:"gmail",notes:[old],through:prior,origin:"fixture:0",replaceNotes:false)
+                let state=try await store.beginGmailRead(initial())
+                for i in [0,2] {_ = try await store.commitGmailWindow(stateID:state.id,origin:state.origin,index:i,note:note(state,i))}
+            case "initial-restart":
+                let old=try await store.gmailReadState()!
+                let originalNotes=await store.notes().map(\.sourceID).sorted()
+                await store.failNextMCPCommitForTesting()
+                do {
+                    _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {
+                        try await store.beginGmailRead(initial(at:through.addingTimeInterval(86_400)))
+                    }
+                    throw TestFailure.message("Restart save failure accepted")
+                } catch let failure as TestFailure {throw failure}
+                catch {try check(DiskSpace.isDiskFull(error),"restart surfaces storage failure")}
+                try check(try await store.gmailReadState() == old,"failed restart preserves original window receipts")
+                try check(await store.notes().map(\.sourceID).sorted() == originalNotes,"failed restart restores partial summaries")
+                let replay=try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {
+                    try await store.beginGmailRead(initial(at:through.addingTimeInterval(86_400)))
+                }
+                try check(replay.id != old.id && replay.completed.isEmpty && replay.windows == old.windows,
+                          "new process discards partial Gmail progress but keeps exact date coverage")
+                try check(await store.notes().map(\.sourceID) == ["gmail:prior"],"restart removes only incomplete stage summaries")
+                do {_ = try await store.commitGmailWindow(stateID:old.id,origin:old.origin,index:1,note:note(old,1));throw TestFailure.message("stale result accepted")}
+                catch MCPSource.MCPError.connectionChanged {}
+                await ReadProbe.shared.reset(.success,windows:replay.windows)
+                _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await GmailConnect.runIterative()}
+                try check(await ReadProbe.shared.stats().calls.count == 4,"initial retry redoes every Gmail window")
+                try check(try await store.gmailReadState() == nil,"whole completed Gmail stage retires partial state")
+                try check(await store.notes().count == 5,"initial restart does not duplicate partial notes or discard prior completed work")
+            case "initial-reopen-complete":
+                await ReadProbe.shared.reset(.success,windows:try initial().windows)
+                _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await GmailConnect.runIterative()}
+                try check(await ReadProbe.shared.stats().calls.isEmpty,"completed Gmail stage is retained across another app restart")
+                try check(await store.notes().count == 5,"completed summaries survive a resumed knowledge build")
             case "transactions": try await transactions(store)
             case "pipeline": try await pipeline(store)
             case "origins": try await origins(store)
