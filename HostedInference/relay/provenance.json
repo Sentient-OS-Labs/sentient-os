@@ -1,0 +1,8 @@
+{
+  "legacy_sha256": "34249af3cd24dc704349ad4c0193ee09fa24c62d09079025bfc6b95444a2fe6f",
+  "verified_on": "2026-10-29",
+  "routes_preserved": ["GET /health", "POST /v1/draft"],
+  "durable_object_exports_preserved": ["Counter"],
+  "hosted_prefix": "/hosted",
+  "default_activation": false
+}

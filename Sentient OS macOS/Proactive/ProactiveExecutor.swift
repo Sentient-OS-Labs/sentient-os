@@ -286,6 +286,7 @@ actor ProactiveExecutor {
         inv.timeout = 0 // User-fired actions run until completion, failure or explicit Stop.
         if ModelBackend.current == .claude { await ConnectorClassifier.ensureClassified(slug: slug) }
         inv.mcpActionServer = slug
+        if slug.hasPrefix("hosted-") { inv.hostedConnectorMode = "action" }
         inv.mcpExpectedIdentity = expectedIdentity
         inv.outlookOperation = outlookOperation
         inv.outlookCalendarOperation = calendarOperation

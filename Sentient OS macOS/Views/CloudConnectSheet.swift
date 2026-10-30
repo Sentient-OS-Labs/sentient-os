@@ -52,6 +52,14 @@ struct CloudConnectSheet: View {
     }
 
     var body: some View {
+        if backend == .sentient {
+            HostedConnectorConnectSheet(service: service.slug)
+        } else {
+            subscriptionBody
+        }
+    }
+
+    private var subscriptionBody: some View {
         VStack(spacing: 0) {
             ConnectorLogo(asset: service.logoAsset)
 
@@ -60,11 +68,7 @@ struct CloudConnectSheet: View {
                 .foregroundStyle(Theme.Ink.statusInk)
                 .padding(.top, 18)
 
-            if backend == .sentient {
-                Text("This connection uses a ChatGPT or Claude subscription. With Sentient, use Apple Mail or Apple Calendar, or choose a supported direct connection in Knowledge Sources.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
-                    .multilineTextAlignment(.center).padding(.top, 14)
-            } else if !selected {
+            if !selected {
                 Text(openedConnectorPage
                      ? "Connect \(service.title) to your \(backend == .claude ? "Claude" : "ChatGPT") account, and then come back to Sentient."
                      : "Sentient reads through your \(backend == .claude ? "Claude" : "ChatGPT") connector. Enable it and sign in on that page, then press Done.")

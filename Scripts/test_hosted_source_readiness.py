@@ -34,6 +34,7 @@ final class UserDefaults {
     func removeObject(forKey k:String){values.removeValue(forKey:k)}
 }
 enum CodexRuntime { static var accountIdentity:String?="synthetic-account"; static let sessionScope="fixture" }
+enum HostedConnectorStore { struct Account { let connected = false }; static func account(_ slug:String)->Account? { nil } }
 enum DirectMCPStore { static func connection(_ slug:String)->String?{nil} }
 enum Analytics { static func signal(_ name:String,parameters:[String:String]){} }
 enum ClaudeAuth {

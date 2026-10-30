@@ -176,6 +176,7 @@ enum MCPSource {
                     break
                 }
                 if case CodexCLI.CLIError.usageLimit = error { hitUsageLimit = true }
+                if (error as? HostedInference.Failure)?.isUsageLimit == true { hitUsageLimit = true }
                 let reason: String
                 if ConnectorReadFailure.isConnectionFailure(error) {
                     reason = "connector_auth"
@@ -222,14 +223,16 @@ enum MCPSource {
     @discardableResult
     static func runInitial(slug: String, store: CycleStore = .shared,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        try await run(slug: slug, mode: .initial, store: store,
+        if slug.hasPrefix("hosted-") { return try await HostedConnectorSource.run(slug: slug, mode: .initial, store: store, onProgress: onProgress) }
+        return try await run(slug: slug, mode: .initial, store: store,
                       identityReader: { try await readIdentity(slug: $0) }, onProgress: onProgress)
     }
 
     @discardableResult
     static func runIterative(slug: String, store: CycleStore = .shared,
                              onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        try await run(slug: slug, mode: .iterative, store: store,
+        if slug.hasPrefix("hosted-") { return try await HostedConnectorSource.run(slug: slug, mode: .iterative, store: store, onProgress: onProgress) }
+        return try await run(slug: slug, mode: .iterative, store: store,
                       identityReader: { try await readIdentity(slug: $0) }, onProgress: onProgress)
     }
 

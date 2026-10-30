@@ -28,7 +28,7 @@ struct ConnectorSource: Identifiable {
     /// Gmail and Calendar already have permanent pills in the shared Connectors group.
     /// Teams is outside Knowledge Sources, including when detected as a connected app.
     static func catalog(with connectors: [ConnectorCensus.DetectedConnector]) -> [Self] {
-        let hiddenSlugs = ConnectorCensus.dedicatedSourceSlugs.union(["teams", "microsoft-teams"])
+        let hiddenSlugs = (ModelBackend.current == .sentient ? Set<String>() : ConnectorCensus.dedicatedSourceSlugs).union(["teams", "microsoft-teams"])
         let packs = ConnectorRegistry.packs.filter { !hiddenSlugs.contains($0.slug) }
         var used = Set<String>()
         var sources: [Self] = []
@@ -53,7 +53,7 @@ struct ConnectorSource: Identifiable {
         let pack = ConnectorRegistry.pack(for: connector)
         id = connector.id
         serviceSlug = pack?.slug ?? connector.slug
-        displayName = connector.origin == .direct ? connector.displayName : pack?.displayName ?? connector.displayName
+        displayName = [.direct, .sentient].contains(connector.origin) ? connector.displayName : pack?.displayName ?? connector.displayName
         self.connector = connector
     }
 
@@ -75,6 +75,8 @@ struct ConnectorSource: Identifiable {
     /// Notion: the sticker logo on https://www.notion.com (CSS black resolved for the asset).
     var logoAsset: String? {
         switch serviceSlug {
+        case "gmail": "GmailMark"
+        case "google-calendar": "GoogleCalendarMark"
         case "google-drive": "GoogleDriveMark"
         case "slack": "SlackMark"
         case "notion": "NotionMark"
@@ -111,6 +113,9 @@ struct ConnectorPill: View {
 
     private var detail: String? {
         guard !locked else { return nil }
+        if ModelBackend.current == .sentient, source.connector == nil, HostedConnectorStore.services.contains(source.serviceSlug) {
+            return "Connect with Sentient"
+        }
         if knowledgeEnabled && !selected { return "Connection needs attention · Manage" }
         if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Tasks only" }
         return nil

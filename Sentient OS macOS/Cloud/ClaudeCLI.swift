@@ -493,7 +493,9 @@ actor ClaudeCLI {
         let direct = DirectMCPRuntime.current
         if ModelBackend.current == .sentient {
             let targets = inv.mcpReadConnectors + [inv.mcpActionServer, inv.mcpAttachServer].compactMap { $0 }
-            guard targets.allSatisfy({ $0.hasPrefix("direct-") }),
+            guard targets.allSatisfy({ $0.hasPrefix("direct-") || $0.hasPrefix("hosted-") }),
+                  Set(targets.filter { $0.hasPrefix("hosted-") }).isSubset(of: HostedConnectorToolServer.targets),
+                  inv.mcpAttachServer == nil,
                   inv.configOverrides != CodexCLI.Invocation.approveConnectorWrites else {
                 throw CodexCLI.CLIError.notAvailable(.notWorking("This connected account needs its own subscription. Connect a direct account for Sentient hosted inference."))
             }
@@ -531,7 +533,7 @@ actor ClaudeCLI {
                     .notWorking("connector \(slug) has no known claude.ai server"))
             }
             recipeWallURLs = [url]
-        } else if let slug = inv.mcpActionServer, !slug.hasPrefix("direct-") {
+        } else if let slug = inv.mcpActionServer, !slug.hasPrefix("direct-"), !slug.hasPrefix("hosted-") {
             guard let resolved = ConnectorRegistry.server(for: slug),
                   let url = resolved.claudeServerURL,
                   let prefix = resolved.claudeToolPrefix else {
@@ -562,7 +564,7 @@ actor ClaudeCLI {
                     .filter { !recipeAllows.contains($0) }.sorted()
             }
         } else {
-            for slug in inv.mcpReadConnectors where !slug.hasPrefix("direct-") {
+            for slug in inv.mcpReadConnectors where !slug.hasPrefix("direct-") && !slug.hasPrefix("hosted-") {
                 let available = ConnectorRegistry.readToolNames(slug: slug)
                 let prefix = ConnectorRegistry.server(for: slug)?.claudeToolPrefix ?? ""
                 let reads = inv.mcpReadToolNames.map { names in names.map { prefix + $0 } } ?? available
@@ -589,6 +591,9 @@ actor ClaudeCLI {
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
+        if let connection = HostedConnectorToolServer.connection {
+            recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
+        }
         if let connection = SidekickToolServer.connection {
             recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
         }
@@ -607,7 +612,8 @@ actor ClaudeCLI {
                     "--setting-sources", "",
                     "--disable-slash-commands"]
         if ModelBackend.current == .sentient { args += ["--bare"] }
-        if ResearchToolServer.connection != nil {
+        if ResearchToolServer.connection != nil || (ModelBackend.current == .sentient && inv.resumeSessionID == nil
+            && (inv.toolsDisabled || !inv.mcpReadConnectors.isEmpty || inv.mcpActionServer != nil || inv.hostedVaultReadRoot != nil)) {
             args += ["--no-session-persistence"]
         }
         if let sid = inv.resumeSessionID { args += ["--resume", sid] }
@@ -679,7 +685,7 @@ actor ClaudeCLI {
         } else if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
-            var tools = inv.connectorOnlyRead || inv.toolsDisabled || ResearchToolServer.connection != nil || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
+            var tools = inv.connectorOnlyRead || inv.toolsDisabled || ResearchToolServer.connection != nil || HostedConnectorToolServer.connection != nil || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
             if inv.mcpAttachServer != nil || inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty || ResearchToolServer.connection != nil {
                 tools.append("WaitForMcpServers")
                 allowed.append("WaitForMcpServers")
@@ -696,7 +702,8 @@ actor ClaudeCLI {
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
         let connected = try LocalMCPServer.addToClaudeArguments(SidekickToolServer.addToClaudeArguments(args), connection: ResearchToolServer.connection)
-        return try LocalMCPServer.addToClaudeArguments(connected, connection: HostedVaultToolServer.connection)
+        let vault = try LocalMCPServer.addToClaudeArguments(connected, connection: HostedVaultToolServer.connection)
+        return try LocalMCPServer.addToClaudeArguments(vault, connection: HostedConnectorToolServer.connection)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —

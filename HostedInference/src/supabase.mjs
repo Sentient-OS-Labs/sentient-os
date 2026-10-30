@@ -1,6 +1,6 @@
 // Supabase validates caller tokens; restricted RPCs provide the sole persistent quota ledger.
 // Setup and contract: ../README.md. No client-provided identity is trusted.
-import { ServiceError } from './errors.mjs';
+import { boundedJSON, ServiceError } from './errors.mjs';
 
 export function supabaseServices({ url, publishableKey, serviceRoleKey, fetcher = fetch }) {
   const base = new URL(url);
@@ -9,10 +9,8 @@ export function supabaseServices({ url, publishableKey, serviceRoleKey, fetcher 
   }
   if (!publishableKey || !serviceRoleKey) throw new Error('Supabase credentials are required');
   async function safeJSON(response) {
-    if (!response.ok) throw new ServiceError('service_unavailable', 503);
-    const text = await response.text();
-    if (text.length > 128_000) throw new ServiceError('service_unavailable', 503);
-    try { return JSON.parse(text); } catch { throw new ServiceError('service_unavailable', 503); }
+    if (!response.ok) { await response.body?.cancel(); throw new ServiceError('service_unavailable', 503); }
+    try { return await boundedJSON(response,128_000); } catch { throw new ServiceError('service_unavailable', 503); }
   }
   const authenticate = async token => {
     let response;
@@ -29,10 +27,10 @@ export function supabaseServices({ url, publishableKey, serviceRoleKey, fetcher 
     }
     return user.id;
   };
-  const call = async (operation, args) => {
+  const callRPC = async (rpc, operation, args) => {
     let response;
     try {
-      response = await fetcher(new URL('/rest/v1/rpc/hosted_inference', base), {
+      response = await fetcher(new URL('/rest/v1/rpc/' + rpc, base), {
         method: 'POST', headers: {
           apikey: serviceRoleKey, authorization: `Bearer ${serviceRoleKey}`, 'content-type': 'application/json',
         },
@@ -43,5 +41,6 @@ export function supabaseServices({ url, publishableKey, serviceRoleKey, fetcher 
     if (result.error) throw new ServiceError(result.error, result.status ?? 429, result.details ?? {});
     return result;
   };
-  return { authenticate, ledger: { call } };
+  return { authenticate, ledger: { call: (operation,args) => callRPC('hosted_inference',operation,args) },
+    connectorLedger: { call: (operation,args) => callRPC('hosted_connectors',operation,args) } };
 }

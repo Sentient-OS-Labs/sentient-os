@@ -58,10 +58,13 @@ enum FactoryReset {
         defer { HostedConnectorSetup.endTeardown() }
         // Retain contact records and their local identity, like invitation access. Reset clears
         // learned knowledge and app connections, not the founders' feedback contact list.
-        do { try await DirectMCPConnections.shared.removeAll() }
+        do {
+            try await HostedConnectorClient.shared.disconnectAll()
+            try await DirectMCPConnections.shared.removeAll()
+        }
         catch {
             Diagnostics.report(.cleanupFailed, phase: .reset, reason: "connector_credentials", error: error)
-            Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false
+            Log("FactoryReset: connection cleanup needs retry"); return false
         }
         await processing.reset()
         await CycleStore.shared.wipeEverything()

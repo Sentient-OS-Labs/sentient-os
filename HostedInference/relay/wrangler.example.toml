@@ -1,0 +1,19 @@
+# Local build template only. Prepare a fresh, verified deployment package before staging.
+name = "sentient-relay-local-verification"
+main = "index.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+[vars]
+SENTIENT_HOSTED_ROUTES_ENABLED = "false"
+
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "COUNTERS"
+class_name = "Counter"
+
+[[migrations]]
+tag = "local-fixture-only"
+new_sqlite_classes = ["Counter"]

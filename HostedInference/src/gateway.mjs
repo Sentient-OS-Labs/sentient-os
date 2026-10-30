@@ -3,6 +3,8 @@
 import { bearer, boundedJSON, digest, errorResponse, randomToken, ServiceError } from './errors.mjs';
 import { PURPOSES, estimateCost, prepareMessage, readProductionConfig, validateConfiguration } from './policy.mjs';
 import { supabaseServices } from './supabase.mjs';
+import { createConnectorGateway } from './connectors/gateway.mjs';
+import { composioClient, readConnectorConfig } from './connectors/composio.mjs';
 
 const encoder = new TextEncoder();
 const responseJSON = body => Response.json(body, { headers: { 'cache-control': 'no-store' } });
@@ -315,7 +317,18 @@ export default {
     try {
       const services = supabaseServices({ url: env.SUPABASE_URL, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
         serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY });
+      if (new URL(request.url).pathname.startsWith('/v1/connectors')) {
+        const config = readConnectorConfig(env);
+        return await createConnectorGateway({ledger: services.connectorLedger, authenticate: services.authenticate,
+          provider: composioClient(config), config}).handle(request,context);
+      }
       return await createGateway({ ...services, config: readProductionConfig(env) })(request, context);
     } catch { return errorResponse(new ServiceError('service_not_configured', 503), crypto.randomUUID()); }
+  },
+  async scheduled(event,env,context) {
+    const services = supabaseServices({url:env.SUPABASE_URL,publishableKey:env.SUPABASE_PUBLISHABLE_KEY,serviceRoleKey:env.SUPABASE_SERVICE_ROLE_KEY});
+    const config=readConnectorConfig(env);
+    context.waitUntil(createConnectorGateway({ledger:services.connectorLedger,authenticate:services.authenticate,
+      provider:composioClient(config),config}).cleanup());
   },
 };

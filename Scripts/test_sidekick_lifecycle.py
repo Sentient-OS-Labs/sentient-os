@@ -53,7 +53,7 @@ nonisolated enum SlackConnector { enum Operation: Sendable { case write } }
 nonisolated enum OutlookMailConnector { static let slug = "outlook-mail"; enum Operation: Sendable { case write } }
 nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"; enum Operation: Sendable { case write } }
 @MainActor enum CommandRouter {
-    enum Route { case computer, connector(String, String, SlackConnector.Operation?, OutlookMailConnector.Operation?, OutlookCalendarConnector.Operation?) }
+    enum Route { case computer, connector(String, String, SlackConnector.Operation?, OutlookMailConnector.Operation?, OutlookCalendarConnector.Operation?, String?) }
     static var isActive = false
     static func route(_ task: String, cardContext: String, standingInstructions: String) async -> Route { .computer }
     static func recordOutcome(route: String, slug: String?, ms: Int, fellBack: Bool) { }
@@ -65,6 +65,7 @@ nonisolated enum CodexCLI {
         let prompt: String
         var feature = "", effort: Effort = .medium, webSearch = false
         var timeout: TimeInterval = 600
+        var hostedConnectorMode = "read"
         var mcpActionServer: String?
         var slackOperation: SlackConnector.Operation?
         var outlookOperation: OutlookMailConnector.Operation?

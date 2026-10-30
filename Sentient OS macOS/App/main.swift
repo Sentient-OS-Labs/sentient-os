@@ -23,6 +23,14 @@ if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument 
 }
 
 #if DEBUG
+if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "hostedconnectors", CommandLine.arguments.count == 1 {
+    do { try MainActor.assumeIsolated { try HostedConnectorLab.prepare() } }
+    catch { exit(1) }
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    Task { @MainActor in exit(await HostedConnectorLab.run()) }
+    NSApplication.shared.run()
+    exit(1)
+}
 // Isolate the actual-app acceptance profile before AppKit or application singletons exist.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickapp",
    CommandLine.arguments.count == 1 {

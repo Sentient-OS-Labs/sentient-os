@@ -173,11 +173,11 @@ final class CommandRunModel {
                         // every leg; card fires never pass through here (beginExternalRun skips start()).
                         let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
                         let routerStart = Date()
-                        if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0, cardContext: cardContext,
+                        if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation, let hostedOperation) = await CommandRouter.route(task0, cardContext: cardContext,
                             standingInstructions: self?.interaction?.instructionsSnapshot?.promptBlock ?? "") {
                             let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
                             try Task.checkCancellation()   // a STOP during routing must never keep going
-                            if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation,
+                            if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation, hostedOperation: hostedOperation,
                                                             screenshots: shots, kbContext: kb, cardContext: cardContext,
                                                             started: started) != false {
                                 CommandRouter.recordOutcome(route: "connector", slug: slug,
@@ -364,7 +364,7 @@ final class CommandRunModel {
     /// (including the fail-closed unclassified-slug refusal) prints one honest line and the
     /// caller continues the SAME run into computer use, reusing the screenshots already
     /// captured. A user STOP rethrows so the caller's catch keeps its honest "stopped".
-    private func connectorLeg(_ task0: String, slug: String, name: String, operation: SlackConnector.Operation?, mailOperation: OutlookMailConnector.Operation?, calendarOperation: OutlookCalendarConnector.Operation?,
+    private func connectorLeg(_ task0: String, slug: String, name: String, operation: SlackConnector.Operation?, mailOperation: OutlookMailConnector.Operation?, calendarOperation: OutlookCalendarConnector.Operation?, hostedOperation: String?,
                               screenshots: [URL], kbContext: String, cardContext: String,
                               started: Date) async throws -> Bool {
         let generation = runID
@@ -378,6 +378,7 @@ final class CommandRunModel {
         inv.webSearch = false
         inv.timeout = 0 // User-owned work has no overall execution deadline.
         inv.mcpActionServer = slug
+        inv.hostedConnectorMode = hostedOperation ?? "read"
         inv.slackOperation = operation
         inv.outlookOperation = mailOperation
         inv.outlookCalendarOperation = calendarOperation
@@ -416,7 +417,7 @@ final class CommandRunModel {
                          statusPresent: false, interruption: .unconfirmed)
                 return true
             case .couldNot(let reason):
-                if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
+                if slug.hasPrefix("direct-") || slug.hasPrefix("hosted-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                     complete(.failed, line: reason.isEmpty ? AgentStatus.unconfirmedConnectorMessage : reason,
                              statusPresent: true, interruption: .modelReport(reason))
                     return true // a remote write may have succeeded; never repeat it on screen
@@ -435,7 +436,7 @@ final class CommandRunModel {
             // Losing the durable conversation is not a connector obstacle. Do not start
             // another acting executor after recording failed or the history was reset.
             if error is SidekickConversationStore.Failure || error is SidekickConversationRun.Failure { throw error }
-            if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
+            if slug.hasPrefix("direct-") || slug.hasPrefix("hosted-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                 complete(.failed, line: (error as? DirectMCPError)?.errorDescription ?? AgentStatus.unconfirmedConnectorMessage,
                          statusPresent: false, error: error)
                 return true

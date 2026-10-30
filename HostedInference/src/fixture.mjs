@@ -7,8 +7,10 @@ import { ServiceError } from './errors.mjs';
 export const fixturePrincipal = '10000000-0000-4000-8000-000000000001';
 export const fixtureJWT = 'local-fixture-token';
 
-export async function createFixture({ budgetMicrousd = 10_000_000, enabled = true } = {}) {
-  const db = new PGlite();
+export async function createFixture({ budgetMicrousd = 10_000_000, enabled = true, dataDir } = {}) {
+  const db = new PGlite(dataDir);
+  const existing = (await db.query("select to_regclass('public.hosted_inference_policy') present")).rows[0].present;
+  if (!existing) {
   await db.exec(`
     create role anon; create role authenticated; create role service_role;
     create schema auth; create table auth.users(id uuid primary key);
@@ -16,6 +18,7 @@ export async function createFixture({ budgetMicrousd = 10_000_000, enabled = tru
   `);
   const migration = await readFile(new URL('../../supabase/migrations/20261029010000_hosted_inference.sql', import.meta.url), 'utf8');
   await db.exec(migration);
+  }
   await db.query(`update public.hosted_inference_policy set enabled=$1,
     user_daily_microusd=$2,background_daily_microusd=$2,bootstrap_lifetime_microusd=$2,
     global_daily_microusd=$2,global_monthly_microusd=$2`, [enabled, budgetMicrousd]);
