@@ -17,6 +17,8 @@ import AppKit
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture.native"
     struct Configuration: Sendable {
+        var appURL: URL {URL(fileURLWithPath:"/fixture-helper.app")}
+
         let cliURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEST_RPC_PEER"]!)
         let codexOverrides: [String] = []
         let clientEnvironment: [String: String]
@@ -270,5 +272,5 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-session-recovery-") as 
                         "Diagnostics/ComputerUseDiagnosticConsent.swift", "Diagnostics/ComputerUseDiagnosticPolicy.swift",
                         "Driver/NativeAppStateRetry.swift", "Driver/OpenAIComputerUseProbe.swift", "Driver/NativePermissionReadiness.swift",
                         "Driver/OpenAIComputerUseSession.swift", "Driver/NativeComputerUseServer.swift"]],
-                    "-o", str(executable)], check=True, env=env, timeout=60)
+                    str(APP.parent / "Scripts/Fixtures/NativeHelperPermissionNoteStub.swift"), "-o", str(executable)], check=True, env=env, timeout=60)
     subprocess.run([str(executable)], check=True, env=env, timeout=45)

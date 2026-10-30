@@ -61,7 +61,10 @@ action has been opened (or that grant is verified), and Automation/Sentient Scre
 either already granted or their grant actions have been opened. Automatic Automation probing does
 not count as a button click. Grant actions and drags never create permission proof. Full Disk Access is not required and the gate never reads TCC databases.
 
-After a confirmed relaunch, rows without live proof say **Ready to try**. `isReadyForTask` permits an
+Each helper grant action and completed drag is persisted with its app-process identity. Any real
+relaunch, including macOS Quit & Reopen, applies those setup steps; the remaining Sentient permission
+can then be completed without repeating helper setup. Applied steps say **Set up**, not Granted.
+Factory Reset clears these receipts. `isReadyForTask` permits an
 ordinary native request; `allRequiredGranted` continues to mean actual capability evidence. The
 macOS helper enforces access during the task. Known denial keeps the workflow blocked for recovery.
 
@@ -91,8 +94,11 @@ use that path. Other busy work blocks restart with an explanation; a gate-held e
 be stopped explicitly before restarting. The setup window remains available if saving the draft
 or preparing the relaunch fails. No saved request is automatically submitted after relaunch.
 
-The restart receipt is bound to the confirming process. Closing a guide and relaunching without
-selecting Restart Sentient does not complete setup. Before the first post-restart request, an exclusive runtime
+The restart receipt is bound to the process that changed permissions. Each helper grant action
+and completed drag is saved immediately. macOS Quit & Reopen counts as a real restart even when
+Sentient’s own restart button was never reached. An untouched fresh setup cannot complete merely
+by reopening the app; known setup history and recorded helper steps are restored independently
+of Sentient’s own permissions, which are still checked live. Before the first post-restart request, an exclusive runtime
 lease protects a graceful stop of only Sentient's idle helper. Active work and foreign helpers are
 never stopped by this preparation. Confirmation survives later launches until reset or a new setup
 round; it remains separate from grant evidence.
@@ -205,3 +211,12 @@ instruction), and Settings → Health (FDA, Accessibility, Screen Recording).
 `System/Documentation - System (Permissions, Health, Uninstall).md` (the probes),
 `Notch Magic/Documentation - Sidekick - General.md`, `Views/Settings/Documentation - Settings.md`,
 `Views/Onboarding/Documentation - Onboarding.md`.
+
+Settings delegates helper permissions to **Fix permissions…**, rather than displaying inferred
+per-grant rows. The action always makes a fresh native setup request, even if earlier proof was
+cached. A nonactivating companion follows the owned helper’s visible setup window and explains
+that Accessibility and Screenshots are needed while the browser extension can be skipped. The
+companion closes when the request finishes/cancels or the helper window disappears. When the helper
+already has access, it can complete without opening a setup window; Settings reports readiness.
+Explicit diagnostics are never disabled merely because setup history is missing or unverified.
+A successful diagnostic also records completed setup, and a confirmed native denial invalidates it.

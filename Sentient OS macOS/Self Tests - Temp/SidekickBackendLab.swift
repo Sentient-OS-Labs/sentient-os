@@ -368,8 +368,8 @@ nonisolated enum SidekickBackendLab {
             // Match the existing ChatGPT-only branch of CodexCLI.backendTuned. The lab calls
             // the real argument builder/process runner directly to keep sessions ephemeral.
             let limited = CodexAuth.isLimited()
-            let model = limited ? CodexCLI.Model.gpt56terra : invocation.model
-            let effort = limited ? CodexCLI.Effort.medium : invocation.effort
+            let model = limited ? CodexCLI.Model.gpt6luna : invocation.model
+            let effort = invocation.effort
             checks.details["selected_model"] = model.rawValue
             checks.details["selected_effort"] = effort.rawValue
             checks.counts["production_plan_downshift"] = limited ? 1 : 0

@@ -2,7 +2,9 @@
 //  ProactiveExecutor.swift
 //  Sentient OS macOS
 //
-//  Proactive Intelligence — PART 3 of 3: THE EXECUTOR. On the user's one-button press it actually
+//  Legacy direct-execution harness for explicit diagnostic callers. Live Home cards now
+//  submit to the main Sidekick agent; source-evidence checks below are still shared.
+//  Proactive Intelligence — legacy PART 3 executor. On the user's one-button press it actually
 //  FIRES a `PreparedAction` that PART 2 staged. Real channels, picked by `method`:
 //    • gmail    → the user's Gmail connector (MCP) — SANDBOXED (`read-only` Seatbelt), on the
 //      fired-task recipe (`mcpActionServer`: one server walled in, its writes approved for the
@@ -284,7 +286,6 @@ actor ProactiveExecutor {
         inv.includeUserConfig = true         // the recipes need the connector fetch
         inv.webSearch = false
         inv.timeout = 0 // User-fired actions run until completion, failure or explicit Stop.
-        if ModelBackend.current == .claude { await ConnectorClassifier.ensureClassified(slug: slug) }
         inv.mcpActionServer = slug
         inv.mcpExpectedIdentity = expectedIdentity
         inv.outlookOperation = outlookOperation

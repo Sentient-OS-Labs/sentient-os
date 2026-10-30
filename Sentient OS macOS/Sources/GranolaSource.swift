@@ -9,7 +9,7 @@ import Foundation
 import CoreFoundation
 
 enum GranolaSource {
-    static let defaultClaudeModel: ClaudeCLI.Model = .sonnet
+    static let defaultClaudeModel: ClaudeCLI.Model = .haiku
     static let candidateCap = 20
     static let inventoryCap = 500
     static let noteByteCap = 24_000

@@ -143,6 +143,7 @@ actor Proactive {
         }
         inv.feature = "proactive"
         inv.effort = .high                  // gpt-6-sol → high (this judgment is the product)
+        inv.claudeModel = .opus             // same model and effort as proactive research
         inv.sandbox = .readOnly             // never writes or acts
         inv.cwd = scratch.path              // neutral empty dir — nothing to read
         inv.webSearch = false               // summaries-only; web research is PART 2

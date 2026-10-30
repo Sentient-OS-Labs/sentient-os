@@ -56,7 +56,7 @@ struct HealthPane: View {
     /// Claude = Claude Code + its login + Codex for computer tasks; custom = CLI + a proven endpoint (codex is the
     /// harness there too). The computer-use driver rides every engine.
     private var engineAllGreen: Bool {
-        guard ComputerUseSetup.current.ready, computerGate.allRequiredGranted else { return false }
+        guard ComputerUseSetup.current.ready, computerGate.isReadyForTask else { return false }
         switch backend {
         case .sentient: return sentient.configured && sentient.ready
         case .chatgpt: return codex.installed && !codex.outdated
@@ -91,7 +91,7 @@ struct HealthPane: View {
                 VStack(alignment: .leading, spacing: 24) {
                     onDeviceGroup
                     sidekickGroup
-                    NativeComputerUsePermissionRows(gate: computerGate)
+                    NativeComputerUseSettings(gate: computerGate)
                     ComputerUseCheckRow()
                     if !sourceIssues.isEmpty {
                         SettingsGroup(label: "Sources to retry") {

@@ -45,6 +45,9 @@ struct SidekickComposer: View {
                         .transition(SidekickStyle.entrance(reduced))
                 } else if let reference = conversation.replyReference {
                     HStack(spacing: 10) {
+                        if let card = reference.card {
+                            SidekickCardReplyPreview(card: card)
+                        } else {
                         RoundedRectangle(cornerRadius: 2).fill(SidekickStyle.accent).frame(width: 3)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Replying to a message").font(.system(size: 11, weight: .semibold)).foregroundStyle(SidekickStyle.accent)
@@ -53,6 +56,7 @@ struct SidekickComposer: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         Button { conversation.show(messageID: reference.messageID) } label: { Image(systemName: "arrow.up.right") }
                             .help("Show original message")
+                        }
                         Button { withAnimation(SidekickStyle.motion(reduced)) { conversation.replyReference = nil } } label: { Image(systemName: "xmark") }
                             .help("Remove reply").accessibilityLabel("Remove reply")
                     }

@@ -50,18 +50,17 @@ prepares direct attachments before dispatch, pins the backend and connection gen
 the child task to disconnect cancellation. Both engines use per-run configuration. Direct servers
 never enter the hosted catalog-ID fallback.
 
-Before an action, research attachment or native knowledge read uses the connection, Sentient fetches
-its live tool inventory and checks its policy. A missing policy, changed definition fingerprint or
-outdated policy revision triggers classification at that point. The model receives tool definitions
-as data, with tools disabled and a scratch working directory. Its result must cover the complete
-inventory. No tool is attached until verification succeeds and a nonempty permitted set remains.
-Reconnects retain a valid cached policy for this comparison; the new account and grant are still
-checked independently. Unchanged inventories reuse that policy without another model call.
+Before use, Sentient refreshes the live inventory and verifies the connected account. There is
+no AI classifier. User-directed Sidekick actions receive every advertised tool; new or renamed
+tools require no hardcoded action-rule update. Background read attachments use the server's
+readOnlyHint metadata. Source-specific knowledge readers retain their own API contracts.
 
-Codex receives `mcp_servers` definitions with explicit `enabled_tools` and scoped approval, including
-current computer tasks on all model backends. Claude structured runs use named allows under
-`dontAsk`. The retained Claude policy helper also supports explicit ask rules and a `PermissionRequest` hook: only a matching captured tool receives approval, and a missing
-or failed hook leaves a headless request denied. Known excluded tools are also removed by name.
+The existing policy fields are retained as inventory-cache metadata for migration. Revision 2
+is refreshed locally without inference; old classifier failures remain eligible for retry.
+Missing, partial or stale classification metadata never gates advertised action tools or a ready
+connection. Background read selection still follows the live read-only annotations.
+Connection generations, OAuth grants, cancellation and credential-lease boundaries still apply.
+Codex receives the names from the current inventory, not a separately reviewed frozen list.
 
 The same app executable handles `--direct-mcp-headers` and `--direct-mcp-policy` before SwiftUI or
 diagnostics initialize. Their arguments contain a connection lease and permitted names, not bearer

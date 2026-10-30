@@ -82,6 +82,7 @@ import Observation
 
     private func clearProof(ifCurrent id: UUID? = nil, failure: NativeComputerUseFailure? = nil) {
         if let id, proof?.id != id { return }
+        if let failure, failure.requiresSystemPermissionSetup { NativePermissionSetup.shared.permissionFailed() }
         let previous = proof?.connection
         proof = nil
         failureSnapshot = NativePermissionReadiness.afterFailure(failure)
@@ -149,7 +150,10 @@ import Observation
                 ? try await OpenAIComputerUseRuntime.shared.start(configuration: configuration)
                 : selectedHelper
             try ensureOperation(id)
-            let ready = await validateProof(configuration: configuration, helper: currentHelper)
+            // Repair is an explicit fresh check. A cached successful connection cannot tell
+            // whether macOS permissions were revoked since the last read.
+            var ready = false
+            if !useHelperSetup { ready = await validateProof(configuration: configuration, helper: currentHelper) }
             try ensureOperation(id)
             if ready { return }
             try await performCheck(configuration: configuration, attempt: id, useHelperSetup: useHelperSetup)
@@ -206,6 +210,7 @@ import Observation
     }
 
     private func publish(_ candidate: Proof) {
+        NativePermissionSetup.shared.verified()
         let previous = proof?.connection
         proof = candidate
         failureSnapshot = .init()
@@ -314,8 +319,10 @@ import Observation
                 let result: NativePermissionReadiness.Snapshot
                 if useHelperSetup {
                     stage = .windowRead; began = Date()
-                    result = try await NativePermissionReadiness.helperSetup { tool, arguments in
-                        try await session.call(tool, arguments: arguments)
+                    result = try await NativeHelperPermissionNote.withGuide(appURL: configuration.appURL) {
+                        try await NativePermissionReadiness.helperSetup { tool, arguments in
+                            try await session.call(tool, arguments: arguments)
+                        }
                     }
                 } else {
                     stage = .windowActivation; began = Date()

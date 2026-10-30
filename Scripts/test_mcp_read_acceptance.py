@@ -30,7 +30,7 @@ nonisolated enum ModelBackend: String, Sendable {
     case chatgpt, claude, custom, sentient
     @TaskLocal static var current: Self = .chatgpt
 }
-nonisolated enum ClaudeCLI { enum Model: Sendable { case sonnet } }
+nonisolated enum ClaudeCLI { enum Model: Sendable { case sonnet, haiku } }
 nonisolated enum DirectMCPError: Error { case reconnectRequired, registrationExpired, accountSetupRequired, authorizationDenied, noTools, http(Int) }
 nonisolated struct DirectMCPConnection: Sendable { let providerSlug: String }
 nonisolated enum DirectMCPStore { static func connection(_ slug: String) -> DirectMCPConnection? { nil } }

@@ -1,5 +1,5 @@
 // Owns one Claude-backed Codex computer task: loopback provider, CLI, and MCP relay.
-// Claude authenticates and reasons; Codex executes every advertised tool and returns its real result.
+// Claude authenticates, reasons and calls its hosted connectors; Codex executes relay tools.
 // Doc: Documentation - Cloud - ClaudeCLI (the claude -p engine).md
 
 import Foundation
@@ -19,6 +19,7 @@ actor ClaudeSubscriptionBridge {
     private let model: String
     private let effort: String
     private let hostedEnvironment: [String: String]?
+    private let connectors: ClaudeComputerUseConnectors
     private let interaction: SidekickInteraction?
     // Network callbacks create fresh Tasks; retain the originating helper diagnostics scope.
     private let diagnosticDirectory = ChildProcessDiagnostics.directory
@@ -37,6 +38,7 @@ actor ClaudeSubscriptionBridge {
     private var claudeTask: Task<Void, Never>?
     private var closed = false
     private var started = false
+    private var relayURL = ""
     private var sessionKey: String?
     private var tools: [Wire.Tool] = []
     private(set) var failure: Error?
@@ -61,11 +63,13 @@ actor ClaudeSubscriptionBridge {
     private var retiredRequests = Set<String>()
 
     init(binary: String, model: String, effort: String, timeout: TimeInterval,
-         namespaces: Set<String>, hostedEnvironment: [String: String]? = nil, onProgress: @escaping @Sendable (String) -> Void) {
+         namespaces: Set<String>, hostedEnvironment: [String: String]? = nil,
+         connectors: ClaudeComputerUseConnectors = .none, onProgress: @escaping @Sendable (String) -> Void) {
         self.interaction = SidekickInteraction.current
         self.binary = binary; self.model = model; self.effort = effort; self.timeout = timeout
         self.namespaces = namespaces; self.onProgress = onProgress
         self.hostedEnvironment = hostedEnvironment
+        self.connectors = hostedEnvironment == nil ? connectors : .none
     }
 
     func start() async throws -> Configuration {
@@ -97,6 +101,7 @@ actor ClaudeSubscriptionBridge {
         }
         try Task.checkCancellation()
         let base = "http://127.0.0.1:\(port)"
+        relayURL = base + "/mcp"
         let mcp: [String: Any] = ["mcpServers": ["sentient_relay": ["type": "http", "url": base + "/mcp",
             "headers": ["Authorization": "Bearer " + secret]]]]
         try writePrivate(Wire.json(mcp), to: directory.appendingPathComponent("mcp.json"))
@@ -305,6 +310,8 @@ actor ClaudeSubscriptionBridge {
         \(webInstructions) You can alternate research and app actions throughout the same task.
         Prefer set_value for editable text fields; verify accents, emoji, and other Unicode text.
         Never infer success from an attempted call. Do not obtain credentials or change permissions.
+
+        \(connectors.instructions)
         """
         let systemFile = directory.appendingPathComponent("instructions.txt")
         try writePrivate(Data(system.utf8), to: systemFile)
@@ -316,6 +323,7 @@ actor ClaudeSubscriptionBridge {
             "--strict-mcp-config", "--mcp-config", directory.appendingPathComponent("mcp.json").path,
             "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence",
             "--system-prompt-file", systemFile.path]
+        arguments = try connectors.applying(to: arguments, relayURL: relayURL)
         if hostedEnvironment != nil { arguments += ["--bare"] }
         var environment = ClaudeCLI.baseEnv
         if let hostedEnvironment { environment.merge(hostedEnvironment) { _, hosted in hosted } }
@@ -339,6 +347,9 @@ actor ClaudeSubscriptionBridge {
                                 args: [ClaudeSubscriptionProcess.argument], stdinText: invocationJSON,
                                 cwd: directory.path, timeout: helperTimeout, includeCustomProviderKey: false,
                                 terminationGrace: 3, retainStdoutLine: ClaudeSubscriptionProcess.retainEnvelopeLine) { line in
+                                    #if DEBUG
+                                    Self.recordFixtureStartup(line)
+                                    #endif
                                     for progress in Self.narrationLines(fromStreamJSON: line) { onProgress(progress) }
                                 }
                         }
@@ -355,13 +366,31 @@ actor ClaudeSubscriptionBridge {
         }
     }
 
-    /// Claude supplies assistant narration only. Actual tool activity comes from the same
-    /// ComputerUseStream executor events as ChatGPT, avoiding provider-specific UI labels.
+    /// Claude supplies narration and hosted-connector progress. Relayed computer/file tool
+    /// activity comes from the same ComputerUseStream executor events as ChatGPT.
     nonisolated static func narrationLines(fromStreamJSON line: String) -> [String] {
         ClaudeCLI.humanLines(fromStreamJSON: line)
             .filter { !$0.hasPrefix("→ sentient_relay.") }
             .flatMap { $0.components(separatedBy: .newlines) }
     }
+
+    #if DEBUG
+    /// Metadata only, and only inside the explicitly marked live acceptance workspace.
+    private nonisolated static func recordFixtureStartup(_ line: String) {
+        let env = ProcessInfo.processInfo.environment
+        guard env["SENTIENT_SELFTEST"] == "sidekickapp", env["LAB_SIDEKICK_STAGE"] == "live-workflows",
+              let path = env["LAB_SIDEKICK_ROOT"],
+              (try? String(contentsOfFile: path + "/.sidekick-app-fixture", encoding: .utf8)) == "1\n",
+              let event = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+              event["type"] as? String == "system", event["subtype"] as? String == "init" else { return }
+        let servers = (event["mcp_servers"] as? [[String: Any]] ?? []).map {
+            ["name": $0["name"] as? String ?? "", "status": $0["status"] as? String ?? ""]
+        }
+        let metadata: [String: Any] = ["servers": servers, "tools": event["tools"] as? [String] ?? []]
+        let url = URL(fileURLWithPath: path).appendingPathComponent("claude-startup-\(UUID().uuidString).json")
+        try? JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]).write(to: url, options: .atomic)
+    }
+    #endif
 
     private func complete(_ result: CodexCLI.Envelope) {
         guard !closed, failure == nil else { return }

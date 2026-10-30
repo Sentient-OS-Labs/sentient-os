@@ -1,21 +1,7 @@
-//
-//  CommandRouter.swift
-//  Sentient OS macOS
-//
-//  The pre-run router for Sidekick / command-bar submissions: one cheap, hermetic frontier
-//  call (luna tier → haiku on Claude, low effort, ~1-3s) that decides whether a command can
-//  ride the screen-free connector spine — the ENTIRE task fits ONE connected service's tools —
-//  or needs computer use. Fail-closed toward computer: any error, timeout, unparseable reply,
-//  or unlisted target routes there, and a wrong "computer" pick costs nothing because the
-//  connector tools ride that run too. Skipped entirely — no run, no latency — when the census
-//  detects no connectors (BYOM included: a custom backend detects none); the two dedicated-chip
-//  services (Gmail, Google Calendar) join the routable list only once the router runs at all.
-//  Card fires never pass through here (beginExternalRun adopts the run without start()).
-//
-//  Key surface: isActive · route(_:) → .computer | .connector(slug:name:) ·
-//  routableServices() (internal for the connector lab's routereval; lab dies at Step 4).
-//  Doc: Documentation - Sidekick - General.md (this folder).
-//
+#if DEBUG
+// Historical router fixture for explicit connector-lab evaluations only.
+// Production Sidekick sends every request directly to the main agent.
+// Kept to preserve existing account-scope and connector curation test cases.
 
 import Foundation
 
@@ -314,3 +300,5 @@ enum CommandRouter {
         return String(data: try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), encoding: .utf8)!
     }
 }
+
+#endif

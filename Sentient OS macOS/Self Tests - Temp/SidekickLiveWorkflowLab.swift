@@ -51,8 +51,19 @@ import SwiftUI
         try awake.run()
         defer { if awake.isRunning { awake.terminate() }; notch.shutdownForTesting(); window.close() }
         await CodexSetup.shared.refreshInstalled()
+        if ModelBackend.current == .claude {
+            _ = await ClaudeAuth.refresh()
+            _ = await ConnectorCensus.list()
+        }
         ComputerUseGate.shared.refresh()
         await ComputerUseGate.shared.awaitAutomationRefresh()
+        // The fixture has fresh defaults, not the user's setup receipts. Establish real
+        // helper evidence through the same explicit repair action offered by Settings.
+        ComputerUseGate.shared.fixNativePermissions()
+        while ComputerUseGate.shared.requestingAutomation || ComputerUseGate.shared.checkingCapabilities {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard ComputerUseGate.shared.isReadyForTask else { throw Failure.unavailable }
         await presentation.load(.latest, conversation: conversation)
         // A relaunch must never repeat already-submitted real account mutations.
         var seen = Set(try FileManager.default.contentsOfDirectory(at: receipts, includingPropertiesForKeys: nil)
@@ -96,23 +107,40 @@ import SwiftUI
                               to: receipts.appendingPathComponent(command.id + "-accepted.json"))
                     continue
                 }
-                guard command.kind == "submit" || command.kind == "answer", let prompt = command.prompt else {
+                guard ["submit", "answer", "card"].contains(command.kind), let prompt = command.prompt else {
                     seen.insert(command.id); continue
                 }
-                if command.kind == "submit", run.isRunning || activeCommand != nil { continue }
+                if command.kind != "answer", run.isRunning || activeCommand != nil { continue }
                 if command.kind == "answer", !run.recovery.isPending { continue }
                 if command.kind == "submit", run.recovery.isPending { run.recovery.cancel() }
                 if command.kind == "answer" { run.recovery.draft = prompt }
-                else {
+                else if command.kind == "submit" {
                     conversation.draft = prompt
                     window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                 }
-                let accepted = SidekickComposer.sendDraft(coordinator: coordinator, presentation: presentation)
+                let accepted: Bool
+                if command.kind == "card" {
+                    // Synthetic, explicitly supplied test card; uses the real Home button handler.
+                    let action = PreparedAction(title: "Sidekick card acceptance " + command.id,
+                        method: .computer, target: "Test fixture", urgency: .low, dueDate: nil,
+                        status: .confirmed, verification: "Synthetic acceptance fixture",
+                        cardSummary: "Run the read-only acceptance request attached to this card.",
+                        preparedContent: prompt, executionRecipe: "Follow the supplied acceptance request; do not perform unrelated actions.",
+                        buttonText: "Run acceptance request", detailLabel: "Read request", sources: [], reviewNote: "")
+                    ProactiveResearch.saveLatest(ReadyResult(ready: [action], dropped: []))
+                    let cards = ForYouModel()
+                    cards.coordinator = coordinator
+                    cards.entries = [.init(b: Briefing(from: action, variant: 0), action: action, phase: .offer)]
+                    cards.run(action.id)
+                    accepted = run.isRunning
+                } else {
+                    accepted = SidekickComposer.sendDraft(coordinator: coordinator, presentation: presentation)
+                }
                 seen.insert(command.id)
                 try write(["id": command.id, "kind": command.kind, "accepted": accepted,
                     "task_id": run.runID.uuidString, "at": Date().timeIntervalSince1970],
                     to: receipts.appendingPathComponent(command.id + "-accepted.json"))
-                if accepted && command.kind == "submit" {
+                if accepted && command.kind != "answer" {
                     activeCommand = command.id; activeTask = run.runID; started = Date()
                     nextCapture = Date().addingTimeInterval(2); submitted += 1
                 }

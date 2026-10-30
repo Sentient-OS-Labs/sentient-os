@@ -34,7 +34,7 @@ struct PermissionsView: View {
                     if backendRaw != ModelBackend.chatgpt.rawValue { accessibilityPane }
                     screenRecordingPane
                     if backendRaw == ModelBackend.chatgpt.rawValue {
-                        NativeComputerUsePermissionRows(gate: .shared)
+                        NativeComputerUseSettings(gate: .shared)
                     }
                     wakeDaemonPane
                 }

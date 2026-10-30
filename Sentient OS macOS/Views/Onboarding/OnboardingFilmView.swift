@@ -7,8 +7,8 @@
 //  morning-home rest (?end=0.42 in film progress); at each park it posts "parked" to the
 //  `autopilot` message handler and the native Continue button blooms in. The night film leads
 //  into Sidekick, then a native Double Tap lesson before the frontier-model picker.
-//  The webview is a movie, not a page: hit-testing
-//  returns nil (no scrolling, no clicks), navigation off our host is blocked, and the view
+//  The webview is a movie, not a page: scrolling is blocked and only marked demo
+//  controls receive clicks, navigation off our host is blocked, and the view
 //  fades in black-on-black only after the page loads (no flash).
 //  Offline or a failed load falls back to a quiet branded slide, so onboarding is never
 //  blocked on the network. Watchdogs bound every wait: 12s to load, 40s to park.
@@ -63,6 +63,7 @@ struct OnboardingFilmView: View {
              ridingSidekick, sidekickDone, doubleTap, unavailable
     }
     @State private var phase: Phase = .loading
+    @State private var replayingIntro = false
 
     /// didFinish fired — arms the fallback fade for a "ready"-less page (older deploy).
     @State private var finishedLoad = false
@@ -147,9 +148,9 @@ struct OnboardingFilmView: View {
                                 },
                                 onFailed: { if phase == .loading { setPhase(.unavailable) } })
                         .ignoresSafeArea()
-                        .opacity(phase == .loading || phase == .doubleTap ? 0 : 1)
+                        .opacity(phase == .loading || phase == .doubleTap || replayingIntro ? 0 : 1)
                         .accessibilityHidden(true)
-                        .allowsHitTesting(false)
+                        .allowsHitTesting(phase == .awaitingNotch || phase == .ridingSidekick || phase == .sidekickDone)
                 }
 
                 // Keep the page mounted and hidden during the native lesson so a stale
@@ -172,6 +173,8 @@ struct OnboardingFilmView: View {
                 if phase == .parked {
                     GeometryReader { geo in
                         OnboardingNextButton(title: "Continue", action: advanceFromPark)
+                            .disabled(replayingIntro)
+                            .opacity(replayingIntro ? 0 : 1)
                             .position(x: geo.size.width / 2,
                                       y: morningBandCenter ?? geo.size.height * 0.185)
                             .onAppear { measureMorningBand() }
@@ -198,6 +201,28 @@ struct OnboardingFilmView: View {
                 }
             }
         }
+        .overlay(alignment: .topLeading) {
+            if phase == .parked {
+                Button(action: replayIntro) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .frame(width: 40, height: 40)
+                        .background(.white, in: Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(PressScaleStyle())
+                .help("Replay intro")
+                .accessibilityLabel("Replay intro")
+                .accessibilityIdentifier("onboarding.film.replay")
+                .disabled(replayingIntro)
+                .opacity(replayingIntro ? 0 : 1)
+                .padding(.top, 24)
+                .padding(.leading, 24)
+                .transition(.opacity)
+            }
+        }
     }
 
     var body: some View {
@@ -205,7 +230,31 @@ struct OnboardingFilmView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: inviting)
         // The film step leaving (Continue, back) must never strand an armed demo — the
         // notch goes back to its real behavior the moment onboarding moves on.
-        .onDisappear { appState.commandCoordinator.disarmOnboardingNotchDemo() }
+        .onDisappear {
+            replayingIntro = false
+            appState.commandCoordinator.disarmOnboardingNotchDemo()
+        }
+        .task(id: replayingIntro) {
+            guard replayingIntro else { return }
+            do {
+                if !reduceMotion { try await Task.sleep(for: .milliseconds(180)) }
+                guard !Task.isCancelled else { return }
+                let restarted = await driver.replayIntro()
+                guard !Task.isCancelled else { return }
+                if restarted {
+                    phase = .playing
+                    morningBandCenter = nil
+                }
+                // Let the page's scroll-derived springs return to the opening
+                // while black, then reveal the already-loaded film without a reload.
+                try await Task.sleep(for: .milliseconds(160))
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                    replayingIntro = false
+                }
+            } catch {
+                replayingIntro = false
+            }
+        }
         // Load watchdog: a first launch with no internet lands on the fallback, never a void.
         .task {
             try? await Task.sleep(for: .seconds(12))
@@ -292,6 +341,7 @@ struct OnboardingFilmView: View {
     /// The parked Continue: the first park rides on to the invitation beat. The Sidekick park's
     /// Continue opens the native Double Tap lesson, which owns its own completion gate.
     private func advanceFromPark() {
+        guard !replayingIntro else { return }
         switch phase {
         case .parked:
             setPhase(.ridingToInvitation)
@@ -300,6 +350,13 @@ struct OnboardingFilmView: View {
             setPhase(.doubleTap)
         default:
             exitStep()
+        }
+    }
+
+    private func replayIntro() {
+        guard phase == .parked, !replayingIntro else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+            replayingIntro = true
         }
     }
 
@@ -401,6 +458,35 @@ struct OnboardingFilmView: View {
     }
     #endif
 
+    /// Replay the first chapter using the existing page and bridge. Restoring the
+    /// opening before continueTo resets the parked scroll and starts a fresh ride.
+    func replayIntro() async -> Bool {
+        guard let webView else { return false }
+        do {
+            let result = try await webView.evaluateJavaScript("""
+            (() => {
+              const player = window.__sentientAutopilot;
+              if (typeof player?.continueTo !== 'function') return false;
+              window.scrollTo(0, 0);
+              player.continueTo(.42, 3);
+              return true;
+            })()
+            """)
+            let restarted = result as? Bool == true
+            #if DEBUG
+            if restarted {
+                introSpedUp = false
+                currentEnd = 0.42
+                currentSeconds = nil
+            }
+            #endif
+            return restarted
+        } catch {
+            Log("Onboarding film: replay unavailable — \(ErrorLabel(error))")
+            return false
+        }
+    }
+
     /// Resume the parked ride to a new film-p address (leg 2: the Sidekick scene).
     /// delay = the breath before motion. Pace stays the site's: the film's own beat
     /// profile makes the turn + dive transition brisk while the Sidekick scene rides
@@ -473,14 +559,33 @@ struct OnboardingFilmView: View {
     }
 }
 
-/// A WKWebView that can't be interacted with, so the film can't be scrolled off its
-/// autopilot or clicked away: hitTest nil keeps the whole subtree out of event routing,
-/// the scrollWheel stub swallows anything that arrives some other way (responder chain),
-/// and refusing first-responder keeps keyboard scrolling (space, arrows) out too.
+/// Keep WebKit's content subtree out of native event routing so the film cannot be
+/// scrolled or navigated away. Only explicitly marked demo controls receive clicks,
+/// forwarded at the DOM level; the native notch and keyboard shortcuts keep focus.
 private final class PassiveWebView: WKWebView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
     override func scrollWheel(with event: NSEvent) {}
     override var acceptsFirstResponder: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        guard !event.modifierFlags.contains(.control), bounds.width > 0, bounds.height > 0 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let x = point.x / bounds.width
+        let y = (isFlipped ? point.y : bounds.height - point.y) / bounds.height
+        guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else { return }
+        evaluateJavaScript("""
+        (() => {
+          const element = document.elementFromPoint(\(x) * innerWidth, \(y) * innerHeight);
+          const button = element?.closest('button[data-demo-control]');
+          if (!button || button.disabled || button.closest('[inert]')) return;
+          button.click();
+          button.animate([{ transform: 'scale(.88)' }, { transform: 'scale(1)' }],
+            { duration: 180, easing: 'ease-out' });
+        })();
+        """)
+    }
 
     /// No browser context menu, ever — right-click/ctrl-click "Reload Page" would restart
     /// the film and shatter the native-screen illusion. Emptying the menu shows nothing.

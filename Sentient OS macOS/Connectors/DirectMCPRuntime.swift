@@ -54,7 +54,7 @@ nonisolated enum DirectMCPRuntime {
                 let verified = try await DirectMCPConnections.verify(connection)
                 let names: [String]
                 switch mode {
-                case .read: names = Array((verified.provider?.reviewedReads ?? []).intersection(Set(verified.readNames))).sorted()
+                case .read: names = verified.readNames
                 case .action: names = verified.actionNames
                 }
                 let allowed = subset ?? names

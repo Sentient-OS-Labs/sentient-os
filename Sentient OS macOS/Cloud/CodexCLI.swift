@@ -34,8 +34,8 @@ actor CodexCLI {
     // MARK: Types
 
     /// Reasoning-effort tier for CHATGPT-backend calls (codex `model_reasoning_effort`). All
-    /// four are accepted by codex. Per-call: Gmail connect-check = `.low`, Gmail processing =
-    /// `.high`, knowledge-base work (and everything else) = `.high`. Nothing runs `.xhigh`
+    /// four are accepted by codex. Per-call: routing and lightweight checks = `.low`, connector
+    /// ingestion = `.medium`, knowledge-base work = `.high`. Nothing runs `.xhigh`
     /// anymore — gpt-5.6-sol thinks far too long there (the initial vault build was downgraded
     /// to `.high`, 2026-07-10). A CUSTOM backend never uses this enum: the user's free-form
     /// reasoning level (Frontier Model Choice — `none`, `xhigh`, `adaptive`, whatever their
@@ -48,8 +48,7 @@ actor CodexCLI {
     }
 
     /// The model id passed to `codex exec -m`. Computer-use tiers are defined in
-    /// ComputerUseSpeed; Sol handles background work, Terra its free/go fallback, Luna reads
-    /// and Free/Go computer use.
+    /// ComputerUseSpeed; Sol handles paid background work, Luna reads and every Free/Go run.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
@@ -57,8 +56,8 @@ actor CodexCLI {
         case gpt61sol = "gpt-6.1-sol"     // paid computer use: Medium
         case gpt6astra = "gpt-6-astra"  // paid computer use: Smarter
         case gpt6sol = "gpt-6-sol"    // knowledge-base work + everything else (paid plans)
-        case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
-        case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing; Free/Go computer use
+        case gpt56terra = "gpt-5.6-terra" // legacy requested tier; Free/Go now always resolves to Luna
+        case gpt6luna = "gpt-6-luna"  // light reads; every Free/Go run
     }
 
     /// Model resolution for structured runs and custom-provider computer use. ChatGPT computer
@@ -70,20 +69,19 @@ actor CodexCLI {
     ///    Gemini rejects off — so the user's setting must win everywhere, Speed slider
     ///    included). The luna callers (Gmail/Calendar) never reach here in custom mode —
     ///    connectors are ChatGPT-only.
-    ///  - ChatGPT backend: free/go accounts lost access to gpt-5.6-sol (it stopped answering
-    ///    through `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan
-    ///    read, any sol/astra call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep
-    ///    the requested model (CodexAuth's fail-open policy), and the luna tier is untouched.
+    ///  - ChatGPT backend: Free/Go supports Luna only. On a positive limited-plan read, every
+    ///    requested tier resolves to Luna while preserving the caller's reasoning effort.
+    ///    Unknown plans keep the requested model (CodexAuth's fail-open policy).
     /// Living here at the spine means every caller — and any future one — is covered without
     /// per-call-site checks.
     private static func backendTuned(model: Model, effort: Effort) -> (modelID: String, effortArg: String) {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard model == .gpt6sol || model == .gpt6astra, CodexAuth.isLimited() else {
+        guard ModelBackend.current == .chatgpt, CodexAuth.isLimited() else {
             return (model.rawValue, effort.rawValue)
         }
-        return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
+        return (Model.gpt6luna.rawValue, effort.rawValue)
     }
 
     /// OS-level (Seatbelt) confinement of everything the agent does — stronger than a tool
@@ -563,6 +561,10 @@ actor CodexCLI {
                 args += ["-i", made.url.path]      // a flag must follow, so the variadic ends here
                 prompt = "Read the 4 digits in the attached image. Reply with EXACTLY those 4 digits and nothing else."
             }
+        } else if ModelBackend.current == .chatgpt, CodexAuth.isLimited() {
+            // The background availability check must not inherit an unsupported CLI default.
+            args += ["-m", Model.gpt6luna.rawValue,
+                     "-c", "model_reasoning_effort=\"low\""]
         }
         args += ["--skip-git-repo-check", prompt]
         do {
@@ -708,7 +710,7 @@ actor CodexCLI {
                                providerOverrides: [String] = [],
                                nativeConfiguration: OpenAIComputerUse.Configuration? = nil,
                                nativeConnection: LocalMCPServer.Connection? = nil) throws -> [String] {
-        var args = (ModelBackend.hasClaudeRuntime ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
+        var args = agentExecArguments() + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
@@ -756,6 +758,11 @@ actor CodexCLI {
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         let backend = ModelBackend.current
+        let connectorRunID = UUID()
+        defer {
+            SlackToolPolicy.cleanup(runID: connectorRunID)
+            OutlookToolPolicy.cleanup(runID: connectorRunID)
+        }
         var nativeTask: UUID?
         var nativeServer: NativeComputerUseServer?
         var nativeLease: CodexRuntime.FileLock?
@@ -789,6 +796,7 @@ actor CodexCLI {
             var environment = nativeConfiguration.clientEnvironment
             if backend.hasClaudeRuntime {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+                let connectors = try ClaudeComputerUseConnectors.current(runID: connectorRunID)
                 // Claude supplies readable progress; Codex's structured events still carry
                 // tool activity needed by Sidekick recovery.
                 onLine("codex")
@@ -797,6 +805,7 @@ actor CodexCLI {
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
                     timeout: timeout, namespaces: namespaces,
                     hostedEnvironment: backend == .sentient ? try HostedClaudeRuntime.environment() : nil,
+                    connectors: connectors,
                     onProgress: onLine)
                 bridge = relay
                 let configuration = try await relay.start()
@@ -945,12 +954,16 @@ actor CodexCLI {
             fingerprint: ["codex", ModelBackend.current.rawValue, feature, caseName, reason.rawValue, trigger.rawValue])
     }
 
-    /// Fast mode applies to every Exec path, including probes and resumed sessions.
-    /// This is a per-run override; the user's Codex configuration is never changed.
-    private static func execArguments(resumeSessionID: String? = nil) -> [String] {
+    /// Only paid ChatGPT Sidekick requests fast service. Background work keeps normal service.
+    private static func agentExecArguments() -> [String] {
+        execArguments(fastMode: ModelBackend.current == .chatgpt && !CodexAuth.isLimited())
+    }
+
+    /// Per-run service selection; never change the user's Codex configuration.
+    private static func execArguments(resumeSessionID: String? = nil, fastMode: Bool = false) -> [String] {
         var args = ["exec"]
         if let resumeSessionID { args += ["resume", resumeSessionID] }
-        args += ["-c", #"service_tier="fast""#]
+        if fastMode { args += ["-c", #"service_tier="fast""#] }
         return args
     }
 

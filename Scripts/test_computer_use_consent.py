@@ -26,7 +26,9 @@ nonisolated enum Permissions {
 }
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture.native"
-    struct Configuration: Sendable { let script: Script }
+    struct Configuration: Sendable {
+        var appURL: URL {URL(fileURLWithPath:"/fixture-helper.app")}
+ let script: Script }
 }
 actor Script {
     var failure: NativeComputerUseFailure? = .init(kind: .connection, code: nil, detail: .unexpectedEOF, stage: .appState)
@@ -246,5 +248,5 @@ with tempfile.TemporaryDirectory(prefix='sentient-diagnostic-consent-') as direc
              'Driver/OpenAIComputerUseProbe.swift','Driver/NativePermissionReadiness.swift','Driver/NativeComputerUseServer.swift']
     binary = p/'tests'
     subprocess.run(['xcrun','swiftc','-swift-version','5','-parse-as-library','-target',f'{platform.machine()}-apple-macos15.0',
-                    str(p/'Support.swift'),str(p/'Tests.swift'),*[str(APP/f) for f in files],'-o',str(binary)],check=True,timeout=60)
+                    str(p/'Support.swift'),str(p/'Tests.swift'),*[str(APP/f) for f in files],str(APP.parent/'Scripts/Fixtures/NativeHelperPermissionNoteStub.swift'),'-o',str(binary)],check=True,timeout=60)
     subprocess.run([str(binary)],check=True,timeout=30)

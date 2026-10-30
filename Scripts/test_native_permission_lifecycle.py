@@ -9,6 +9,8 @@ source=(APP/'Views/Permissions/NativePermissionCheck.swift').read_text()
 source=source.replace('import AppKit','import Foundation')
 source += '\nextension NativePermissionCheck { static func fixture() -> NativePermissionCheck { NativePermissionCheck() } }\n'
 SUPPORT=r'''
+@MainActor final class NativePermissionSetup {static let shared=NativePermissionSetup();func verified(){};@discardableResult func permissionFailed()->UUID{UUID()}}
+
 import Foundation
 @MainActor enum Analytics {
     static func signal(_ name: String, parameters: [String:String]) {}
@@ -70,9 +72,11 @@ actor OpenAIComputerUseSession {
         await MainActor.run { sessions.append(s) }; return s
     }
     func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
-        precondition(timeout > 0 && timeout <= 12 && tool == "get_app_state")
+        let values = try JSONSerialization.jsonObject(with: arguments) as? [String:String]
+        let helperSetup = values?["app"] == "com.apple.systempreferences"
+        precondition(timeout > 0 && timeout <= (helperSetup ? 125 : 12) && tool == "get_app_state")
         if await Self.delay { try await Task.sleep(for:.seconds(30)) }
-        let marker = await NativePermissionCheckWindow.currentMarker
+        let marker = helperSetup ? "Native settings fixture" : await NativePermissionCheckWindow.currentMarker
         return try JSONSerialization.data(withJSONObject:["content":[["type":"text","text":marker],["type":"image","data":"fixture"]]])
     }
     var livenessDelay: Duration = .zero
@@ -245,6 +249,14 @@ import Foundation
         await cache.refresh(configuration:.init(revision:2),helper:replacement,observedProofID:replacementID)
         check(!cache.snapshot.isReady,"Matching observation still invalidates changed configuration")
         await cache.close()
+        let sessionsBefore=OpenAIComputerUseSession.sessions.count
+        let windowsBefore=NativePermissionCheckWindow.shown
+        try await cache.check(configuration:config,helper:replacement,useHelperSetup:true)
+        try await cache.check(configuration:config,helper:replacement,useHelperSetup:true)
+        check(OpenAIComputerUseSession.sessions.count == sessionsBefore+2,
+              "Every explicit helper repair performs a fresh native request instead of reusing cached grants")
+        check(NativePermissionCheckWindow.shown == windowsBefore,"Helper repair never opens the synthetic test window")
+        await cache.close()
         print("PASS \(count) native permission lifecycle checks")
     }
 }
@@ -255,5 +267,5 @@ with tempfile.TemporaryDirectory(prefix='sentient-permission-lifecycle-') as dir
  binary=p/'test'
  subprocess.run(['xcrun','swiftc','-swift-version','5','-parse-as-library','-target',f'{platform.machine()}-apple-macos15.0',
                  *[str(p/(n+'.swift')) for n in ['Support','Cache','Tests']],str(APP/'Driver/NativePermissionReadiness.swift'),
-                 str(APP/'Diagnostics/NativeComputerUseFailure.swift'),'-o',str(binary)],check=True,timeout=60)
+                 str(APP/'Diagnostics/NativeComputerUseFailure.swift'),str(APP.parent/'Scripts/Fixtures/NativeHelperPermissionNoteStub.swift'),'-o',str(binary)],check=True,timeout=60)
  subprocess.run([str(binary)],check=True,timeout=15)

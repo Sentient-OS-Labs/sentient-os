@@ -122,14 +122,11 @@ struct ComputerUseCheckRow: View {
                 SettingsPillButton(title: doctor.isRunning ? "View check" : "Test & repair…") {
                     if doctor.isRunning { doctor.show() } else { doctor.start() }
                 }
-                .disabled(!doctor.isRunning && ComputerUseGate.shared.requiresPermissionRestart)
+                .disabled(!doctor.isRunning && (NativePermissionCheck.shared.isChecking || ComputerUseGate.shared.requestingAutomation))
             }
         }
     }
     private var note: String {
-        if ComputerUseGate.shared.requiresPermissionRestart {
-            return "Enable the permissions above and restart Sentient before running a check."
-        }
         guard let report = doctor.report, let ended = report.finishedAt,
               report.environment.binaryID == BuildIdentity.identifier else {
             return "Test reading, screenshots, clicks and text entry in a small Sentient window."

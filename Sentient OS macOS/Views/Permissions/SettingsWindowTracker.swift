@@ -21,7 +21,9 @@ import CoreGraphics
 @MainActor
 final class SettingsWindowTracker {
     /// Polling stays on even when AX is available: System Settings can appear before AX observers attach.
-    private let pollInterval: TimeInterval = 1.0 / 30.0
+    private let pollInterval: TimeInterval
+    private let application: NSRunningApplication?
+    private let usesAccessibility: Bool
 
     /// Lookup misses are common while System Settings opens or swaps panes; requiring several
     /// avoids false "window closed" detection.
@@ -29,6 +31,7 @@ final class SettingsWindowTracker {
 
     var onFrameChange: ((CGRect) -> Void)?
     var onTrackingEnded: (() -> Void)?
+    var onWindowMissing: (() -> Void)?
     private(set) var currentFrame: CGRect?
 
     private let bundleIdentifier = "com.apple.systempreferences"
@@ -38,6 +41,13 @@ final class SettingsWindowTracker {
     private var pollTimer: Timer?
     private var hasActiveTrackingTarget = false
     private var missingAppPollCount = 0
+
+    init(application: NSRunningApplication? = nil, pollInterval: TimeInterval = 1.0 / 30.0,
+         usesAccessibility: Bool = true) {
+        self.application = application
+        self.pollInterval = pollInterval
+        self.usesAccessibility = usesAccessibility
+    }
 
     /// Start locating the System Settings window and emitting frame updates.
     func startTracking() {
@@ -79,7 +89,7 @@ final class SettingsWindowTracker {
         missingAppPollCount = 0
 
         updateFrameFromWindowServer(for: app.processIdentifier)
-        guard AXIsProcessTrusted() else { return }
+        guard usesAccessibility, AXIsProcessTrusted() else { return }
 
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
 
@@ -105,7 +115,11 @@ final class SettingsWindowTracker {
 
     /// Window-server geometry — needs no permission; the initial and fallback source.
     private func updateFrameFromWindowServer(for pid: pid_t) {
-        guard let frame = windowServerFrame(for: pid) else { return }
+        guard let frame = windowServerFrame(for: pid) else {
+            currentFrame = nil
+            onWindowMissing?()
+            return
+        }
         guard currentFrame != frame else { return }
         currentFrame = frame
         onFrameChange?(frame)
@@ -201,7 +215,8 @@ final class SettingsWindowTracker {
 
     /// Prefer a UI-capable System Settings process over prohibited activation-policy helpers.
     private func runningSettingsApplication() -> NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        if let application { return application.isTerminated ? nil : application }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
             .max(by: { ($0.activationPolicy == .prohibited ? 0 : 1) < ($1.activationPolicy == .prohibited ? 0 : 1) })
     }
 

@@ -363,8 +363,10 @@ actor NativeComputerUseServer {
                 if let token, !offeredPermissionSetup, remaining > 5, let connection = session {
                     offeredPermissionSetup = true
                     do {
-                        _ = try await NativePermissionReadiness.helperSetup { tool, arguments in
-                            try await connection.call(tool, arguments: arguments, timeout: remaining)
+                        _ = try await NativeHelperPermissionNote.withGuide(appURL: configuration.appURL) {
+                            try await NativePermissionReadiness.helperSetup { tool, arguments in
+                                try await connection.call(tool, arguments: arguments, timeout: remaining)
+                            }
                         }
                         try Task.checkCancellation()
                         guard !closed else { throw CancellationError() }

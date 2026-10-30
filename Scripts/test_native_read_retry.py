@@ -19,7 +19,9 @@ import AppKit
 
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture.native"
-    struct Configuration: Sendable { let script: Script }
+    struct Configuration: Sendable {
+        var appURL: URL {URL(fileURLWithPath:"/fixture-helper.app")}
+ let script: Script }
 }
 
 actor Script {
@@ -552,6 +554,6 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-read-retry-") as direct
         str(APP / "Driver/NativePermissionReadiness.swift"),
         str(APP / "Driver/NativeAppStateRetry.swift"),
         str(APP / "Driver/NativeComputerUseServer.swift"),
-        str(APP / "Cloud/ComputerUseStream.swift"), "-o", str(binary),
+        str(APP / "Cloud/ComputerUseStream.swift"), str(APP.parent / "Scripts/Fixtures/NativeHelperPermissionNoteStub.swift"), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True, timeout=75)

@@ -107,7 +107,7 @@ nonisolated enum OutlookCalendarConnector {
         """
         var inv = MCPSource.readInvocation(slug: slug, prompt: prompt)
         inv.mcpReadToolNames = [profileTool(backend)]
-        inv.claudeModel = .sonnet; inv.effort = .low; inv.timeout = 90
+        inv.claudeModel = .haiku; inv.effort = .medium; inv.timeout = 90
         for attempt in 1...2 {
             var envelope: CodexCLI.Envelope?
             do {

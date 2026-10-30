@@ -195,8 +195,8 @@ nonisolated enum OutlookMailConnector {
             do {
                 try Task.checkCancellation()
                 var inv = MCPSource.readInvocation(slug: slug, prompt: prompt)
-                inv.mcpReadToolNames = [tool]; inv.effort = .low; inv.timeout = 90
-                inv.claudeModel = .sonnet
+                inv.mcpReadToolNames = [tool]; inv.effort = .medium; inv.timeout = 90
+                inv.claudeModel = .haiku
                 let request = inv
                 let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
                     try await FrontierRun.run(request)

@@ -43,10 +43,8 @@ enum WritingStyleMail {
         invocation.outputSchema = #"{"type":"object","additionalProperties":false,"properties":{"tool_failure":{"type":"string","enum":["","auth","other"]}},"required":["tool_failure"]}"#
         invocation.timeout = 600
         invocation.mcpReadToolNames = tools(slug: slug, backend: backend)
-        // On Claude the Gmail connector has no message-level search: the model itself must pick
-        // the newest 15 sent messages out of 50 threads, and the light tier missed one in field
-        // testing. The same reliability pin the other connector reads use.
-        if backend == .claude { invocation.claudeModel = .sonnet }
+        // Writing-style samples use the same Haiku/medium ingestion policy as other reads.
+        if backend == .claude { invocation.claudeModel = .haiku }
         for attempt in 1...2 {
             do {
                 let result = try await FrontierRun.run(invocation)

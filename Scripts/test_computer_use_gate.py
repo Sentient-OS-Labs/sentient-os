@@ -181,7 +181,7 @@ import Foundation
         firstUse.fixturePassiveRefresh();try await settle(firstUse)
         SafeAppRelaunch.shared.canRelaunchPermissionWait=false;SafeAppRelaunch.shared.canRelaunch=false
         firstUse.restartAfterPermissions()
-        check(NativePermissionSetup(defaults:fixtureDefaults,processID:"busy-restart-check").needsRestart,"Busy work cannot accept restart completion")
+        check(SafeAppRelaunch.shared.savedRestarts == 0 && NativePermissionSetup.shared.needsRestart,"Busy work cannot restart the current process")
         SafeAppRelaunch.shared.canRelaunchPermissionWait=true;SafeAppRelaunch.shared.canRelaunch=true
         firstUse.restartAfterPermissions()
         check(NativePermissionSetup.shared.needsRestart && !NativePermissionSetup.shared.canAttemptTask,"Same process cannot consume confirmation")
@@ -202,10 +202,27 @@ import Foundation
         check(laterFired == 1 && OpenAIComputerUseRuntime.shared.permissionRestarts == 1,
               "Later launches reuse completed setup without restarting a healthy helper")
 
-        // Merely opening a guide then quitting must not impersonate the confirmation step.
+        // No setup steps at all must not qualify as a completed external restart.
+        NativePermissionSetup.shared.reset()
+        fixtureDefaults.removeObject(forKey:HealthCaution.nativeComputerUseEverReadyKey)
         NativePermissionSetup.shared.requestRestart()
         NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"unconfirmed-relaunch")
         check(NativePermissionSetup.shared.needsRestart && !NativePermissionSetup.shared.canAttemptTask,"Unconfirmed relaunch does not complete setup")
+        let external=ComputerUseGate.fixture()
+        external.refresh();try await settle(external)
+        external.beganPermissionAction(.helperAccessibility);NativePermissionSetup.shared.didDrop(.accessibility)
+        external.beganPermissionAction(.helperScreenRecording);NativePermissionSetup.shared.didDrop(.screenRecording)
+        NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"macos-quit-and-reopen")
+        Permissions.screen=false
+        let partial=ComputerUseGate.fixture()
+        partial.refresh();try await settle(partial)
+        check(NativePermissionSetup.shared.stepIsApplied(.accessibility) && NativePermissionSetup.shared.stepIsApplied(.screenRecording),
+              "macOS restart retains both completed helper steps")
+        check(!partial.isReadyForTask && !partial.canRestartAfterPermissions,
+              "Remaining Sentient screen permission still blocks admission")
+        partial.beganPermissionAction(.sentientScreen)
+        check(partial.canRestartAfterPermissions,"Only the remaining permission action is needed after macOS restart")
+        Permissions.screen=true
         NativePermissionSetup.shared.confirmForRestart()
         NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"confirmed-relaunch")
         let token=NativePermissionSetup.shared.permissionFailed()
@@ -461,6 +478,14 @@ import Foundation
         let resetPolicy=NativePermissionSetup(defaults:fixtureDefaults,processID:"after-reset")
         check(resetPolicy.needsRestart && !resetPolicy.hasRestarted,
               "Factory reset leaves no old restart receipt that could skip fresh grant setup")
+        proof.snapshot = .init();Permissions.screen=false
+        let repair=ComputerUseGate.fixture();repair.refresh();try await settle(repair)
+        let beforeRepair=proof.calls
+        repair.fixNativePermissions();try await settle(repair)
+        check(proof.calls == beforeRepair+1 && repair.nativeRepairSucceeded,
+              "Explicit native repair works without prior setup receipts or Sentient capture grant")
+        check(!repair.isReadyForTask,"Helper repair never invents Sentient's own Screen Recording grant")
+        Permissions.screen=true
         ComputerUseBackend.current = .cua
         let legacy=ComputerUseGate.fixture()
         check(!legacy.intercept({}),"Legacy CUA admission does not acquire the native restart requirement")

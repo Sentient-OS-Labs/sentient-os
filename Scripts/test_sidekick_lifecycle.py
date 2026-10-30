@@ -52,12 +52,6 @@ extension URL { nonisolated static var sentientSupport: URL { URL(fileURLWithPat
 nonisolated enum SlackConnector { enum Operation: Sendable { case write } }
 nonisolated enum OutlookMailConnector { static let slug = "outlook-mail"; enum Operation: Sendable { case write } }
 nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"; enum Operation: Sendable { case write } }
-@MainActor enum CommandRouter {
-    enum Route { case computer, connector(String, String, SlackConnector.Operation?, OutlookMailConnector.Operation?, OutlookCalendarConnector.Operation?) }
-    static var isActive = false
-    static func route(_ task: String, cardContext: String, standingInstructions: String) async -> Route { .computer }
-    static func recordOutcome(route: String, slug: String?, ms: Int, fellBack: Bool) { }
-}
 nonisolated enum ClaudeAuth { struct LoginRequired: Error {} }
 nonisolated enum CodexCLI {
     enum Effort: Sendable { case medium }
@@ -85,10 +79,10 @@ nonisolated enum CodexCLI {
         return Fixture.response
     }
     static func run(_ invocation: CodexCLI.Invocation, onLine: @escaping @Sendable (String) -> Void) async throws -> CodexCLI.Envelope {
-        .init(result: try await runAgentCommand(invocation.prompt, imagePaths: [], onLine: onLine))
+        fatalError("Sidekick must not start a separate connector-only model run")
     }
 }
-nonisolated enum ConnectorRegistry { static func connectedServicesBlock() -> String { "" } }
+nonisolated enum ConnectorRegistry { static func connectedServicesBlock() -> String { "CONNECTED SERVICES: fixture-mail, fixture-calendar, fixture-notes" } }
 nonisolated enum ConnectorClassifier { static func ensureClassified(slug: String) async { } }
 nonisolated enum CodexTrigger: Sendable { case sidekick; @TaskLocal static var current: Self = .sidekick }
 nonisolated enum VaultGenerator { static var vaultRoot: URL { URL(fileURLWithPath: ProcessInfo.processInfo.environment["FIXTURE_EMPTY_VAULT"]!) } }
@@ -658,12 +652,92 @@ import SQLite3
         try check(!model.isRunning && !model.isOffline, "late network updates cannot revive finished task")
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
+    static func directAgentDispatch(root: URL, defaults: UserDefaults) async throws {
+        let conversation = SidekickConversation(url: root.appendingPathComponent("direct-dispatch.sqlite"), defaults: defaults)
+        let model = CommandRunModel(conversation: conversation)
+        let baseline = Fixture.providerCalls
+        defer { Fixture.provider = nil; Fixture.providerCalls = baseline }
+        var seen: [String] = []
+        Fixture.provider = { prompt in
+            seen.append(prompt)
+            try check(prompt.contains("fixture-mail") && prompt.contains("fixture-calendar"),
+                      "Main agent retains connected-service context")
+            return "Fixture task completed.\nSTATUS: DONE"
+        }
+        for backend in [ModelBackend.chatgpt, .claude, .custom, .sentient] {
+            for request in ["Find my invoice in fixture-mail", "Read fixture-notes and create a calendar event", "Open Calculator"] {
+                let previous = Fixture.providerCalls
+                ModelBackend.$runOverride.withValue(backend) { model.start(request, mode: .computer) }
+                let taskID = model.runID
+                try await eventually { !model.isRunning }
+                try check(Fixture.providerCalls == previous + 1 && seen.last?.contains(request) == true,
+                          "Every request starts exactly one main agent on \(backend)")
+                try check(try conversation.store!.records(taskID: taskID).last?.event.outcome == .success,
+                          "Direct main-agent completion preserves conversation outcome")
+            }
+        }
+        conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+    }
+
+    static func cardReplyDispatch(root: URL, defaults: UserDefaults) async throws {
+        let conversation = SidekickConversation(url: root.appendingPathComponent("card-reply.sqlite"), defaults: defaults)
+        let model = CommandRunModel(conversation: conversation)
+        let baseline = Fixture.providerCalls
+        defer { Fixture.provider = nil; Fixture.providerCalls = baseline }
+        let card = SidekickConversationEvent.CardReference(snapshotID: UUID(), cardID: "reply-card", title: "Reply to the planning email",
+            summary: "A follow-up is ready to send.", service: "Gmail", recipient: "reviewed@example.test", content: "The reviewed draft.",
+            actionJSON: #"{"recipient":"reviewed@example.test","preparedContent":"The reviewed draft."}"#)
+        let reference = SidekickConversationEvent.ReplyReference(card: card)
+        var preflights = 0, completions: [CommandRunModel.Outcome] = []
+        Fixture.provider = { prompt in
+            try check(prompt.contains("Do this for me."), "Card uses the same main-agent request prompt")
+            let context = SidekickInteraction.current!.historyContext
+            try check(context.contains(card.actionJSON) && context.contains("SELECTED PROACTIVE CARD"), "Main agent receives exact reviewed card data")
+            return "Sent the reviewed reply.\nSTATUS: DONE"
+        }
+        model.start("Do this for me.", mode: .computer, source: "proactive_card", reply: reference,
+                    preflight: { preflights += 1 }, onCompletion: { completions.append($0) })
+        let taskID = model.runID
+        try check(model.activeCardID == card.cardID && !model.isExternal, "Card belongs to the regular main-agent task")
+        try await eventually { !model.isRunning }
+        let records = try conversation.store!.records(taskID: taskID)
+        let request = records.first { $0.event.kind == .userMessage }!.event
+        try check(request.text == "Do this for me." && request.reply?.card == card, "Transcript stores readable request and durable reply preview")
+        try check(preflights == 2 && completions == [.success] && Fixture.providerCalls == baseline + 1, "Preflight surrounds setup; one main agent and completion run")
+        let encoded = try JSONEncoder().encode(request)
+        try check(try JSONDecoder().decode(SidekickConversationEvent.self, from: encoded).reply?.card == card, "Card reply survives serialization")
+        do {
+            _ = try conversation.store!.append(.init(taskID: UUID(), kind: .userMessage, text: "Bad reference",
+                reply: .init(messageID: "wrong-card-reference", card: card)))
+            fatalError("Mismatched card reference accepted")
+        } catch SidekickConversationStore.Failure.invalidReply { checks += 1 }
+        do {
+            _ = try conversation.store!.append(.init(taskID: UUID(), kind: .answer, text: "Bad answer", reply: reference))
+            fatalError("Card reference accepted as a question answer")
+        } catch SidekickConversationStore.Failure.invalidReply { checks += 1 }
+
+        let historical = SidekickContext.build(records: records, summaries: [])
+        try check(historical.prompt.contains("reviewed@example.test"), "Later conversation context retains selected card details")
+        let oldReply = try JSONDecoder().decode(SidekickConversationEvent.ReplyReference.self, from: Data(#"{"messageID":"old-message","selectedText":"quote"}"#.utf8))
+        try check(oldReply.card == nil && oldReply.selectedText == "quote", "Existing message replies remain compatible")
+        var failedCompletions: [CommandRunModel.Outcome] = []
+        struct ChangedCard: LocalizedError { var errorDescription: String? { "This card's account changed." } }
+        model.start("Do this for me.", mode: .computer, source: "proactive_card", reply: reference,
+                    preflight: { throw ChangedCard() }, onCompletion: { failedCompletions.append($0) })
+        try await eventually { !model.isRunning }
+        try check(Fixture.providerCalls == baseline + 1 && failedCompletions == [.failed], "Stale card preflight blocks execution and retains the suggestion")
+        model.recovery.cancel()
+        conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+    }
+
     static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sidekick-lifecycle-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let suite = "sidekick-lifecycle-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
+        try await cardReplyDispatch(root: root, defaults: defaults)
+        try await directAgentDispatch(root: root, defaults: defaults)
         try await completionContract(root: root, defaults: defaults)
         try await hostedCleanupCompletion(root: root, defaults: defaults)
         try await networkRecovery(root: root, defaults: defaults)
@@ -696,7 +770,7 @@ import SQLite3
         }
         model.ownExternalTask(work, cardID: "fixture-card")
         await started.wait()
-        try check(model.externalCardID == "fixture-card", "app model owns proactive task identity")
+        try check(model.activeCardID == "fixture-card", "app model owns proactive task identity")
         do { _ = try conversation.begin(request: "Cannot recover a live producer", source: "fixture", taskID: UUID()); fatalError("conversation accepted overlapping producer") }
         catch { checks += 1 }
         try check(try store.records(taskID: first).allSatisfy { $0.event.kind != .taskFinished }, "before-begin orphan repair cannot terminate a legitimate active task")
@@ -714,7 +788,7 @@ import SQLite3
         await allowCleanup.signal(); await work.value
         let drained = await drain.value
         try check(drained, "teardown confirms owned task drained")
-        try check(!model.isRunning && model.externalCardID == nil && finishes == 1, "cleanup releases lock exactly once")
+        try check(!model.isRunning && model.activeCardID == nil && finishes == 1, "cleanup releases lock exactly once")
         try check(conversation.latestActivity == nil, "terminal task clears live notch activity")
         let firstRecords = try store.records(taskID: first)
         try check(firstRecords.last?.event.outcome == .stopped, "latched user Stop beats late success")

@@ -40,7 +40,7 @@ import Foundation
 /// For You UI + PART 3 (the executor) consume.
 struct PreparedAction: Sendable, Identifiable, Codable {
     let title: String
-    let method: Method             // the ONE channel PART 3 fires this through (model-picked)
+    let method: Method             // suggested channel from research; the main Sidekick agent chooses execution tools
     let target: String             // the app/site this acts in, for the card kicker ("LinkedIn",
                                    // "Notion"); "" for gmail/calendar/research (the method names itself)
     var methodTarget: String? = nil // .mcp ONLY: the canonical slug of the connected service the

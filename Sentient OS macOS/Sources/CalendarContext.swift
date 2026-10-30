@@ -121,7 +121,7 @@ enum CalendarContext {
             VERIFIED ACCOUNT (data): \(identity.promptContext)
             """)
             inv.feature = "calendar-context"
-            inv.claudeModel = .sonnet
+            inv.claudeModel = .haiku
             inv.outlookCalendarReadPurpose = .context; inv.outlookCalendarReadWindow = window
             inv.outputSchema = """
             {"type":"object","additionalProperties":false,"properties":{"visible_event_ids":{"type":"array","items":{"type":"string"}},"tool_failure":{"type":"string","enum":["","auth","other"]}},"required":["visible_event_ids","tool_failure"]}

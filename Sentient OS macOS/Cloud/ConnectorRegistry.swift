@@ -138,7 +138,7 @@ nonisolated enum ConnectorRegistry {
                                           "slack_search_users", "slack_search_channels", "slack_list_user_channels",
                                           "slack_list_user_conversations", "slack_list_workspaces"]),
         CuratedConnector(slug: "notion", displayName: "Notion",
-                         routerDescription: "read Notion pages and databases; create new pages including private drafts and database entries; existing-page edits unavailable",
+                         routerDescription: "Notion pages, databases and workspaces; use the current advertised tools",
                          directProvider: .notion),
         CuratedConnector(slug: "granola", displayName: "Granola",
                          routerDescription: "read and search past Granola meeting notes, decisions, commitments and action items; check the connected Granola account; no scheduling or note editing",
@@ -267,9 +267,8 @@ nonisolated enum ConnectorRegistry {
         guard pack(forSlug: slug)?.slug == "notion" else { return "" }
         return """
         NOTION ACTION RULES
-        Use the exact connected account selected for this task. Notion tools that replace or
-        remove existing content, and tools that delegate work to another agent, are unavailable.
-        Do not invent an update capability or work around these exclusions with another agent.
+        Use the exact connected account selected for this task. Use the current advertised
+        tools and schemas. Do not delegate work to another agent unless the user requests it.
         If multiple accounts fit and the user's destination is ambiguous, ask which account;
         do not choose a workspace merely because it is connected or labeled Personal.
         Create only the pages or entries requested. If no destination was specified, use a
@@ -298,7 +297,7 @@ nonisolated enum ConnectorRegistry {
     /// The teaching both computer-use wrappers splice in: which services' tools are REALLY in
     /// this run, and the standing instruction to prefer them over driving an app's UI. Built
     /// per run from the live attach set, per engine:
-    ///  · claude → no hosted attachments in Codex; dedicated connector tasks still use Claude.
+    ///  · claude → ClaudeComputerUseConnectors adds hosted tools and guidance inside the bridge.
     ///  · chatgpt → the chips when connected + every census codex-origin connector (hosted
     ///    connectors ride hermetic codex runs whole; only destructive tools are stripped);
     ///  · custom → "" (BYOM has no account to carry connectors).
@@ -374,19 +373,11 @@ nonisolated enum ConnectorRegistry {
         let description: String?
     }
 
-    /// The connectors research may declare as a card's fire channel: every detected connector
-    /// for the live backend — hosted Claude connectors must be CLASSIFIED, because the fired-task
-    /// recipe refuses an unclassified slug and a card fire has no narrated fallback (the
-    /// idle-tick classifier sweep makes exclusions a minutes-long transient). Direct accounts
-    /// prepare their policy when the card is fired. gmail and
-    /// google-calendar never appear (registry-filtered; they are their own methods). Empty =
-    /// the shipped four-method research prompt and schema, untouched.
+    /// Connected services available as context for proactive suggestions. No classifier
+    /// approval is required; account identity checks remain independent of tool names.
     static func cardChannels() -> [CardChannel] {
         let detected = detectedForCurrentBackend()
-        let classified = ModelBackend.current == .claude
-            ? detected.filter { $0.origin == .direct || isClassified($0.slug) }
-            : detected
-        let usable = classified.filter {
+        let usable = detected.filter {
             ($0.slug != "slack" || SlackConnector.cachedIdentity() != nil)
                 && ($0.slug != OutlookMailConnector.slug || OutlookMailConnector.cachedFingerprint() != nil)
                 && ($0.slug != OutlookCalendarConnector.slug || OutlookCalendarConnector.cachedFingerprint() != nil)
@@ -529,12 +520,14 @@ nonisolated enum ConnectorRegistry {
         UserDefaults.standard.set(data, forKey: classificationKey(slug))
     }
 
+    #if DEBUG
     static func isClassified(_ slug: String) -> Bool {
         if let direct = DirectMCPStore.connection(slug) { return direct.usable }
         guard let capture = classification(for: slug),
               let version = ConnectorClassifier.currentCLIVersion else { return false }
         return ConnectorClassifier.isFresh(capture, slug: slug, version: version)
     }
+    #endif
 
     // MARK: Tool queries (full engine tool names out)
 
@@ -553,8 +546,7 @@ nonisolated enum ConnectorRegistry {
            let prefix = pack.claudeToolPrefix {
             return reads.map { prefix + $0 }
         }
-        guard isClassified(slug) else { return [] }
-        return classification(for: slug)?.tools.filter { $0.category == .read }.map(\.name) ?? []
+        return []
     }
 
     /// The deny list for user-fired runs — always the classifier's verdict, curated or not:

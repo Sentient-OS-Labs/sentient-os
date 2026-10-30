@@ -56,7 +56,6 @@ nonisolated enum ConnectorClassificationDiagnostics {
         // A tool ID must come from a static reviewed list, never a provider-defined name.
         init(tool: String, slug: String, expected: ConnectorRegistry.ToolCategory, observed: ConnectorRegistry.ToolCategory) {
             let known = Set(ConnectorRegistry.pack(forSlug: slug)?.readTools ?? [])
-                .union(ConnectorClassifier.reviewedDestructiveTools(slug: slug))
                 .union(slug == "slack" ? Set(SlackConnector.categories(backend: .claude).keys) : [])
                 .union(Microsoft365Connector.contains(slug) ? Set(Microsoft365Connector.categories.keys) : [])
             self.tool = known.contains(tool) ? tool : "other"

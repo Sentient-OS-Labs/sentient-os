@@ -108,7 +108,6 @@ enum FrontierRun {
                 let expectedOutlookIdentity = outlookIdentity
                 let expectedCalendarIdentity = calendarIdentity
                 return try await ModelBackend.$runOverride.withValue(backend) {
-                    if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
                     let slugs = prepared.mcpActionServer.map { [$0] } ?? prepared.mcpReadConnectors
                     Diagnostics.step(.setup)
                     let direct = try await DirectMCPRuntime.prepare(slugs: slugs,

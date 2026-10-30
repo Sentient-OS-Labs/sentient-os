@@ -415,8 +415,7 @@ enum MCPSource {
             var attemptedEnvelope: CodexCLI.Envelope?
             do {
                 var inv = readInvocation(slug: slug, prompt: attemptPrompt)
-                // Drive's mixed drafts and third-party material need stronger attribution.
-                inv.claudeModel = claudeModel ?? (["google-drive", "slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) ? .sonnet : nil)
+                inv.claudeModel = claudeModel ?? .haiku
                 inv.outputSchema = readSchema
                 let started = Date()
                 let env = try await Diagnostics.withOperation("mcp_read_attempt", propagatesFailure: false) {

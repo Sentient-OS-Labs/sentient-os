@@ -6,13 +6,12 @@
 //  (clean JSON: loggedIn / subscriptionType / email — no JWT spelunking, unlike CodexAuth).
 //  Claude Code has NO free tier: a login exists only on a paid plan (Pro / Max / Team /
 //  Enterprise), so the Claude engine's gate is binary — logged in or not — and there is no
-//  knowledge-base-only preview branch. The one policy decision here: a Pro plan's Opus window
-//  is tiny, so ClaudeCLI downshifts opus → sonnet when `isPro` (the terra-downshift twin).
+//  knowledge-base-only preview branch. Subscription plans share the same model policy.
 //
 //  Key methods:
 //   - refresh()      → read local status without overriding a runtime rejection
 //   - verifyLogin()  → confirm a repaired login with a tool-free request
-//   - cachedLoggedIn / cachedPlan / isPro → cheap synchronous reads for the model choke point
+//   - cachedLoggedIn / cachedPlan → cheap synchronous reads for login gating and plan display
 //   - destroy()      → clear the cache (FactoryReset / Uninstall)
 //
 //  Doc: Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md (the reference engine;
@@ -176,12 +175,6 @@ nonisolated enum ClaudeAuth {
         let v = UserDefaults.standard.string(forKey: planKey)
         return (v?.isEmpty == false) ? v : nil
     }
-
-    /// The opus → sonnet downshift trigger: Pro's Opus allowance is a fraction of Max's, and a
-    /// 3 AM vault build on Opus would burn the whole window. Unknown plans are NOT downshifted
-    /// (fail open, the CodexAuth policy) — worst case is a usage-limit error every caller
-    /// already survives with a resume handle.
-    static var isPro: Bool { cachedPlan == "pro" }
 
     /// For UI ("Max", "Pro"…). Unknown strings just get capitalized.
     static var planDisplayName: String? {

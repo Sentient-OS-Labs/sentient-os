@@ -371,7 +371,7 @@ end-to-end layer. This is not the direct provider lab above. Original acceptance
 `PromptBar`; the UI follow-up now mounts `SidekickComposer` and calls its actual `sendDraft`
 action. Both resolve to `AppState.commandCoordinator.submit(..., source: .promptBar)`,
 exactly as Home does.
-The production permission gate, display capture, router, native runtime, selected provider,
+The production permission gate, display capture, main-agent dispatch, native runtime, selected provider,
 Sidekick tools, run lifecycle and conversation store execute normally. Input submission is
 programmatic; the testing agent does not use its own computer-use service.
 

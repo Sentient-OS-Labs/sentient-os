@@ -83,6 +83,7 @@ final class ComputerUseGate {
     var nativeRestartRequired: Bool { runtimeFailure?.restartRequired == true }
     private(set) var restartingNative = false
     private(set) var checkingCapabilities = false
+    private(set) var nativeRepairSucceeded = false
     /// Visiting grant actions enables restart without claiming that macOS granted access.
     enum PermissionAction { case helperAccessibility, helperScreenRecording, automation, sentientScreen }
     private var permissionActions: Set<PermissionAction> = []
@@ -108,8 +109,8 @@ final class ComputerUseGate {
     }
 
     var canRestartAfterPermissions: Bool {
-        (helperAccessibility || permissionActions.contains(.helperAccessibility))
-            && (helperScreen || permissionActions.contains(.helperScreenRecording))
+        (helperAccessibility || NativePermissionSetup.shared.hasVisited(.accessibility))
+            && (helperScreen || NativePermissionSetup.shared.hasVisited(.screenRecording))
             && (automation == .granted || permissionActions.contains(.automation))
             && (sentientScreen || permissionActions.contains(.sentientScreen))
             && nativeInstallationReady && !requestingAutomation && !checkingCapabilities
@@ -119,10 +120,14 @@ final class ComputerUseGate {
     func beganPermissionAction(_ action: PermissionAction) {
         guard teardownDepth == 0, backend == .openAI else { return }
         // Preserve already verified helper steps before changing a grant retires old proof.
-        if helperAccessibility { permissionActions.insert(.helperAccessibility) }
-        if helperScreen { permissionActions.insert(.helperScreenRecording) }
+        if helperPermissionState.isReady { NativePermissionSetup.shared.verified() }
         changingNativePermissions()
         permissionActions.insert(action)
+        switch action {
+        case .helperAccessibility: NativePermissionSetup.shared.beganGrant(.accessibility)
+        case .helperScreenRecording: NativePermissionSetup.shared.beganGrant(.screenRecording)
+        case .automation, .sentientScreen: break
+        }
     }
 
     var hasWaitingAction: Bool { pending != nil }
@@ -203,6 +208,7 @@ final class ComputerUseGate {
     func beginTeardown() async {
         teardownDepth += 1
         permissionActions.removeAll()
+        nativeRepairSucceeded = false
         postRestartCheckAttempted = false
         helperRestartedForPermissions = false
         nativeOperationID = UUID()
@@ -243,11 +249,17 @@ final class ComputerUseGate {
         requestNativeAccess(ask: false, verifyCapabilities: true)
     }
 
-    private func requestNativeAccess(ask: Bool, verifyCapabilities: Bool) {
+    /// Settings repair is explicit and cannot depend on an unqueryable helper-grant cache.
+    func fixNativePermissions() {
+        requestNativeAccess(ask: true, verifyCapabilities: true, explicitRepair: true)
+    }
+
+    private func requestNativeAccess(ask: Bool, verifyCapabilities: Bool, explicitRepair: Bool = false) {
         guard teardownDepth == 0, backend == .openAI, setup.ready, !requestingAutomation, pendingCheck == nil else { return }
         let id = beginNativeOperation()
         permissionRequestID = id
         requestingAutomation = true
+        if explicitRepair { nativeRepairSucceeded = false }
         if verifyCapabilities { capabilityFailure = nil }
         permissionRequest = Task {
             defer { finishPermissionRequest(id) }
@@ -263,7 +275,9 @@ final class ComputerUseGate {
                 try await checkNativeAccess(ask: ask, configuration: configuration,
                                             stoppingConflictingHelpers: verifyCapabilities,
                                             verifyCapabilities: verifyCapabilities,
+                                            explicitRepair: explicitRepair,
                                             operationID: id, entryPoint: .explicitCheck)
+                if explicitRepair { nativeRepairSucceeded = helperPermissionState.isReady && automation == .granted }
                 refresh()
             } catch {
                 recordNativeFailure(error, operationID: id)
@@ -322,6 +336,7 @@ final class ComputerUseGate {
 
     private func checkNativeAccess(ask: Bool, configuration supplied: OpenAIComputerUse.Configuration? = nil,
                                    stoppingConflictingHelpers: Bool = false, verifyCapabilities: Bool = false,
+                                   explicitRepair: Bool = false,
                                    operationID id: UUID, entryPoint: CheckEntryPoint) async throws {
         var stage = CheckStage.runtime
         var proofID = NativePermissionCheck.shared.proofID
@@ -329,7 +344,7 @@ final class ComputerUseGate {
         var outcome = CheckOutcome.success
         var reason = CheckReason.automationGranted
         var nativeFailure: NativeComputerUseFailure?
-        let capabilityRequested = verifyCapabilities && !NativePermissionSetup.shared.needsRestart && sentientScreen
+        let capabilityRequested = verifyCapabilities && (explicitRepair || (!NativePermissionSetup.shared.needsRestart && sentientScreen))
         if capabilityRequested, NativePermissionSetup.shared.hasRestarted { postRestartCheckAttempted = true }
         Analytics.signal("PermissionGate.nativeCheckStarted", parameters: [
             "entry_point": entryPoint.rawValue, "stage": stage.rawValue,

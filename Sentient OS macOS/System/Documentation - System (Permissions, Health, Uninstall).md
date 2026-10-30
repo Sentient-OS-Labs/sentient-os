@@ -138,3 +138,9 @@ inert launch callback: parent lifetime, uncommitted/cancelled requests, expiry a
 `test_safe_relaunch.py` covers final termination approval, retained-client drainage, update rechecks,
 active setup windows and private draft/reply persistence. `test_personal_setup_flow.py` compiles the
 coordinator with in-memory preferences and inert services. None launches the real app or changes grants.
+
+Native helper setup progress survives macOS-initiated restarts per permission step. Settings uses a
+Fix permissions action instead of inferring Accessibility/Screen Recording labels from a volatile
+proof cache. Explicit diagnostics remain available with unknown helper status and check the real
+prerequisites themselves. A successful diagnostic records completed setup; confirmed native denial
+invalidates it. The native setup companion explains that the browser extension can be skipped.

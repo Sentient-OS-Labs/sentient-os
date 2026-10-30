@@ -40,26 +40,25 @@ actor ClaudeCLI {
 
     // MARK: Models
 
-    /// Claude Code model IDs: Opus and Sonnet are pinned to 5.5; Haiku keeps its alias.
+    /// Pin every Claude tier to 5.5 so an alias update cannot change the app's model policy.
     enum Model: String, Sendable {
-        case opus = "claude-opus-5-5" // the heavy legs: vault build/update, proactive research
+        case opus = "claude-opus-5-5" // vault build/update, proactive planning and research
         case sonnet = "claude-sonnet-5-5" // everything else (the gpt-6-sol seat)
-        case haiku     // the light tier (the gpt-6-luna seat)
+        case haiku = "claude-haiku-5-5" // ingestion and the light tier
     }
 
     /// The ONE model-resolution choke point for the Claude engine — the backendTuned twin.
     /// Tier map: astra/sol/terra → sonnet, luna → haiku; a caller that earns Opus says so explicitly
-    /// (Invocation.claudeModel — the vault and research legs). Pro plans downshift opus → sonnet
-    /// (Pro's Opus window is tiny; the terra-downshift twin). Effort rides through 1:1 — codex's
+    /// (Invocation.claudeModel — vault work and proactive planning/research). All Claude
+    /// subscription plans use the same model policy. Effort rides through 1:1 — codex's
     /// low/medium/high/xhigh are exactly Claude Code's `--effort` values.
     static func tuned(for inv: CodexCLI.Invocation) -> (modelID: String, effortArg: String) {
-        var model: Model = inv.claudeModel ?? {
+        let model: Model = inv.claudeModel ?? {
             switch inv.model {
             case .gpt61terra, .gpt61sol, .gpt6astra, .gpt6sol, .gpt56terra: return .sonnet
             case .gpt6luna: return .haiku
             }
         }()
-        if model == .opus, ClaudeAuth.isPro { model = .sonnet }
         return (model.rawValue, inv.effort.rawValue)
     }
 
@@ -538,15 +537,11 @@ actor ClaudeCLI {
                 throw CodexCLI.CLIError.notAvailable(
                     .notWorking("connector \(slug) has no known claude.ai server"))
             }
-            guard ConnectorRegistry.isClassified(slug) else {
-                throw CodexCLI.CLIError.notAvailable(
-                    .notWorking("connector \(slug) is not classified yet"))
-            }
             recipeWallURLs = [url]
             recipeAllows = slug == "slack"
                 ? SlackConnector.actionTools(backend: .claude, operation: inv.slackOperation ?? .write).map { prefix + $0 }
                 : [prefix + "*"]
-            recipeDenies = ConnectorRegistry.destructiveToolNames(slug: slug)
+            recipeDenies = []
             if slug == OutlookMailConnector.slug {
                 guard let operation = inv.outlookOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
                 recipeAllows = OutlookMailConnector.actionTools(.claude, operation: operation).map { prefix + $0 }
