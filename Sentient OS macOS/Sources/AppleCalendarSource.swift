@@ -227,13 +227,16 @@ nonisolated enum AppleCalendarSource {
     static func project(title: String, notes: String, location: String, schedule: String)
         throws -> (content: String, risk: String?, revision: String) {
         let full = [title, notes, location]
-        let fields = ["title": bounded(title, bytes: 512), "notes": bounded(notes, bytes: 3_000),
+        // Join blocks are removed before both the byte budget and the risk preflight: the removed
+        // text never reaches the model. The revision still hashes the complete native fields.
+        let readableNotes = CalendarInviteText.readable(notes)
+        let fields = ["title": bounded(title, bytes: 512), "notes": bounded(readableNotes, bytes: 3_000),
                       "location": bounded(location, bytes: 512), "schedule": schedule]
         var data = fields
-        data["truncated"] = fields["title"] != title || fields["notes"] != notes || fields["location"] != location ? "true" : "false"
+        data["truncated"] = fields["title"] != title || fields["notes"] != readableNotes || fields["location"] != location ? "true" : "false"
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return (String(decoding: try encoder.encode(data), as: UTF8.self),
-                Triage.calendarInputRisk(full), digest(full))
+                Triage.calendarInputRisk([title, readableNotes, location]), digest(full))
     }
 
     /// Recurrences share an item ID. Their ORIGINAL occurrence date distinguishes instances,
