@@ -332,6 +332,24 @@ import WebKit
         captures.append(try await capture(host, name: "discovery-02-waiting-lesson", directory: directory, includingChild: waitingLesson.window))
         try await dismissLesson()
 
+        phase = "imported_knowledge_lesson"
+        let importedNote = VaultGenerator.vaultRoot.appendingPathComponent("DoubleTapImportedFixture.md")
+        try "# Imported fixture\nUseful personal project context.".write(to: importedNote, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: importedNote) }
+        try await click("navigation.doubleTap")
+        guard let importedLesson = lesson() else { throw Failure.accessibility }
+        let importedElements = elements(importedLesson)
+        checks["imported_knowledge_shows_ready_instructions"] = importedElements.contains {
+            $0.label.contains("Click a reply box, then tap")
+        } && !importedElements.contains { $0.label == "Ready after your first analysis." }
+        checks["imported_knowledge_preserves_analysis_milestone"] = ProcessingPlan.initialCompletedAt() == nil
+        try await dismissLesson()
+        try FileManager.default.removeItem(at: importedNote)
+        try await click("navigation.doubleTap")
+        guard let removedLesson = lesson() else { throw Failure.accessibility }
+        checks["removed_import_restores_setup_lesson"] = elements(removedLesson).contains { $0.label == "Ready after your first analysis." }
+        try await dismissLesson()
+
         phase = "compact_chat"
         presentation.surface = .conversation
         await presentation.load(.latest, conversation: run.conversation)

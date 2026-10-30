@@ -42,6 +42,9 @@ struct ShortcutActivity: Equatable {
 }
 // TAP_PAIR
 enum CodexAuth { static var knowledgeBaseOnly = false }
+enum VaultGenerator { static var vaultRoot = URL(fileURLWithPath: CommandLine.arguments[1]) }
+enum WritingStyle { static let fileName = "writingstyle.md" }
+enum DoubleTapInference { static let vaultByteCeiling = 600_000 }
 final class ComputerUseGate {
     static let shared = ComputerUseGate()
     var refreshes = 0
@@ -51,8 +54,12 @@ final class DoubleTap {
     static let shared = DoubleTap()
     var isDrafting = false
     var captures = 0
+    var setupNotices = 0
     enum Result { case pasted, notAMessage, stopped, failed(String) }
-    func start(completion: (Result) -> Void) { captures += 1; completion(.pasted) }
+    func start(completion: (Result) -> Void) {
+        if Self.isReady { captures += 1; completion(.pasted) }
+        else { setupNotices += 1; completion(.stopped) }
+    }
     // DOUBLE_TAP_PREFERENCES
 }
 enum NotchPhase: Equatable { case hidden, opening, typing, listening, transcribing, running, message, notice(String) }
@@ -138,6 +145,7 @@ final class ProcessingCoordinator {
         ShortcutActivity.current = .init(); ShortcutActivity.lastInputTime = -.infinity
         ShortcutPreferences.isRecording = false
         ComputerUseGate.shared.refreshes = 0; DoubleTap.shared.captures = 0
+        DoubleTap.shared.setupNotices = 0
         DoubleTap.shared.isDrafting = false; CodexAuth.knowledgeBaseOnly = false
     }
 
@@ -154,8 +162,27 @@ final class ProcessingCoordinator {
         let earlyPair = CommandCoordinator()
         earlyPair.tap(200); earlyPair.tap(200.1)
         try await waitOutGesture()
-        check(earlyPair.phase == .hidden && ComputerUseGate.shared.refreshes == 0 && DoubleTap.shared.captures == 0,
-              "early double tap is consumed without Sidekick fallback, permissions or capture")
+        check(earlyPair.phase == .hidden && ComputerUseGate.shared.refreshes == 0 && DoubleTap.shared.captures == 0
+              && DoubleTap.shared.setupNotices == 1,
+              "early double tap reaches setup feedback without Sidekick fallback, permissions or capture")
+
+        let imported = VaultGenerator.vaultRoot.appendingPathComponent("README.md")
+        try "# Imported knowledge\nI am building a macOS app.".write(to: imported, atomically: true, encoding: .utf8)
+        configure()
+        check(!DoubleTap.initialAnalysisComplete && DoubleTap.isReady, "imported knowledge enables drafting without inventing analysis history")
+        let importedPair = CommandCoordinator()
+        importedPair.tap(250); importedPair.tap(250.1)
+        try await waitOutGesture()
+        check(DoubleTap.shared.captures == 1 && DoubleTap.shared.setupNotices == 0 && importedPair.phase == .hidden,
+              "AirDropped knowledge dispatches Double Tap and cancels Sidekick typing")
+        configure(onboarding: false)
+        let importedBeforeHome = CommandCoordinator()
+        importedBeforeHome.tap(260); importedBeforeHome.tap(260.1)
+        try await waitOutGesture()
+        check(DoubleTap.shared.captures == 0, "imported knowledge preserves the Home admission gate")
+        try FileManager.default.removeItem(at: imported)
+        configure()
+        check(!DoubleTap.isReady, "removing imported knowledge is detected without relaunch")
 
         configure(initial: true)
         check(DoubleTap.initialAnalysisComplete, "actual DoubleTap gate recognizes shipped legacy milestone key")
@@ -193,8 +220,9 @@ final class ProcessingCoordinator {
               "early single tap never replaces or stops an already-owned Sidekick task")
         running.tap(800); running.tap(800.1)
         try await waitOutGesture()
-        check(running.run.isRunning && running.phase == .running && DoubleTap.shared.captures == 0,
-              "early double tap cannot disturb active task ownership")
+        check(running.run.isRunning && running.phase == .running && DoubleTap.shared.captures == 0
+              && DoubleTap.shared.setupNotices == 1,
+              "early double tap shows setup feedback without disturbing active task ownership")
         configure(initial: true)
         running.tap(900); running.tap(900.1)
         check(running.run.isRunning && running.phase == .running && DoubleTap.shared.captures == 1,
@@ -294,10 +322,47 @@ final class ProcessingCoordinator {
         check(ProcessingPlan.initialCompletedAt(reloaded) == legacy, "only explicit initial completion persists unlock milestone")
     }
 
+    static func knowledge() throws {
+        configure()
+        let fm = FileManager.default, root = VaultGenerator.vaultRoot
+        let note = root.appendingPathComponent("README.md")
+        check(!DoubleTap.isReady, "empty folder is not knowledge")
+        for empty in ["", " \n\t"] {
+            try empty.write(to: note, atomically: true, encoding: .utf8)
+            check(!DoubleTap.isReady, "empty or whitespace-only Markdown does not enable drafting")
+        }
+        try Data([0xff, 0xfe, 0xff]).write(to: note)
+        check(!DoubleTap.isReady, "unreadable UTF8 does not enable drafting")
+        try String(repeating: "x", count: DoubleTapInference.vaultByteCeiling).write(to: note, atomically: true, encoding: .utf8)
+        check(!DoubleTap.isReady, "a note too large to pack does not enable drafting")
+        try fm.removeItem(at: note)
+        let style = root.appendingPathComponent(WritingStyle.fileName)
+        try "hello :)".write(to: style, atomically: true, encoding: .utf8)
+        check(!DoubleTap.isReady, "writing examples alone are not a populated knowledge base")
+        try fm.removeItem(at: style)
+        let hidden = root.appendingPathComponent(".hidden.md")
+        try "Hidden content".write(to: hidden, atomically: true, encoding: .utf8)
+        check(!DoubleTap.isReady, "hidden notes do not enable drafting")
+        try fm.createSymbolicLink(at: note, withDestinationURL: hidden)
+        check(!DoubleTap.isReady, "symlinked notes do not enable drafting")
+        try fm.removeItem(at: note); try fm.removeItem(at: hidden)
+        let nested = root.appendingPathComponent("Projects")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "Actual imported project context".write(to: nested.appendingPathComponent("Work.MD"), atomically: true, encoding: .utf8)
+        check(DoubleTap.isReady && !DoubleTap.initialAnalysisComplete, "nested uppercase Markdown is detected without an analysis flag")
+        try fm.removeItem(at: nested)
+        try fm.removeItem(at: root)
+        check(!DoubleTap.isReady, "missing vault does not enable drafting")
+        configure(initial: true)
+        check(DoubleTap.isReady, "existing analysis milestone remains supported")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
     static func main() async throws {
         let original = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         defer { UserDefaults.standard.setVolatileDomain(original, forName: UserDefaults.argumentDomain) }
         try await shortcuts()
+        try knowledge()
         try plans()
         print("PASS \(checks) Sidekick/analysis availability assertions")
     }
@@ -320,6 +385,7 @@ def main() -> None:
     preferences = "\n".join([
         declaration(double_tap, "static let window:"), declaration(double_tap, "static let enabledKey"),
         member(double_tap, "    static var isEnabled:"), member(double_tap, "    static var initialAnalysisComplete:"),
+        member(double_tap, "    static var isReady:"),
     ])
     dates = "\n".join([
         declaration(scheduler, "static let minutesKey"), declaration(scheduler, "static let defaultMinutes"),
@@ -340,9 +406,12 @@ def main() -> None:
         executable = root / "availability-tests"
         subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-default-isolation", "MainActor",
                         "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library",
-                        str(APP / "Ingestion/ProcessingPlan.swift"), str(fixture), "-o", str(executable)],
+                        str(APP / "Ingestion/ProcessingPlan.swift"), str(APP / "Double Tap/DoubleTapKnowledge.swift"),
+                        str(fixture), "-o", str(executable)],
                        check=True, timeout=60)
-        subprocess.run([str(executable)], check=True, timeout=20)
+        vault = root / "knowledge"
+        vault.mkdir()
+        subprocess.run([str(executable), str(vault)], check=True, timeout=20)
 
 
 if __name__ == "__main__":

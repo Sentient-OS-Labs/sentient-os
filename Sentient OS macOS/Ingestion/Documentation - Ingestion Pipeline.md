@@ -48,9 +48,13 @@ with a reselect instruction rather than masquerading as an empty conversation; l
 errors similarly name their source without placing identifiers in diagnostics. Empty but successfully
 read sources remain valid reads. Initial completion additionally requires a nonempty regular
 `README.md` in the knowledge folder: an empty first pass cannot unlock personal features just because
-there were no provider errors. Partial reads, malformed model output, deferred Mail and diagnostic
-failures leave the first-analysis milestone incomplete and explain retry/reselection in the saved
-notice. Once earned, an existing first-analysis milestone survives a later source failure.
+there were no provider errors. Once usable knowledge is published, partial reads, skipped items,
+deferred Mail, diagnostic warnings and later proactive failures do **not** withhold the first-analysis
+milestone. They keep their own source notices or failure details; successful knowledge is usable on
+that first pass, without a second no-work retry. Cancellation, disk-full and failed knowledge
+publication do not certify an initial run. Once earned, the milestone survives later source failures.
+Listing-count collapse is a diagnostic heuristic only: a legitimately emptied folder remains a
+successful empty read and cannot by itself mark analysis incomplete.
 
 ## The data model (`CycleStore`)
 

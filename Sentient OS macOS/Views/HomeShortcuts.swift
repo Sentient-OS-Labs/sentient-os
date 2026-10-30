@@ -21,10 +21,11 @@ struct HomeDoubleTapButton: View {
     @State private var homeIsKey = false
     @State private var noticeVisible = false
     @State private var highlight = 0.0
+    @State private var hasKnowledge = false
 
     private var key: ShortcutKey { ShortcutKey(rawValue: shortcutRaw) ?? .rightCommand }
     private var reduced: Bool { (motionOverride ?? systemReduced) || lowPower }
-    private var ready: Bool { completedAt > 0 && enabled }
+    private var ready: Bool { (completedAt > 0 || hasKnowledge) && enabled }
     private var offerNotice: Bool {
         active && homeIsKey && ready && !presented
             && SidekickDiscovery.readyHintPending(completedAt: completedAt, seenAt: seenAt)
@@ -77,6 +78,18 @@ struct HomeDoubleTapButton: View {
         }
         .background(SidekickWindowPresence(requiresKeyWindow: true) { homeIsKey = $0 }
             .allowsHitTesting(false).accessibilityHidden(true))
+        .task(id: active) {
+            guard active else { return }
+            // Finder/AirDrop changes do not pass through VaultActivity. Refresh while Home is
+            // visible, and on opening the lesson, so imported notes work without a relaunch.
+            while !Task.isCancelled {
+                hasKnowledge = DoubleTapKnowledge.hasContent(in: VaultGenerator.vaultRoot)
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+        .onChange(of: presented) { _, open in
+            if open { hasKnowledge = DoubleTapKnowledge.hasContent(in: VaultGenerator.vaultRoot) }
+        }
         .task(id: NoticeIdentity(eligible: offerNotice, completion: completedAt)) {
             #if DEBUG
             if ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-discovery" {
@@ -134,7 +147,7 @@ struct HomeDoubleTapButton: View {
                     enabled = true
                     if completedAt > 0 { seenAt = completedAt }
                 }.buttonStyle(SidekickPressStyle())
-            } else if completedAt <= 0 {
+            } else if !ready {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("Ready after your first analysis.")
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(SidekickStyle.ink)
