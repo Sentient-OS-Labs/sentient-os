@@ -77,6 +77,19 @@ test('real migration: OAuth, exact session scope, credential containment, bounde
     assert.equal((await f.db.query("select count(*)::int n from public.hosted_connector_operations where status='completed'")).rows[0].n,2);
   }finally{await f.close();}
 });
+test('two accounts for one user retain exact execution selection and independent disconnection',async()=>{
+  const f=await fixture();try{
+    const first=await f.connect(),second=await f.connect(),run=await f.run();
+    const one=await f.prepare(first,run),two=await f.prepare(second,run);
+    const read=cap=>f.request('/v1/connectors/execute',{tool:'gmail_read',arguments:{message_id:'abcdef0011223344'},operation_id:crypto.randomUUID()},cap.body.capability_token);
+    assert.equal((await read(one)).status,200);assert.equal((await read(two)).status,200);
+    const executions=f.requests.filter(r=>r.url.endsWith('/execute'));
+    assert.equal(executions[0].body.account,'ca_1');assert.equal(executions[1].body.account,'ca_2');
+    await f.request('/v1/connectors/'+first.connection_id+'/disconnect',{});
+    assert.equal((await read(one)).status,409);assert.equal((await read(two)).status,200);
+    assert.equal(f.requests.filter(r=>r.url.endsWith('/execute')).at(-1).body.account,'ca_2');
+  }finally{await f.close();}
+});
 test('ownership, stale generations, background action denial and account-preserving reconnect cancellation',async()=>{
   const f=await fixture();try{
     const c=await f.connect(),r=await f.run('knowledge_update'),p=await f.prepare(c,r);

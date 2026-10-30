@@ -130,7 +130,11 @@ actor HostedConnectorToolServer {
         await transport?.stop(); transport = nil
         let client = client, capabilities = capabilities
         await Task.detached {
-            for capability in capabilities { await client.close(capability) }
+            // Independent closures share the transport's timeout. An unavailable gateway
+            // must not multiply shutdown time by the number of attached accounts.
+            await withTaskGroup(of: Void.self) { group in
+                for capability in capabilities { group.addTask { await client.close(capability) } }
+            }
         }.value
     }
     func response(_ bytes: Data) async throws -> Data {

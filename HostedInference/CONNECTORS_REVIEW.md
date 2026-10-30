@@ -144,7 +144,7 @@ add-ons require an operator decision and must be reflected in the funded policy.
 ## Local verification
 
 The [verification record](verification/2026-10-29.json) separates fixture checks, live API
-checks and remaining manual acceptance. Debug/Release builds, 67 server tests, 14 focused
+checks and remaining manual acceptance. Debug/Release builds, 68 server tests, 14 focused
 regression suites and ten actual-app/CLI phases passed. The latter includes 96 pages across
 five bounded attempts, real CLI detail selection and structured summarization, and
 [native UI rendering](verification/connection-sheet.png).
