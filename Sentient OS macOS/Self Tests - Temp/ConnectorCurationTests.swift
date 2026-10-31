@@ -167,7 +167,7 @@ enum ConnectorCurationTests {
             let origin = ConnectorRegistry.readOrigin(slug: slug, backend: .chatgpt)
             let oldNote = NoteDraft(kind: .mcp, sourceID: "fixture-old", folder: "Google Drive", itemDate: oldTime,
                                     text: "Existing pending summary", title: "Fixture", reminderFlagged: false)
-            check(await store.commitMCPRead(bucketKey: bucket, notes: [oldNote],
+            check(try await store.commitMCPRead(bucketKey: bucket, notes: [oldNote],
                 through: ItemKey(order: oldTime.timeIntervalSince1970, tiebreak: ""), origin: origin,
                 replaceNotes: true) == .saved, "baseline note and origin are committed together")
             let notable = try MCPSource.parse(good, slug: slug)
@@ -212,7 +212,7 @@ enum ConnectorCurationTests {
             check((await store.notes()).count == 1 && afterQuiet?.mark.order == now.addingTimeInterval(40).timeIntervalSince1970,
                   "successful quiet read advances without erasing pending summaries")
 
-            _ = await store.commitMCPRead(bucketKey: bucket, notes: [],
+            _ = try await store.commitMCPRead(bucketKey: bucket, notes: [],
                 through: ItemKey(order: now.timeIntervalSince1970, tiebreak: ""), origin: "v1:claude:0", replaceNotes: false)
             _ = try await MCPSource.run(slug: slug, mode: .iterative, store: store,
                                        now: now.addingTimeInterval(50), reader: reader)

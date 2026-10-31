@@ -14,6 +14,32 @@ nonisolated enum DirectMCPError: Error, LocalizedError {
     case authorizationDenied, timedOut, reconnectRequired, registrationExpired, accountSetupRequired, connectionChanged, noTools, policyUnavailable
     case keychain(OSStatus), network, http(Int), invalidResponse, tooLarge, busy, duplicateLabel, unconfirmedAction
 
+    /// Stable closed codes for diagnostics. Never stringify associated provider data.
+    var diagnosticCode: String {
+        switch self {
+        case .invalidMetadata: "invalid_metadata"
+        case .unsupportedProvider: "unsupported_provider"
+        case .unsupportedRegistration: "unsupported_registration"
+        case .invalidCallback: "invalid_callback"
+        case .authorizationDenied: "access_denied"
+        case .timedOut: "timed_out"
+        case .reconnectRequired: "reconnect_required"
+        case .registrationExpired: "registration_expired"
+        case .accountSetupRequired: "account_setup_required"
+        case .connectionChanged: "connection_changed"
+        case .noTools: "no_tools"
+        case .policyUnavailable: "policy_unavailable"
+        case .keychain: "keychain"
+        case .network: "network"
+        case .http: "http"
+        case .invalidResponse: "invalid_response"
+        case .tooLarge: "too_large"
+        case .busy: "busy"
+        case .duplicateLabel: "duplicate_label"
+        case .unconfirmedAction: "unconfirmed_action"
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidMetadata: "The service returned invalid login information."

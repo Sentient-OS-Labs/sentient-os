@@ -516,8 +516,11 @@ actor CycleStore {
     /// Explicit initial reads replace old notes only inside this successful transaction.
     /// Automatic backfills preserve pending notes from earlier cycles or origins.
     func commitMCPRead(bucketKey: String, notes: [NoteDraft], through mark: ItemKey,
-                       origin: String, replaceNotes: Bool) -> CommitOutcome {
-        commit(bucketKey: bucketKey, note: nil, prepare: {
+                       origin: String, replaceNotes: Bool) throws -> CommitOutcome {
+        // Cancellation can arrive while the caller waits for this actor. Reject it before
+        // any replacement or insertion, outside the storage-error rollback/retry path.
+        try Task.checkCancellation()
+        return commit(bucketKey: bucketKey, note: nil, prepare: {
             if replaceNotes {
                 // Batch delete executes outside the pending object changes. Delete fetched
                 // objects so a failed save can roll back the entire replacement.

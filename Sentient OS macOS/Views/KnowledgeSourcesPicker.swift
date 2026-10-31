@@ -337,8 +337,7 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private func updateConnectors() {
-        connectors = ConnectorRegistry.detectedForCurrentBackend().filter { $0.origin != .direct }
-            + DirectMCPStore.connections().map(\.detected)
+        connectors = ConnectorRegistry.detectedForCurrentBackend(includeUnavailableDirect: true)
         selectionCount = SourceSelection.selectionCount
     }
 

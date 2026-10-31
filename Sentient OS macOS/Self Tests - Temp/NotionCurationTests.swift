@@ -366,7 +366,7 @@ enum NotionCurationTests {
             let legacyOrigin = ConnectorRegistry.readOrigin(slug: connection.slug, backend: .chatgpt) + ":notion-history-v1"
             let pending = NoteDraft(kind: .mcp, sourceID: "notion-pending", folder: "Notion", itemDate: lower,
                 text: "Previously accepted context.", title: "Existing summary", reminderFlagged: false)
-            _ = await store.commitMCPRead(bucketKey: bucket, notes: [pending], through: ItemKey(order: lower.timeIntervalSince1970, tiebreak: ""),
+            _ = try await store.commitMCPRead(bucketKey: bucket, notes: [pending], through: ItemKey(order: lower.timeIntervalSince1970, tiebreak: ""),
                 origin: legacyOrigin, replaceNotes: false)
             let observedModes = OSAllocatedUnfairLock(initialState: [MCPSource.ReadMode]())
             try await ModelBackend.$runOverride.withValue(.chatgpt) {

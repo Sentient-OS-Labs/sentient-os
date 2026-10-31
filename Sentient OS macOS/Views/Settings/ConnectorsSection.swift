@@ -1,7 +1,7 @@
 //
 // ConnectorsSection.swift
-// The always-visible curated catalog, merged with the user's detected accounts. Catalog-only
-// entries are presentation values, never detected connections or selected knowledge sources.
+// The curated catalog, detected accounts and saved selections that still need setup.
+// Unlinked presentation entries preserve intent without claiming an authenticated account.
 // Doc: Documentation - Settings.md
 //
 
@@ -24,6 +24,8 @@ struct ConnectorSource: Identifiable {
         connector.map { $0.origin != .direct } ?? (directProvider == nil)
     }
 
+    var isDirectSetup: Bool { connector == nil && directProvider != nil }
+
     /// Keep registry order, retain each distinct account, and append other connected apps.
     /// Gmail and Calendar already have permanent pills in the shared Connectors group.
     /// Teams is outside Knowledge Sources, including when detected as a connected app.
@@ -33,13 +35,26 @@ struct ConnectorSource: Identifiable {
         var used = Set<String>()
         var sources: [Self] = []
         for pack in packs {
-            let accounts = connectors.filter { ConnectorRegistry.pack(for: $0)?.slug == pack.slug }
+            var accounts = connectors.filter { ConnectorRegistry.pack(for: $0)?.slug == pack.slug }
+            if pack.directProvider != nil, ConnectorRegistry.isKBEnabled(pack.slug),
+               !accounts.contains(where: { $0.slug == pack.slug && $0.origin != .direct }),
+               let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current) {
+                // Saved intent still needs its repair action after catalog/cache loss. This
+                // presentation record is not a grant or a claim of a successful connection.
+                accounts.append(.init(slug: pack.slug, displayName: pack.displayName, origin: origin,
+                    serverURL: nil, catalogID: nil, iconPath: nil, healthy: false, lastSeen: .distantPast))
+            }
             if accounts.isEmpty {
                 sources.append(Self(id: "catalog:\(pack.slug)", serviceSlug: pack.slug,
                                     displayName: pack.displayName, connector: nil))
             } else {
                 for account in accounts where used.insert(account.id).inserted {
                     sources.append(Self(account))
+                }
+                if pack.directProvider != nil {
+                    // An existing hosted record must not hide the supported native setup.
+                    sources.append(Self(id: "catalog:\(pack.slug)", serviceSlug: pack.slug,
+                                        displayName: "Add \(pack.displayName) account", connector: nil))
                 }
             }
         }
@@ -105,12 +120,18 @@ struct ConnectorPill: View {
     }
 
     private var selected: Bool {
-        knowledgeEnabled && ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug)
+        !source.isDirectSetup && knowledgeEnabled
+            && !ConnectorRegistry.requiresDirectKnowledgeConnection(source.connector?.slug ?? source.serviceSlug)
+            && ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug)
             && (source.usesHostedConnection || source.connector?.canAttempt == true)
     }
 
     private var detail: String? {
         guard !locked else { return nil }
+        if source.isDirectSetup { return "Connect to Sentient" }
+        if ConnectorRegistry.requiresDirectKnowledgeConnection(source.connector?.slug ?? source.serviceSlug) {
+            return knowledgeEnabled ? "Knowledge connection needed" : "Tasks only"
+        }
         if knowledgeEnabled && !selected { return "Connection needs attention · Manage" }
         if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Tasks only" }
         return nil
@@ -118,6 +139,10 @@ struct ConnectorPill: View {
 
     private var status: String {
         if locked { return CodexAuth.connectorLockedTip }
+        if source.isDirectSetup { return "Connect an account directly to Sentient for knowledge analysis." }
+        if ConnectorRegistry.requiresDirectKnowledgeConnection(source.connector?.slug ?? source.serviceSlug) {
+            return "Your AI connection is kept for tasks. Connect to Sentient to use it for knowledge analysis."
+        }
         if knowledgeEnabled && !selected { return "Selected, but review this connection before analysis can use it." }
         return selected ? "Selected for analysis and nightly updates."
             : "Open this app to set it up and choose whether to use it for your knowledge base."
