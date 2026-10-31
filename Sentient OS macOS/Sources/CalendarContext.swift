@@ -78,6 +78,9 @@ enum CalendarContext {
     }
 
     private static func fetchBody(now: Date, excluding: Set<String>) async throws -> Result {
+        if ModelBackend.current == .sentient {
+            return Result(text: try await HostedConnectorSource.calendarContext(now: now, excluding: excluding), hasOutlookEvents: false)
+        }
         let google: String?
         if !excluding.contains("google-calendar"), ModelBackend.connectorsAvailable, UserDefaults.standard.bool(forKey: "dbg.run.calendar") {
             google = await CalendarConnect.fetchProactiveContext()

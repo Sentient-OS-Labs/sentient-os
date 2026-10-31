@@ -167,7 +167,7 @@ nonisolated enum ConnectorRegistry {
     // MARK: Identity
 
     static func pack(forSlug slug: String) -> CuratedConnector? {
-        let provider = DirectMCPStore.connection(slug)?.providerSlug ?? canonicalSlug(slug)
+        let provider = HostedConnectorStore.account(slug)?.service ?? DirectMCPStore.connection(slug)?.providerSlug ?? canonicalSlug(slug)
         return packs.first { $0.slug == provider }
     }
 
@@ -205,6 +205,11 @@ nonisolated enum ConnectorRegistry {
     /// URL or catalog id). nil = the slug matches no pack and no census record.
     static func server(for slug: String) -> ResolvedServer? {
         let slug = canonicalSlug(slug)
+        if slug.hasPrefix("hosted-") {
+            guard ModelBackend.current == .sentient, let account = HostedConnectorStore.account(slug) else { return nil }
+            return ResolvedServer(slug: account.taskTarget, claudeName: account.displayName,
+                claudeServerURL: nil, claudeToolPrefix: "mcp__sentient_connectors__", codexCatalogID: nil)
+        }
         if let direct = DirectMCPStore.connection(slug) {
             return ResolvedServer(slug: slug, claudeName: direct.displayName,
                 claudeServerURL: direct.provider?.endpoint.absoluteString, claudeToolPrefix: direct.toolPrefix,
@@ -238,6 +243,7 @@ nonisolated enum ConnectorRegistry {
     /// A connector's user-facing name: the curated pack's, else the census's, else the slug
     /// title-cased.
     static func displayName(slug: String) -> String {
+        if let account = HostedConnectorStore.account(slug) { return account.displayName }
         if let direct = DirectMCPStore.connection(slug) { return direct.displayName }
         if let pack = pack(forSlug: slug) { return pack.displayName }
         return (ConnectorCensus.cached(for: .claude) + ConnectorCensus.cached(for: .chatgpt))
@@ -385,9 +391,9 @@ nonisolated enum ConnectorRegistry {
         if usable.count != detected.count {
             Log("cardChannels: \(detected.count - usable.count) connector(s) without verified action context not offered yet")
         }
-        return usable.map { CardChannel(slug: DirectMCPStore.connection($0.slug)?.taskTarget ?? $0.slug,
+        return usable.map { CardChannel(slug: HostedConnectorStore.account($0.slug)?.taskTarget ?? DirectMCPStore.connection($0.slug)?.taskTarget ?? $0.slug,
                                         name: displayName(slug: $0.slug),
-                                        description: pack(forSlug: $0.slug)?.routerDescription) }
+                                        description: HostedConnectorStore.account($0.slug)?.taskDescription ?? pack(forSlug: $0.slug)?.routerDescription) }
     }
 
     // MARK: Detection convenience
@@ -395,10 +401,14 @@ nonisolated enum ConnectorRegistry {
     /// Additional hosted services plus authenticated direct connections. Tool policy is prepared
     /// when a direct connection is used. Gmail/Calendar retain their
     /// dedicated source and action paths. BYOM receives only the direct tier.
-    static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] {
+    /// Knowledge management includes failed accounts so they remain visible to retry or remove.
+    /// Task discovery keeps its connected-account default.
+    static func detectedForCurrentBackend(includeUnavailableDirect: Bool = false) -> [ConnectorCensus.DetectedConnector] {
         let hosted = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
             .map { ConnectorCensus.cached(for: $0).filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) } } ?? []
-        return hosted + DirectMCPStore.connections().filter(\.connected).map(\.detected)
+        let sentient = ModelBackend.current == .sentient ? HostedConnectorStore.accounts().filter(\.connected).map(\.detected) : []
+        return hosted + sentient + DirectMCPStore.connections()
+            .filter { includeUnavailableDirect || $0.connected }.map(\.detected)
     }
 
     // MARK: The KB toggle (production keys)
@@ -411,19 +421,33 @@ nonisolated enum ConnectorRegistry {
 
     static func setKBEnabled(_ slug: String, _ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: kbKey(slug))
+        _ = advanceKnowledgeSelectionRevision(slug)
+    }
+
+    static func advanceKnowledgeSelectionRevision(_ slug: String) -> String {
+        let revision = UUID().uuidString
+        UserDefaults.standard.set(revision, forKey: kbKey(slug) + ".selectionRevision")
+        return revision
+    }
+
+    /// Even a repeated explicit choice supersedes an older connection-repair callback.
+    static func knowledgeSelectionRevision(_ slug: String) -> String? {
+        UserDefaults.standard.string(forKey: kbKey(slug) + ".selectionRevision")
     }
 
     /// Expected reads come from saved selections. A hosted catalog may be absent or stale;
-    /// synthesize selected catalog entries so that discovery cannot veto admission.
+    /// synthesize selected catalog entries so that discovery cannot veto admission. A selected
+    /// hosted route without a reader remains an attempted source with an actionable outcome.
     /// Direct selections must resolve an existing stored account, never a provider placeholder.
     static func kbEnabledConnectors() -> [ConnectorCensus.DetectedConnector] {
         let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
         var candidates = origin.map { ConnectorCensus.cached(for: $0) } ?? []
         candidates.removeAll { ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) }
         candidates += DirectMCPStore.connections().map(\.detected)
+        if ModelBackend.current == .sentient { candidates += HostedConnectorStore.accounts().map(\.detected) }
         for pack in packs where !ConnectorCensus.dedicatedSourceSlugs.contains(pack.slug) {
             guard !candidates.contains(where: { $0.slug == pack.slug }), isKBEnabled(pack.slug),
-                  pack.directProvider == nil, let sourceOrigin = origin else { continue }
+                  let sourceOrigin = origin else { continue }
             candidates.append(.init(slug: pack.slug, displayName: pack.displayName, origin: sourceOrigin,
                 serverURL: pack.claudeServerURL, catalogID: pack.codexCatalogID,
                 iconPath: nil, healthy: false, lastSeen: .distantPast))
@@ -436,9 +460,11 @@ nonisolated enum ConnectorRegistry {
         enabled && kbEligible(connector.slug)
     }
 
-    /// Curation and backend support determine whether a source can be selected. Connection
-    /// health and the live tool policy are checked by the actual reader, never by the picker.
+    /// Curation determines whether reading intent can be saved. A provider with a direct reader
+    /// can retain an older hosted selection even when that route needs explicit setup. Neither
+    /// a missing route nor a failed health observation may silently discard the user's choice.
     static func kbEligible(_ slug: String, backend: ModelBackend = ModelBackend.current) -> Bool {
+        if slug.hasPrefix("hosted-") { return backend == .sentient && HostedConnectorStore.account(slug) != nil }
         if backend == .chatgpt, UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey) { return false }
         if let direct = DirectMCPStore.connection(slug) { return direct.kbEligible }
         guard let pack = pack(forSlug: slug), !pack.capturedProvisional else { return false }
@@ -456,6 +482,21 @@ nonisolated enum ConnectorRegistry {
         }
     }
 
+    /// The provider has a native reader, but this hosted record has no reviewed read policy.
+    /// Keep selection/admission separate: the actual attempt explains the required connection.
+    static func requiresDirectKnowledgeConnection(_ slug: String,
+                                                   backend: ModelBackend = ModelBackend.current) -> Bool {
+        guard DirectMCPStore.connection(slug) == nil, let pack = pack(forSlug: slug),
+              pack.directProvider != nil else { return false }
+        switch backend {
+        case .claude:
+            return pack.readTools?.isEmpty != false || pack.claudeServerURL == nil
+                || pack.claudeToolPrefix == nil
+        case .chatgpt: return pack.codexReadTools?.isEmpty != false
+        case .custom, .sentient: return true
+        }
+    }
+
     /// Hosted account apps use either legacy connector IDs or Apps SDK IDs. Accept only
     /// these observed, non-interpretable key forms; eligibility still requires a reviewed pack.
     static func isValidCodexCatalogID(_ id: String) -> Bool {
@@ -465,6 +506,7 @@ nonisolated enum ConnectorRegistry {
     /// A service identity is not an account identity. Track the engine and observed relinks;
     /// silent account changes within a hosted provider cannot be detected by the census.
     static func readOrigin(slug: String, backend: ModelBackend) -> String {
+        if let account = HostedConnectorStore.account(slug) { return account.taskTarget }
         if let direct = DirectMCPStore.connection(slug) { return "direct:\(direct.id):\(direct.generation)" }
         let generation = UserDefaults.standard.integer(forKey: readGenerationKey(slug, backend.rawValue))
         if backend == .chatgpt {

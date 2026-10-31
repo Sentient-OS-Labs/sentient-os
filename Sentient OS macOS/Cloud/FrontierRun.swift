@@ -28,12 +28,18 @@ enum FrontierRun {
         return try await ModelBackend.$runOverride.withValue(backend) {
             if backend == .sentient {
                 let targets = invocation.mcpReadConnectors + [invocation.mcpActionServer, invocation.mcpAttachServer].compactMap { $0 }
-                guard targets.allSatisfy({ $0.hasPrefix("direct-") }),
+                guard targets.allSatisfy({ $0.hasPrefix("direct-") || $0.hasPrefix("hosted-") }), invocation.mcpAttachServer == nil,
                       invocation.configOverrides != CodexCLI.Invocation.approveConnectorWrites else {
                     throw CodexCLI.CLIError.notAvailable(.notWorking("This connected account is unavailable with Sentient hosted inference."))
                 }
                 return try await HostedInference.withRun(purpose: .background) {
-                    try await runPrepared(invocation, onLine: onLine)
+                    try await HostedConnectorToolServer.withConnection(targets: targets,
+                        mode: invocation.mcpActionServer == nil ? "read" : invocation.hostedConnectorMode,
+                        requireCall: invocation.mcpActionServer?.hasPrefix("hosted-") == true) {
+                        var prepared = invocation
+                        if HostedConnectorToolServer.connection != nil { prepared.prompt += "\n\n" + HostedConnectorToolServer.instructions + "\n" + HostedConnectorToolServer.clockContext }
+                        return try await runPrepared(prepared, onLine: onLine)
+                    }
                 }
             }
             return try await runPrepared(invocation, onLine: onLine)
@@ -116,11 +122,15 @@ enum FrontierRun {
                     return try await DirectMCPRuntime.execute(direct) {
                         Diagnostics.step(.request)
                         let result: CodexCLI.Envelope
-                        result = try await HostedVaultToolServer.withConnection(root: prepared.hostedVaultRoot) {
+                        result = try await HostedVaultToolServer.withConnection(root: prepared.hostedVaultRoot ?? prepared.hostedVaultReadRoot,
+                            readOnly: prepared.hostedVaultReadRoot != nil) {
                             try await ResearchToolServer.withConnection(mail: prepared.appleMailResearch, vault: prepared.cwd) {
                                 try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
                                     var interactive = prepared
-                                    if HostedVaultToolServer.connection != nil { interactive.prompt += "\n\n" + HostedVaultToolServer.instructions }
+                                    if HostedVaultToolServer.connection != nil {
+                                        interactive.prompt += "\n\n" + (prepared.hostedVaultReadRoot == nil ? HostedVaultToolServer.instructions
+                                            : "Use sentient_vault.vault_list and vault_read to inspect this task's knowledge folder. This is a read-only capability; no file writes or shell are available.")
+                                    }
                                     if backend == .sentient, interactive.webSearch {
                                         interactive.webSearch = false
                                         interactive.prompt += "\n\nThis hosted background run has no web search or page-fetch tools. Use only the supplied evidence and explicitly connected local tools. Do not claim current external facts were verified; omit recommendations that require unavailable external verification."
@@ -195,7 +205,11 @@ enum FrontierRun {
         return try await ModelBackend.$runOverride.withValue(backend) {
             if backend == .sentient {
                 return try await HostedInference.withRun(purpose: .sidekick) {
-                    try await runAgentPrepared(prompt, imagePaths: imagePaths, timeout: timeout, onLine: onLine)
+                    try await HostedConnectorToolServer.withConnection(
+                        targets: HostedConnectorStore.accounts().filter(\.connected).map(\.taskTarget), mode: "task", optional: true) {
+                        try await runAgentPrepared(prompt + "\n\n" + HostedConnectorToolServer.instructions + "\n" + HostedConnectorToolServer.clockContext,
+                            imagePaths: imagePaths, timeout: timeout, onLine: onLine)
+                    }
                 }
             }
             return try await runAgentPrepared(prompt, imagePaths: imagePaths, timeout: timeout, onLine: onLine)

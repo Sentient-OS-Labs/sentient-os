@@ -123,7 +123,7 @@ enum NotionCurationTests {
         for (command, services, expected) in cases {
             let result = await CommandRouter.route(command, services: services)
             let target: String?
-            switch result { case .computer: target = nil; case .connector(let slug, _, _, _, _): target = slug }
+            switch result { case .computer: target = nil; case .connector(let slug, _, _, _, _, _): target = slug }
             let pass = target == expected
             if !pass { failures += 1 }
             results.append(["command": command, "expected": expected ?? "computer", "actual": target ?? "computer", "passed": pass])
@@ -366,7 +366,7 @@ enum NotionCurationTests {
             let legacyOrigin = ConnectorRegistry.readOrigin(slug: connection.slug, backend: .chatgpt) + ":notion-history-v1"
             let pending = NoteDraft(kind: .mcp, sourceID: "notion-pending", folder: "Notion", itemDate: lower,
                 text: "Previously accepted context.", title: "Existing summary", reminderFlagged: false)
-            _ = await store.commitMCPRead(bucketKey: bucket, notes: [pending], through: ItemKey(order: lower.timeIntervalSince1970, tiebreak: ""),
+            _ = try await store.commitMCPRead(bucketKey: bucket, notes: [pending], through: ItemKey(order: lower.timeIntervalSince1970, tiebreak: ""),
                 origin: legacyOrigin, replaceNotes: false)
             let observedModes = OSAllocatedUnfairLock(initialState: [MCPSource.ReadMode]())
             try await ModelBackend.$runOverride.withValue(.chatgpt) {

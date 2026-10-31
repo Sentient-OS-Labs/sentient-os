@@ -53,12 +53,14 @@ nonisolated enum SlackConnector { enum Operation: Sendable { case write } }
 nonisolated enum OutlookMailConnector { static let slug = "outlook-mail"; enum Operation: Sendable { case write } }
 nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"; enum Operation: Sendable { case write } }
 nonisolated enum ClaudeAuth { struct LoginRequired: Error {} }
+nonisolated enum HostedConnectorAuthorization { static func authorize(_ command: String) async throws {} }
 nonisolated enum CodexCLI {
     enum Effort: Sendable { case medium }
     struct Invocation: Sendable {
         let prompt: String
         var feature = "", effort: Effort = .medium, webSearch = false
         var timeout: TimeInterval = 600
+        var hostedConnectorMode = "read"
         var mcpActionServer: String?
         var slackOperation: SlackConnector.Operation?
         var outlookOperation: OutlookMailConnector.Operation?

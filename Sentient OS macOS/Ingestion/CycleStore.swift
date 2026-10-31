@@ -52,6 +52,8 @@ final class BucketPointer {
     var appleCalendarRetry: Data? = nil
     /// Fixed Gmail windows and completed coverage. Separate from consumable summary notes.
     var gmailReadState: Data? = nil
+    /// Hosted connector page cursor and fixed windows, without raw source content.
+    var hostedConnectorReadState: Data? = nil
 
     init(bucketKey: String, mark: ItemKey, floor: ItemKey? = nil, updatedAt: Date = Date()) {
         self.bucketKey = bucketKey
@@ -265,6 +267,79 @@ actor CycleStore {
         let state = try JSONDecoder().decode(GmailReadState.self, from: data)
         try state.validate()
         return state
+    }
+
+    func beginHostedConnectorRead(bucketKey: String, proposed: HostedConnectorReadState) throws -> HostedConnectorReadState {
+        try Task.checkCancellation(); try proposed.validate()
+        let row = try fetchRow(bucketKey)
+        var active: HostedConnectorReadState?
+        if let data = row?.hostedConnectorReadState {
+            let existing = try JSONDecoder().decode(HostedConnectorReadState.self, from: data)
+            try existing.validate()
+            // Hosted pages carry atomic, deterministic cursors. Preserve them even during
+            // initial recovery so a source larger than the per-run page budget can finish.
+            // Subscription cloud readers keep their separate replay policy below.
+            if existing.origin == proposed.origin { return existing }
+            active = existing
+        }
+        let replacingOrigin = (active?.origin ?? row?.mcpReadOrigin).map { $0 != proposed.origin } ?? false
+        let next = proposed
+        let data = try JSONEncoder().encode(next)
+        let outcome = commit(bucketKey: bucketKey, note: nil, prepare: {
+            // Never combine an abandoned account generation with new pages.
+            if replacingOrigin {
+                let notes = try self.modelContext.fetch(FetchDescriptor<CycleNote>(predicate: #Predicate { $0.bucketKey == bucketKey }))
+                for note in notes { self.modelContext.delete(note) }
+            }
+        }, apply: {
+            $0.hostedConnectorReadState = data
+            if replacingOrigin { $0.order = 0; $0.tiebreak = ""; $0.mcpReadOrigin = nil }
+        }, make: {
+            let row = BucketPointer(bucketKey: bucketKey, mark: ItemKey(order: 0, tiebreak: ""))
+            row.hostedConnectorReadState = data; return row
+        }, beforeSave: {
+            #if DEBUG
+            if self.failNextHostedCommit { self.failNextHostedCommit = false; throw CocoaError(.fileWriteOutOfSpace) }
+            #endif
+        })
+        guard outcome == .saved else { throw MCPSource.MCPError.storageFailure }
+        return next
+    }
+
+    func commitHostedConnectorPage(bucketKey: String, expected: HostedConnectorReadState,
+                                   next: HostedConnectorReadState, note: NoteDraft?) throws {
+        try Task.checkCancellation(); try next.validate()
+        guard let data = try fetchRow(bucketKey)?.hostedConnectorReadState,
+              try JSONDecoder().decode(HostedConnectorReadState.self, from: data) == expected,
+              next.id == expected.id, next.origin == expected.origin, next.revision == expected.revision + 1,
+              next.windows == expected.windows, next.through == expected.through, !expected.complete,
+              next.windowIndex == expected.windowIndex || next.windowIndex == expected.windowIndex + 1,
+              next.windowIndex == expected.windowIndex || (next.pageIndex == 0 && next.cursor == nil),
+              next.windowIndex != expected.windowIndex || next.pageIndex == expected.pageIndex + 1 || (next.pageIndex == 0 && next.cursor == nil),
+              note == nil || note?.sourceID == expected.sourceID else { throw MCPSource.MCPError.connectionChanged }
+        let saved = next.complete ? nil : try JSONEncoder().encode(next)
+        let outcome = commit(bucketKey: bucketKey, note: note, prepare: {
+            let restartingWindow = next.windowIndex == expected.windowIndex && next.pageIndex == 0 && next.cursor == nil
+            if restartingWindow {
+                let prefix = "hosted:\(expected.id):\(expected.windowIndex):"
+                let notes = try self.modelContext.fetch(FetchDescriptor<CycleNote>(predicate: #Predicate { $0.bucketKey == bucketKey }))
+                for note in notes where note.sourceID.hasPrefix(prefix) { self.modelContext.delete(note) }
+            } else {
+                // Replace the exact pending page; a saved retry cannot duplicate its note.
+                let sourceID = expected.sourceID
+                let prior = try self.modelContext.fetch(FetchDescriptor<CycleNote>(
+                    predicate: #Predicate { $0.bucketKey == bucketKey && $0.sourceID == sourceID }))
+                for item in prior { self.modelContext.delete(item) }
+            }
+        }, apply: { row in
+            row.hostedConnectorReadState = saved; row.updatedAt = Date()
+            if next.complete { row.order = next.through.timeIntervalSince1970; row.tiebreak = ""; row.mcpReadOrigin = next.origin }
+        }, make: { throw MCPSource.MCPError.connectionChanged }, beforeSave: {
+            #if DEBUG
+            if self.failNextHostedCommit { self.failNextHostedCommit = false; throw CocoaError(.fileWriteOutOfSpace) }
+            #endif
+        })
+        guard outcome == .saved else { throw MCPSource.MCPError.storageFailure }
     }
 
     /// Persist the exact import bounds before starting requests. A retry resumes the original
@@ -516,8 +591,11 @@ actor CycleStore {
     /// Explicit initial reads replace old notes only inside this successful transaction.
     /// Automatic backfills preserve pending notes from earlier cycles or origins.
     func commitMCPRead(bucketKey: String, notes: [NoteDraft], through mark: ItemKey,
-                       origin: String, replaceNotes: Bool) -> CommitOutcome {
-        commit(bucketKey: bucketKey, note: nil, prepare: {
+                       origin: String, replaceNotes: Bool) throws -> CommitOutcome {
+        // Cancellation can arrive while the caller waits for this actor. Reject it before
+        // any replacement or insertion, outside the storage-error rollback/retry path.
+        try Task.checkCancellation()
+        return commit(bucketKey: bucketKey, note: nil, prepare: {
             if replaceNotes {
                 // Batch delete executes outside the pending object changes. Delete fetched
                 // objects so a failed save can roll back the entire replacement.

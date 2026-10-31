@@ -62,7 +62,7 @@ enum CodexAuth {
     /// Should the Gmail/Calendar chips render locked? Either lock reason (free/go plan, or a
     /// custom frontier model) — the one predicate every chip surface uses.
     static var connectorsLocked: Bool {
-        knowledgeBaseOnly || !ModelBackend.connectorsAvailable
+        knowledgeBaseOnly || (!ModelBackend.connectorsAvailable && ModelBackend.current != .sentient)
     }
 
     // MARK: Persisted state

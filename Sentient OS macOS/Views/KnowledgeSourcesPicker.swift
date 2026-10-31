@@ -125,10 +125,15 @@ struct KnowledgeSourcesPicker: View {
         }
         .sheet(isPresented: $showAppleCalendarConnect) { AppleCalendarConnectSheet() }
         .sheet(item: $selectedConnector) { source in
-            ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
+            if ModelBackend.current == .sentient, HostedConnectorStore.services.contains(source.serviceSlug) {
+                HostedConnectorConnectSheet(service: source.serviceSlug, account: source.connector.flatMap { HostedConnectorStore.account($0.slug) })
+            } else {
+                ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
+            }
         }
         .onChange(of: backendRaw) { selectedConnector = nil }
         .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
+        .onReceive(NotificationCenter.default.publisher(for: HostedConnectorStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
     }
 
     /// Clicking a protected app is explicit intent. Merely showing its chip never opens a
@@ -252,9 +257,13 @@ struct KnowledgeSourcesPicker: View {
     private var emailColumn: some View {
         let mailSupported = AppleMailSource.isSupported
         return VStack(alignment: .leading, spacing: 9) {
+            if ModelBackend.current == .sentient {
+                ForEach(connectorSources.filter { $0.serviceSlug == "gmail" }) { connectorPill($0, featured: true) }
+            } else {
             KnowledgeSourcePill(label: "Gmail", detail: runGmail && !SourceSelection.hostedSourceReady("gmail") ? "Connection needs attention · Manage" : nil,
                                 asset: "GmailMark", selected: runGmail,
                                 featured: true, locked: CodexAuth.connectorsLocked && !runGmail) { showGmailConnect = true }
+            }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
@@ -277,9 +286,13 @@ struct KnowledgeSourcesPicker: View {
 
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
+            if ModelBackend.current == .sentient {
+                ForEach(connectorSources.filter { $0.serviceSlug == "google-calendar" }) { connectorPill($0, featured: true) }
+            } else {
             KnowledgeSourcePill(label: "Google Calendar", detail: runCalendar && !SourceSelection.hostedSourceReady("calendar") ? "Connection needs attention · Manage" : nil,
                                 asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked && !runCalendar) { showCalendarConnect = true }
+            }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
                 connectorPill(source, featured: true)
             }
@@ -302,7 +315,7 @@ struct KnowledgeSourcesPicker: View {
             VStack(alignment: .leading, spacing: 12) {
                 ChipFlow {
                     ForEach(connectorSources.filter {
-                        !["outlook-mail", "outlook-calendar"].contains($0.serviceSlug)
+                        !["gmail", "google-calendar", "outlook-mail", "outlook-calendar"].contains($0.serviceSlug)
                     }) { source in
                         connectorPill(source)
                     }
@@ -337,8 +350,11 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private func updateConnectors() {
-        connectors = ConnectorRegistry.detectedForCurrentBackend().filter { $0.origin != .direct }
-            + DirectMCPStore.connections().map(\.detected)
+        connectors = ConnectorRegistry.detectedForCurrentBackend(includeUnavailableDirect: true)
+        if ModelBackend.current == .sentient {
+            connectors.removeAll { $0.origin == .sentient }
+            connectors += HostedConnectorStore.accounts().map(\.detected)
+        }
         selectionCount = SourceSelection.selectionCount
     }
 

@@ -71,7 +71,7 @@ actor VaultCloud {
     'enum CloudError:', 'func create(', 'private func createPinned(',
     'func update(', 'private func updatePinned(',
 ]) + '\n}\n'
-production += 'enum ConnectorCensus { struct DetectedConnector { enum Origin { case claude, chatgpt, direct } }\n' + declaration(census, 'private static func storageKey(').replace('private static', 'static', 1) + '\n}\n'
+production += 'enum ConnectorCensus { struct DetectedConnector { enum Origin { case claude, chatgpt, direct, sentient } }\n' + declaration(census, 'private static func storageKey(').replace('private static', 'static', 1) + '\n}\n'
 production += 'enum ConnectorRegistry {\n' + '\n'.join(declaration(registry, name) for name in ['static func readOrigin(', 'static func readGenerationKey(']) + '\n}\n'
 
 FIXTURE = r'''
@@ -99,6 +99,10 @@ enum ModelBackend: String, Sendable, CaseIterable {
 enum CodexRuntime {
     static let sessionScope = "private-codex-v1"
     static var accountIdentity: String? { UserDefaults.standard.string(forKey: "account") }
+}
+enum HostedConnectorStore {
+    struct Account { let id = "fixture-hosted"; let generation = 1; let taskTarget = "hosted-fixture@1" }
+    static func account(_ slug: String) -> Account? { nil }
 }
 enum DirectMCPStore {
     struct Connection { let id = "fixture-direct"; let generation = 3 }

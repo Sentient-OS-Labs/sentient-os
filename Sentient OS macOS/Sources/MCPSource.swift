@@ -54,6 +54,9 @@ enum MCPSource {
         case alreadyRunning
         case clockMovedBackwards
         case connectionChanged
+        /// A saved hosted choice needs the provider's supported direct connection for knowledge.
+        /// This is a route capability, never evidence that the user's hosted grant expired.
+        case directConnectionRequired(slug: String)
 
         var errorDescription: String? {
             switch self {
@@ -75,6 +78,8 @@ enum MCPSource {
                 return "The saved read time is ahead of this Mac's clock."
             case .connectionChanged:
                 return "The connection changed during the read. Its progress was preserved for retry."
+            case .directConnectionRequired(let slug):
+                return "Connect \(ConnectorRegistry.displayName(slug: slug)) to Sentient in Knowledge Sources to use it for analysis. Your source choice has been kept."
             }
         }
     }
@@ -135,6 +140,27 @@ enum MCPSource {
         let result: String
     }
 
+    /// Capture only structural attribution before the read. Account deletion or a backend
+    /// change while it runs must not relabel the final outcome or expose an account UUID.
+    private struct ReadAttribution {
+        let target: String
+        let backend: String
+        let route: String
+
+        init(slug: String, backend: ModelBackend) {
+            target = ConnectorRegistry.telemetrySlug(slug)
+            self.backend = backend.rawValue
+            if slug.hasPrefix("direct-") { route = "direct" }
+            else {
+                route = switch backend {
+                case .chatgpt: "chatgpt_hosted"
+                case .claude: "claude_hosted"
+                case .custom, .sentient: "unsupported"
+                }
+            }
+        }
+    }
+
     /// Read every KB-enabled connector, iterative each (initial when unread) — ONE call per
     /// connector per night on `.generic`. Per-connector all-or-nothing; a usage-limit error
     /// skips the remaining connectors (their marks didn't move, so next night covers the gap).
@@ -154,14 +180,17 @@ enum MCPSource {
                 outcomes += slugs.dropFirst(index).map { LegOutcome(slug: $0, result: "cancelled") }
                 break
             }
+            let attribution = ReadAttribution(slug: slug, backend: ModelBackend.current)
             if hitUsageLimit {
                 outcomes.append(LegOutcome(slug: slug, result: "skipped"))
-                signalRead(slug: slug, outcome: "skipped", started: Date())
+                signalRead(slug: slug, outcome: "skipped", started: Date(), attribution: attribution)
                 onEvent(slug, index, slugs.count, .failed(label: ConnectorRegistry.displayName(slug: slug),
                     message: "Skipped after the model reached its usage limit. Try again later."))
                 continue
             }
             let legStart = Date()
+            CrashReporting.diagnosticBreadcrumb("connector.read_started", data: [
+                "source": attribution.target, "backend": attribution.backend, "route": attribution.route])
             do {
                 let recorded = try await runIterative(slug: slug) { event in
                     onEvent(slug, index, slugs.count, event)
@@ -169,26 +198,39 @@ enum MCPSource {
                 outcomes.append(LegOutcome(slug: slug, result: "ok"))
                 // "quiet" (nothing notable, mark advanced) vs "ok" is telemetry-only detail;
                 // the leg outcome stays "ok" for the scheduler's failed-leg scan.
-                signalRead(slug: slug, outcome: recorded == 0 ? "quiet" : "ok", started: legStart)
+                signalRead(slug: slug, outcome: recorded == 0 ? "quiet" : "ok", started: legStart, attribution: attribution)
             } catch {
                 if Task.isCancelled || error is CancellationError {
                     outcomes += slugs.dropFirst(index).map { LegOutcome(slug: $0, result: "cancelled") }
                     break
                 }
                 if case CodexCLI.CLIError.usageLimit = error { hitUsageLimit = true }
+                if (error as? HostedInference.Failure)?.isUsageLimit == true { hitUsageLimit = true }
                 let reason: String
                 if ConnectorReadFailure.isConnectionFailure(error) {
                     reason = "connector_auth"
                 } else if case MCPError.invalidResponse = error {
                     reason = "invalid_response"
+                } else if case MCPError.directConnectionRequired = error {
+                    reason = "direct_connection_required"
+                } else if case MCPError.noReadSurface = error {
+                    reason = "unsupported_route"
+                } else if let native = error as? GranolaResponse.Failure {
+                    reason = native == .providerError ? "native_provider_error" : "native_invalid_response"
+                } else if case DirectMCPError.invalidResponse = error {
+                    reason = "native_invalid_response"
+                } else if case DirectMCPError.connectionChanged = error {
+                    reason = "connection_changed"
+                } else if case MCPError.connectionChanged = error {
+                    reason = "connection_changed"
                 } else {
                     reason = CodexFailureReason.classify(error).rawValue
                 }
                 Log("MCPSource.runAll(\(slug)): ✗ \(ErrorLabel(error)) — \(reason)")
                 outcomes.append(LegOutcome(slug: slug, result: reason))
-                signalRead(slug: slug, outcome: reason, started: legStart)
+                signalRead(slug: slug, outcome: reason, started: legStart, attribution: attribution)
                 Diagnostics.report(.sourceReadFailed, phase: .read, reason: "connector_read",
-                    error: error, source: ConnectorRegistry.telemetrySlug(slug))
+                    error: error, source: attribution.target)
                 onEvent(slug, index, slugs.count,
                         .failed(label: ConnectorRegistry.displayName(slug: slug),
                                 message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
@@ -203,14 +245,16 @@ enum MCPSource {
     /// One TelemetryDeck row per connector per night: outcome (ok / quiet / skipped / the
     /// classified failure reason), duration, token totals. Curated slug or "other" — never a
     /// user-authored name. Extended tier; a no-op in DEBUG and when analytics are opted out.
-    private static func signalRead(slug: String, outcome: String, started: Date) {
+    private static func signalRead(slug: String, outcome: String, started: Date, attribution: ReadAttribution) {
         SourceHealth.recordReadOutcome(source: slug, outcome: outcome == "quiet" ? "ok" : outcome)
         let tokens = meter.withLock { $0.removeValue(forKey: slug) } ?? (0, 0)
         // inCount/outCount are model token totals — named around the diagnostics vocabulary
         // rule (a key containing "token" is redacted by Sentry's server-side scrubbing; the
         // lint build phase enforces the same vocabulary everywhere).
         Analytics.signal("Connector.readCompleted", parameters: [
-            "target": ConnectorRegistry.telemetrySlug(slug),
+            "target": attribution.target,
+            "backend": attribution.backend,
+            "route": attribution.route,
             "outcome": outcome,
             "seconds": String(Int(Date().timeIntervalSince(started))),
             "inCount": String(tokens.tokensIn),
@@ -222,14 +266,16 @@ enum MCPSource {
     @discardableResult
     static func runInitial(slug: String, store: CycleStore = .shared,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        try await run(slug: slug, mode: .initial, store: store,
+        if slug.hasPrefix("hosted-") { return try await HostedConnectorSource.run(slug: slug, mode: .initial, store: store, onProgress: onProgress) }
+        return try await run(slug: slug, mode: .initial, store: store,
                       identityReader: { try await readIdentity(slug: $0) }, onProgress: onProgress)
     }
 
     @discardableResult
     static func runIterative(slug: String, store: CycleStore = .shared,
                              onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        try await run(slug: slug, mode: .iterative, store: store,
+        if slug.hasPrefix("hosted-") { return try await HostedConnectorSource.run(slug: slug, mode: .iterative, store: store, onProgress: onProgress) }
+        return try await run(slug: slug, mode: .iterative, store: store,
                       identityReader: { try await readIdentity(slug: $0) }, onProgress: onProgress)
     }
 
@@ -328,7 +374,7 @@ enum MCPSource {
                                  title: "\(name) · \(windows[i].label)", reminderFlagged: result.hasActionItems)
             }
             // Origin changes and legacy checkpoints backfill without discarding pending notes.
-            let committed = await store.commitMCPRead(bucketKey: bucketKey(slug), notes: notes,
+            let committed = try await store.commitMCPRead(bucketKey: bucketKey(slug), notes: notes,
                 through: ItemKey(order: now.timeIntervalSince1970, tiebreak: ""), origin: origin,
                 replaceNotes: explicitInitial)
             guard committed == .saved else { throw MCPError.storageFailure }
@@ -491,8 +537,11 @@ enum MCPSource {
         #endif
         guard ConnectorRegistry.kbEligible(slug) else { throw MCPError.noReadSurface(slug: slug) }
         if DirectMCPStore.connection(slug) != nil { return } // native preparation validates live policy before spawn
-        if slug.hasPrefix("direct-") || ConnectorRegistry.pack(forSlug: slug)?.directProvider != nil {
+        if slug.hasPrefix("direct-") {
             throw MCPError.connectorAuth(slug: slug)
+        }
+        if ConnectorRegistry.requiresDirectKnowledgeConnection(slug) {
+            throw MCPError.directConnectionRequired(slug: slug)
         }
         if ModelBackend.current == .chatgpt, ConnectorRegistry.server(for: slug)?.codexCatalogID == nil {
             // Missing routing metadata says nothing about the user's provider connection.

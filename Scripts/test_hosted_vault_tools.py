@@ -15,7 +15,7 @@ nonisolated enum CodexCLI {
     enum CLIError: Error { case notAvailable(Availability) }
     struct Invocation {
         enum Sandbox { case workspaceWrite, readOnly }
-        var hostedVaultRoot: String?, cwd: String?
+        var hostedVaultRoot: String?, hostedVaultReadRoot: String?, cwd: String?
         var sandbox = Sandbox.workspaceWrite
         var bypassApprovals = false, toolsDisabled = false, webSearch = false
         var addDirs: [String] = [], mcpReadConnectors: [String] = [], configOverrides: [String] = []
@@ -98,6 +98,11 @@ import Darwin
         check((denied["result"] as? [String:Any])?["isError"] as? Bool == true, "RPC rejects escaping requests without content")
         await server.stop()
         do { _ = try await rpc(3,"vault_read",["path":"README.md"]); preconditionFailure("closed server accepted request") } catch { checks += 1 }
+        let readOnly = try HostedVaultToolServer(root: root, readOnly: true)
+        let deniedWrite = try await readOnly.response(JSONSerialization.data(withJSONObject: ["jsonrpc":"2.0","id":10,"method":"tools/call","params":["name":"vault_write","arguments":["path":"README.md","text":"forbidden"]]]))
+        let readOnlyReply = try JSONSerialization.jsonObject(with: deniedWrite) as! [String:Any]
+        check((readOnlyReply["result"] as? [String:Any])?["isError"] as? Bool == true, "research file capability denies writes")
+        await readOnly.stop()
         var invocation = CodexCLI.Invocation()
         rejects({ try HostedVaultToolServer.validateInvocation(invocation) }, "workspace edits need explicit capability")
         invocation.hostedVaultRoot = root.path; invocation.cwd = root.path

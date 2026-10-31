@@ -78,6 +78,7 @@ actor HostedInferenceClient {
 
     private let configuration: @Sendable () -> HostedInferenceConfiguration?
     private let session: URLSession
+    private let connectorSession: URLSession
     private let credentials: CredentialStore
     private var authentication: Task<Identity, Error>?
     private var pendingIdentity: Identity?
@@ -86,6 +87,11 @@ actor HostedInferenceClient {
     init(configuration: @escaping @Sendable () -> HostedInferenceConfiguration? = { .current },
          session: URLSession? = nil, credentials: CredentialStore = .keychain) {
         self.configuration = configuration; self.credentials = credentials
+        let connectorSettings = URLSessionConfiguration.ephemeral
+        connectorSettings.httpCookieStorage = nil; connectorSettings.urlCredentialStorage = nil
+        connectorSettings.requestCachePolicy = .reloadIgnoringLocalCacheData
+        connectorSettings.timeoutIntervalForRequest = 40; connectorSettings.timeoutIntervalForResource = 45
+        self.connectorSession = session ?? URLSession(configuration: connectorSettings, delegate: HostedInferenceRedirectPolicy(), delegateQueue: nil)
         if let session { self.session = session }
         else {
             let settings = URLSessionConfiguration.ephemeral
@@ -104,6 +110,33 @@ actor HostedInferenceClient {
               value.remainingSeconds >= 0, value.remainingSeconds <= value.dailyLimitSeconds,
               value.usedSeconds >= 0, value.usedSeconds.isFinite else { throw Failure.invalidResponse }
         return value
+    }
+    func hasSavedIdentity() throws -> Bool {
+        if pendingIdentity != nil { return true }
+        return try credentials.read() != nil
+    }
+
+    /// Connector management authenticates with this same persisted hosted principal. Task
+    /// execution uses a narrower capability; neither credential is a Composio project key.
+    func connectorRequest(path: String, method: String = "POST", payload: Data? = nil,
+                          capability: String? = nil, run: HostedInference.Run? = nil, asPrincipal: Bool = false) async throws -> Data {
+        guard path.hasPrefix("v1/connectors"), !path.contains(".."), !path.contains("?"),
+              (payload?.count ?? 0) <= 64_000 else { throw Failure.invalidResponse }
+        let config = try configured()
+        if let run, run.gatewayURL != config.gatewayURL { throw Failure.identity }
+        if let token = capability ?? (asPrincipal ? nil : run?.token) {
+            return try await request(config.gatewayURL, path: path, method: method, token: token,
+                                     payload: payload, maximumBytes: 1_100_000)
+        }
+        let first = try await identity(config)
+        do {
+            return try await request(config.gatewayURL, path: path, method: method, token: first.accessToken,
+                                     payload: payload, maximumBytes: 1_100_000)
+        } catch Failure.rejected(let code, _) where ["authentication_required", "invalid_token", "http_401"].contains(code) {
+            let refreshed = try await identity(config, rejectedAccessToken: first.accessToken)
+            return try await request(config.gatewayURL, path: path, method: method, token: refreshed.accessToken,
+                                     payload: payload, maximumBytes: 1_100_000)
+        }
     }
 
     func start(purpose: HostedInference.Purpose) async throws -> HostedInference.Run {
@@ -244,7 +277,7 @@ actor HostedInferenceClient {
 
     private func request(_ base: URL, path: String, query: String? = nil, method: String,
                          token: String? = nil, publicKey: String? = nil,
-                         body: [String: String]? = nil) async throws -> Data {
+                         body: [String: String]? = nil, payload: Data? = nil, maximumBytes: Int = 65_536) async throws -> Data {
         var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
         components?.percentEncodedQuery = query
         guard let url = components?.url else { throw Failure.notConfigured }
@@ -255,10 +288,24 @@ actor HostedInferenceClient {
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let publicKey { request.setValue(publicKey, forHTTPHeaderField: "apikey") }
         if let body { request.httpBody = try JSONEncoder().encode(body) }
+        if let payload { request.httpBody = payload }
         let data: Data, response: URLResponse
-        do { (data, response) = try await session.data(for: request) }
+        do {
+            if path.hasPrefix("v1/connectors") {
+                request.timeoutInterval = 40
+                let (bytes, received) = try await connectorSession.bytes(for: request)
+                defer { bytes.task.cancel() }
+                guard received.expectedContentLength <= Int64(maximumBytes) else { throw Failure.invalidResponse }
+                var bounded = Data()
+                for try await byte in bytes {
+                    guard bounded.count < maximumBytes else { throw Failure.invalidResponse }
+                    bounded.append(byte)
+                }
+                data = bounded; response = received
+            } else { (data, response) = try await session.data(for: request) }
+        }
         catch { if Task.isCancelled { throw CancellationError() }; throw Failure.unavailable }
-        guard data.count <= 65_536, let http = response as? HTTPURLResponse else { throw Failure.invalidResponse }
+        guard data.count <= maximumBytes, let http = response as? HTTPURLResponse else { throw Failure.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let error = object?["error"] as? [String: Any]
@@ -267,6 +314,7 @@ actor HostedInferenceClient {
             let safeCode = code.count < 80 && code.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") })
                 ? code : "request_rejected"
             let reset = ((error?["reset_at"] ?? object?["reset_at"]) as? String).flatMap(Self.date)
+                ?? ((error?["retry_after"] ?? object?["retry_after"]) as? Double).map { Date().addingTimeInterval(min(300, max(1, $0))) }
             throw Failure.rejected(code: safeCode, resetAt: reset)
         }
         return data

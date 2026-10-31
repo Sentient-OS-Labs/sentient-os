@@ -287,6 +287,7 @@ actor ProactiveExecutor {
         inv.webSearch = false
         inv.timeout = 0 // User-fired actions run until completion, failure or explicit Stop.
         inv.mcpActionServer = slug
+        if slug.hasPrefix("hosted-") { inv.hostedConnectorMode = "action" }
         inv.mcpExpectedIdentity = expectedIdentity
         inv.outlookOperation = outlookOperation
         inv.outlookCalendarOperation = calendarOperation

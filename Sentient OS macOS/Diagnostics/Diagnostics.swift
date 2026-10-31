@@ -178,6 +178,8 @@ nonisolated enum Diagnostics {
         }
         // Payload-free native errors otherwise expose only an unstable numeric enum index.
         if let native = error as? OpenAIComputerUse.RuntimeError { fields["error_case"] = String(describing: native) }
+        if let native = error as? DirectMCPError { fields["error_case"] = native.diagnosticCode }
+        if let native = error as? GranolaResponse.Failure { fields["error_case"] = native.rawValue }
         if let native = error as? NativeComputerUseFailure {
             fields["error_case"] = native.kind.rawValue
             fields["error_domain"] = "native_computer_use"

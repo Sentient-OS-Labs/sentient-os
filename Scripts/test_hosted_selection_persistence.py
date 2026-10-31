@@ -79,6 +79,11 @@ enum ConnectorCensus {
     static let codexSystemSlugs: Set<String> = ["openai-templates", "plugin-management"]
     // CENSUS
 }
+enum HostedConnectorStore {
+    struct Account { let connected: Bool; let detected: ConnectorCensus.DetectedConnector }
+    static func accounts() -> [Account] { [] }
+    static func account(_ slug: String) -> Account? { nil }
+}
 enum ConnectorRegistry {
     // PACK_SHAPE
     static let packs: [CuratedConnector] = ["gmail", "google-calendar", "google-drive", "slack", "outlook-mail", "outlook-calendar"].map {
@@ -143,6 +148,7 @@ fixture = fixture.replace('// PACK_SHAPE', '\n'.join(member(registry, signature)
 )))
 fixture = fixture.replace('// REGISTRY', '\n'.join(member(registry, signature) for signature in (
     'static func kbKey(', 'static func isKBEnabled(', 'static func setKBEnabled(',
+    'static func advanceKnowledgeSelectionRevision(',
     'static func kbEnabledConnectors(', 'static func contributesToKnowledgeBase(',
     'static func kbEligible(', 'static func readGenerationKey(',
 )))
@@ -263,8 +269,8 @@ checks = r'''
             ModelBackend.current = backend
             ConnectorRegistry.setKBEnabled("granola", true)
             ConnectorRegistry.setKBEnabled("direct-deleted", true)
-            check(Set(ProcessingRequest.current().mcpSlugs) == Set(accounts.map(\.slug)),
-                  "provider preference and stale UUID cannot invent an absent direct account")
+            check(Set(ProcessingRequest.current().mcpSlugs) == Set(accounts.map(\.slug)).union(["granola"]),
+                  "saved hosted intent is attempted separately and never invents an absent direct account")
             let removed = accounts[0].detected
             DirectMCPStore.save(Array(accounts.dropFirst()))
             ConnectorRegistry.setKBEnabled(removed.slug, false)
@@ -274,8 +280,11 @@ checks = r'''
             DirectMCPStore.save([])
             check(defaults.native.synchronize(), "direct disconnect is persisted")
         } else if phase == "reopen-disconnected" {
-            check(DirectMCPStore.connections().isEmpty && ProcessingRequest.current().mcpSlugs.isEmpty,
-                  "direct disconnect survives restart despite stale provider and UUID preferences")
+            check(DirectMCPStore.connections().isEmpty && ProcessingRequest.current().mcpSlugs == ["granola"],
+                  "direct disconnect survives restart while independent hosted intent is preserved")
+            ConnectorRegistry.setKBEnabled("granola", false)
+            check(ProcessingRequest.current().mcpSlugs.isEmpty,
+                  "explicit hosted opt-out removes the remaining unsupported-route attempt")
         } else { preconditionFailure("Unknown phase") }
     }
 }

@@ -247,7 +247,7 @@ enum FullAcceptanceTests {
                         // Start the explicit-refresh fixture independently of the preceding
                         // malformed automatic backfill. Gmail retries now resume their plan.
                         if slug == "gmail", let before {
-                            _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: before,
+                            _ = try await store.commitMCPRead(bucketKey: slug, notes: [], through: before,
                                 origin: GoogleSourceRead.origin(bucket: slug), replaceNotes: false)
                         }
                         let calls = OSAllocatedUnfairLock(initialState: 0)
@@ -284,7 +284,7 @@ enum FullAcceptanceTests {
                         let count = await store.notes().filter { $0.bucketKey == slug }.count
                         try require(count == (slug == "gmail" ? 4 : 12), "\(slug) completed first analysis saves summaries without native receipts")
                         let quietBefore = ItemKey(order: Date().addingTimeInterval(-3600).timeIntervalSince1970, tiebreak: "")
-                        _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: quietBefore,
+                        _ = try await store.commitMCPRead(bucketKey: slug, notes: [], through: quietBefore,
                             origin: GoogleSourceRead.origin(bucket: slug), replaceNotes: false)
                         let quietCalls = OSAllocatedUnfairLock(initialState: 0)
                         _ = try await FrontierRun.$acceptanceRun.withValue({ _ in
@@ -298,7 +298,7 @@ enum FullAcceptanceTests {
                         try require(quietCalls.withLock({ $0 }) > 0 && (quietAfter?.order ?? 0) > quietBefore.order,
                                     "\(slug) completed quiet output advances without native receipts")
                         try require(await store.notes().filter { $0.bucketKey == slug }.count == count, "\(slug) completed quiet read preserves pending notes")
-                        _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: ItemKey(order: 42, tiebreak: "fixture"), origin: "previous-engine", replaceNotes: false)
+                        _ = try await store.commitMCPRead(bucketKey: slug, notes: [], through: ItemKey(order: 42, tiebreak: "fixture"), origin: "previous-engine", replaceNotes: false)
                         let backfillCalls = OSAllocatedUnfairLock(initialState: 0)
                         _ = try await FrontierRun.$acceptanceRun.withValue({ invocation in
                             backfillCalls.withLock { $0 += 1 }
@@ -310,7 +310,7 @@ enum FullAcceptanceTests {
                         try require(backfillCalls.withLock { $0 } == (slug == "gmail" ? 4 : 12), "\(slug) changed provenance triggers initial coverage")
                         try require(await store.notes().filter { $0.bucketKey == slug }.count == count, "\(slug) provenance backfill preserves pending summaries")
                         let future = ItemKey(order: Date().addingTimeInterval(3600).timeIntervalSince1970, tiebreak: "")
-                        _ = await store.commitMCPRead(bucketKey: slug, notes: [], through: future,
+                        _ = try await store.commitMCPRead(bucketKey: slug, notes: [], through: future,
                             origin: GoogleSourceRead.origin(bucket: slug), replaceNotes: false)
                         var clockRejected = false
                         do {

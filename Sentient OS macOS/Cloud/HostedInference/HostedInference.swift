@@ -42,7 +42,7 @@ nonisolated enum HostedInference {
         var isUsageLimit: Bool {
             guard case .rejected(let code, _) = self else { return false }
             return ["daily_allowance_exhausted", "daily_limit", "time_limit", "budget_exhausted", "user_budget_exhausted",
-                    "global_budget_exhausted", "bootstrap_exhausted", "background_budget_exhausted", "quota_exhausted", "daily_time_exhausted", "usage_limit_reached", "service_budget_reached"].contains(code)
+                    "global_budget_exhausted", "bootstrap_exhausted", "background_budget_exhausted", "quota_exhausted", "daily_time_exhausted", "usage_limit_reached", "service_budget_reached", "connector_usage_limit", "connector_service_budget"].contains(code)
         }
 
         var errorDescription: String? {
@@ -53,6 +53,14 @@ nonisolated enum HostedInference {
             case .unavailable: return "Sentient-hosted intelligence is temporarily unavailable. Your work has been preserved."
             case .invalidResponse: return "Sentient could not verify its hosted connection. No further work was started."
             case .rejected(let code, _):
+                if code == "connection_required" { return "This service needs a fresh sign-in. Reconnect it in Knowledge Sources; your reading choice is still saved." }
+                if code == "connection_changed" { return "The connected account changed. Start a new task with the intended account." }
+                if ["connector_usage_limit", "connector_service_budget"].contains(code) { return "The cloud-connection allowance is used up for now. Your saved read progress will resume when the allowance resets." }
+                if code == "connector_rate_limited" { return "The connected service is receiving too many requests. Wait a moment, then try again." }
+                if ["connectors_disabled", "connectors_not_configured", "connector_not_configured"].contains(code) { return "This hosted connection is not available in this build yet." }
+                if code == "connector_contract_changed" { return "The service’s tool contract changed. Sentient needs a connector update before this task can continue." }
+                if code == "cursor_expired" { return "The service’s saved read cursor expired. Retry analysis to restart the unfinished window." }
+                if code == "resolution_not_ready" { return "This action is still settling. Stop its task and wait two minutes before reviewing the outcome." }
                 if ["service_budget_reached", "global_budget_exhausted"].contains(code) {
                     return "Sentient's shared hosted allowance is currently unavailable. Try again later or choose your own AI."
                 }

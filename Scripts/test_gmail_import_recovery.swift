@@ -78,7 +78,7 @@ nonisolated enum ConnectorLinks { static func page(for slug: String) -> URL { UR
 @MainActor enum HostedConnectorSetup {
     static func processingStarted(slug: String) { ProcessingSpy.shared.record("hook") }
 }
-nonisolated enum MCPSource { enum MCPError: Error { case clockMovedBackwards, connectionChanged, toolFailure, connectorAuth } }
+nonisolated enum MCPSource { enum MCPError: Error { case clockMovedBackwards, connectionChanged, toolFailure, connectorAuth, storageFailure } }
 nonisolated enum ConnectorReadFailure {
     enum GmailFailure: Error { case accountLimit }
     static func isConnectionFailure(_ error: Error) -> Bool { (error as? MCPSource.MCPError) == .connectorAuth }
@@ -238,7 +238,7 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
             case "initial-write":
                 let old=NoteDraft(kind:.gmail,sourceID:"gmail:prior",folder:"Gmail",itemDate:through,
                                   text:"Previous completed work",title:nil,reminderFlagged:false)
-                _ = await store.commitMCPRead(bucketKey:"gmail",notes:[old],through:prior,origin:"fixture:0",replaceNotes:false)
+                _ = try await store.commitMCPRead(bucketKey:"gmail",notes:[old],through:prior,origin:"fixture:0",replaceNotes:false)
                 let state=try await store.beginGmailRead(initial())
                 for i in [0,2] {_ = try await store.commitGmailWindow(stateID:state.id,origin:state.origin,index:i,note:note(state,i))}
             case "initial-restart":
@@ -282,7 +282,7 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
     static func transactions(_ store: CycleStore) async throws {
         let old = NoteDraft(kind: .gmail, sourceID: "gmail:old", folder: "Gmail", itemDate: through,
                             text: "Previous pending summary", title: nil, reminderFlagged: false)
-        _ = await store.commitMCPRead(bucketKey: "gmail", notes: [old], through: prior, origin: "fixture:0", replaceNotes: false)
+        _ = try await store.commitMCPRead(bucketKey: "gmail", notes: [old], through: prior, origin: "fixture:0", replaceNotes: false)
         let state = try await store.beginGmailRead(initial(replace: true))
         await store.failNextMCPCommitForTesting()
         do {

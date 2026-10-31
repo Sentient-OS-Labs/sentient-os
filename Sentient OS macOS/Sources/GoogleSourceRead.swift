@@ -107,7 +107,7 @@ enum GoogleSourceRead {
                        origin expectedOrigin: String, replace: Bool = false) async throws {
         try Task.checkCancellation()
         guard origin(bucket: bucket) == expectedOrigin else { throw MCPSource.MCPError.connectionChanged }
-        let result = await CycleStore.shared.commitMCPRead(bucketKey: bucket, notes: notes,
+        let result = try await CycleStore.shared.commitMCPRead(bucketKey: bucket, notes: notes,
             through: ItemKey(order: date.timeIntervalSince1970, tiebreak: ""),
             origin: expectedOrigin, replaceNotes: replace)
         if result == .diskFull { throw CocoaError(.fileWriteOutOfSpace) }

@@ -154,7 +154,7 @@ actor CycleStore {
     }
     func mcpCheckpoint(_ bucket: String) throws -> Checkpoint? { checkpoint }
     func commitMCPRead(bucketKey: String, notes: [NoteDraft], through mark: ItemKey,
-                       origin: String, replaceNotes: Bool) async -> Outcome {
+                       origin: String, replaceNotes: Bool) async throws -> Outcome {
         entered = true; enteredWaiter?.resume(); enteredWaiter = nil
         if paused { await withCheckedContinuation { blockedCommit = $0 } }
         checkpoint = Checkpoint(mark: mark, origin: origin); commits += 1

@@ -54,6 +54,7 @@ import Foundation
     var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
 }
 @MainActor enum CodexAuth { static let connectorLockedTip = "Locked" }
+@MainActor enum HostedConnectorStore { static let services: Set<String> = ["gmail", "google-calendar", "google-drive", "slack", "outlook-mail", "outlook-calendar"] }
 @MainActor final class MemoryDefaults {
     var values: [String: Bool] = [:]
     func object(forKey key: String) -> Any? { values[key] }
@@ -61,10 +62,25 @@ import Foundation
 @MainActor enum UserDefaults { static let standard = MemoryDefaults() }
 @MainActor enum ConnectorRegistry {
     static var eligible = true
+    static var directRequired = false
+    static var revisions: [String: String] = [:]
+    static var includedUnavailableDirect = false
     static func kbEligible(_ slug: String, backend: ModelBackend = .current) -> Bool { eligible }
+    static func requiresDirectKnowledgeConnection(_ slug: String, backend: ModelBackend = .current) -> Bool { directRequired }
     static func kbKey(_ slug: String) -> String { "mcp." + slug + ".kb" }
-    static func setKBEnabled(_ slug: String, _ enabled: Bool) { UserDefaults.standard.values[kbKey(slug)] = enabled }
-    static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] { ConnectorCensus.records }
+    static func setKBEnabled(_ slug: String, _ enabled: Bool) {
+        UserDefaults.standard.values[kbKey(slug)] = enabled
+        _ = advanceKnowledgeSelectionRevision(slug)
+    }
+    static func advanceKnowledgeSelectionRevision(_ slug: String) -> String {
+        revisions[slug] = UUID().uuidString
+        return revisions[slug]!
+    }
+    static func knowledgeSelectionRevision(_ slug: String) -> String? { revisions[slug] }
+    static func detectedForCurrentBackend(includeUnavailableDirect: Bool = false) -> [ConnectorCensus.DetectedConnector] {
+        includedUnavailableDirect = includeUnavailableDirect
+        return ConnectorCensus.records
+    }
 }
 @MainActor enum ConnectorCensus {
     struct DetectedConnector {
@@ -137,12 +153,20 @@ import Foundation
 __DEDICATED__
 }
 @MainActor final class GenericFixture {
-    struct Source { let serviceSlug: String }
+    struct Source { let serviceSlug: String; var directProvider: Bool? = true }
+    struct Direct { let slug: String }
     let source: Source
     var hostedBackend: ModelBackend = .chatgpt
     var openedConnectorPage = false
     var hostedSelected = false
     var usesDirect = false
+    var direct: Direct?
+    var repairingHostedKnowledge = false
+    var repairSelection: Bool?
+    var repairRevision: String?
+    var connectionCompleted = false
+    var boundConnectorID: String?
+    var connectCalls = 0
     var busy = false
     var operation: Task<Void, Never>?
     var connectors: [ConnectorCensus.DetectedConnector] = []
@@ -155,6 +179,9 @@ __DEDICATED__
     func tapDone() { done() }
     func stopReading() { stopHostedReading() }
     func openSettings() { openConnectorPage() }
+    func repair() { repairHostedKnowledge() }
+    func finishDirect(_ slug: String) { finishKnowledgeRepair(with: slug) }
+    func connect() { connectCalls += 1 }
 __GENERIC__
 }
 @MainActor struct PillFixture {
@@ -162,6 +189,7 @@ __GENERIC__
         let serviceSlug: String
         let connector: ConnectorCensus.DetectedConnector?
         var usesHostedConnection = true
+        var isDirectSetup = false
     }
     var source: Source
     var knowledgeEnabled = true
@@ -184,6 +212,9 @@ __PILL__
         HostedConnectorSetup.onConfirm = {}; Analytics.signals = 0
         NSWorkspace.shared.succeeds = true; NSWorkspace.shared.urls = []
         ModelBackend.current = .chatgpt; ConnectorRegistry.eligible = true
+        ConnectorRegistry.directRequired = false
+        ConnectorRegistry.revisions = [:]
+        ConnectorRegistry.includedUnavailableDirect = false
         ConnectorCensus.records = []; UserDefaults.standard.values = [:]
     }
     @MainActor static func main() async {
@@ -265,6 +296,8 @@ __PILL__
             sheet.openedConnectorPage = true
             sheet.tapDone()
             check(sheet.hostedSelected && sheet.dismissals == 1, "Hosted Done did not immediately confirm/dismiss")
+            check(ConnectorRegistry.includedUnavailableDirect,
+                  "Hosted Done hid unrelated direct accounts that still need recovery")
             check(HostedConnectorSetup.calls.first?.0 == slug && HostedConnectorSetup.calls.first?.2 == true, "Hosted confirmation lost its source/reconnect")
             ConnectorCensus.records = []
             check(sheet.connected, "Missing cache undid explicit source selection")
@@ -294,11 +327,86 @@ __PILL__
         direct.busy = true; direct.tapDone()
         check(direct.dismissals == 0 && HostedConnectorSetup.calls.isEmpty, "Direct OAuth lost its busy guard")
         direct.busy = false; direct.tapDone()
-        check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == true, "Direct initial selection changed")
+        check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == nil,
+              "Done without an OAuth account invented a knowledge source")
+        direct.direct = .init(slug: "direct-fixture"); direct.tapDone()
+        check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == nil,
+              "Direct Done enabled a visible default-off knowledge toggle")
         check(HostedConnectorSetup.calls.isEmpty, "Direct OAuth was routed through hosted trust")
+        UserDefaults.standard.values["mcp.direct-fixture.kb"] = true
+        direct.tapDone()
+        check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == true,
+              "Direct Done lost an explicit knowledge opt-in")
         UserDefaults.standard.values["mcp.direct-fixture.kb"] = false
         direct.tapDone()
         check(UserDefaults.standard.values["mcp.direct-fixture.kb"] == false, "Direct Settings opt-out was overwritten")
+        reset()
+        let repair = GenericFixture("granola"); repair.hostedSelected = true
+        UserDefaults.standard.values["mcp.granola.kb"] = true
+        repair.repair()
+        check(repair.repairingHostedKnowledge && repair.connectCalls == 1 && repair.repairSelection == true,
+              "Explicit hosted repair did not start a separate account choice")
+        check(UserDefaults.standard.values["mcp.granola.kb"] == true,
+              "Starting or canceling repair retired the hosted selection before OAuth success")
+        repair.finishDirect("direct-chosen")
+        check(UserDefaults.standard.values["mcp.direct-chosen.kb"] == true
+              && UserDefaults.standard.values["mcp.granola.kb"] == false,
+              "Successful explicit repair did not transfer reading to the chosen account")
+        repair.usesDirect = true; repair.direct = .init(slug: "direct-chosen"); repair.tapDone()
+        check(UserDefaults.standard.values["mcp.direct-chosen.kb"] == true,
+              "Done changed a successful explicit repair selection")
+        check(HostedConnectorSetup.calls.isEmpty && ConnectorCensus.records.isEmpty,
+              "Repair changed hosted account metadata instead of only reading selection")
+        reset()
+        let general = GenericFixture("granola"); general.hostedSelected = true
+        UserDefaults.standard.values["mcp.granola.kb"] = true
+        general.finishDirect("direct-added")
+        check(UserDefaults.standard.values["mcp.granola.kb"] == true
+              && UserDefaults.standard.values["mcp.direct-added.kb"] == nil,
+              "Adding a direct account silently consumed hosted reading consent")
+        let stopped = GenericFixture("granola"); stopped.hostedSelected = true; stopped.repair()
+        stopped.hostedSelected = false; UserDefaults.standard.values["mcp.granola.kb"] = false
+        stopped.finishDirect("direct-late")
+        stopped.usesDirect = true; stopped.direct = .init(slug: "direct-late"); stopped.tapDone()
+        check(UserDefaults.standard.values["mcp.granola.kb"] == false
+              && UserDefaults.standard.values["mcp.direct-late.kb"] == nil,
+              "An old repair overwrote a later Stop reading")
+        let renewed = GenericFixture("granola"); renewed.hostedSelected = true
+        ConnectorRegistry.setKBEnabled("granola", true); renewed.repair()
+        ConnectorRegistry.setKBEnabled("granola", false)
+        ConnectorRegistry.setKBEnabled("granola", true)
+        renewed.finishDirect("direct-obsolete")
+        renewed.usesDirect = true; renewed.direct = .init(slug: "direct-obsolete"); renewed.tapDone()
+        check(UserDefaults.standard.values["mcp.granola.kb"] == true
+              && UserDefaults.standard.values["mcp.direct-obsolete.kb"] == nil,
+              "Stop followed by a newer Done was overwritten by an older repair")
+        let repeated = GenericFixture("granola"); repeated.hostedSelected = true; repeated.repair()
+        ConnectorRegistry.setKBEnabled("granola", true)
+        repeated.finishDirect("direct-repeated")
+        repeated.usesDirect = true; repeated.direct = .init(slug: "direct-repeated"); repeated.tapDone()
+        check(UserDefaults.standard.values["mcp.granola.kb"] == true
+              && UserDefaults.standard.values["mcp.direct-repeated.kb"] == nil,
+              "Repeated explicit Done did not retire the earlier repair decision")
+        let first = GenericFixture("granola"); first.hostedSelected = true; first.repair()
+        let latest = GenericFixture("granola"); latest.hostedSelected = true; latest.repair()
+        first.finishDirect("direct-earlier"); latest.finishDirect("direct-latest")
+        check(UserDefaults.standard.values["mcp.direct-earlier.kb"] == nil
+              && UserDefaults.standard.values["mcp.direct-latest.kb"] == true,
+              "An earlier OAuth completion replaced the account chosen by a newer repair")
+        reset()
+        let directOptOut = GenericFixture("granola"); directOptOut.hostedSelected = true; directOptOut.repair()
+        ConnectorRegistry.setKBEnabled("direct-opted-out", false)
+        directOptOut.finishDirect("direct-opted-out")
+        directOptOut.usesDirect = true; directOptOut.direct = .init(slug: "direct-opted-out")
+        directOptOut.connectionCompleted = true; directOptOut.tapDone()
+        check(UserDefaults.standard.values["mcp.direct-opted-out.kb"] == false,
+              "Repair or Done overwrote the chosen direct account's explicit opt-out")
+        ConnectorRegistry.setKBEnabled("direct-opted-out", true)
+        directOptOut.tapDone()
+        check(UserDefaults.standard.values["mcp.direct-opted-out.kb"] == true
+              && UserDefaults.standard.values["mcp.granola.kb"] == false,
+              "Done did not complete the still-authorized repair after explicit direct opt-in")
+        reset()
         var pill = PillFixture(source: .init(serviceSlug: "google-drive", connector: .init(slug: "google-drive")))
         check(pill.isSelected && pill.detailText == nil && pill.statusText == "Selected for analysis and nightly updates.",
               "Explicit Done still appeared to need verification in the source list")
@@ -334,6 +442,9 @@ __PILL__
     generic_done,
     generic_open,
     declaration(generic, "private func stopHostedReading()"),
+    declaration(generic, "private func repairHostedKnowledge()"),
+    declaration(generic, "private func finishKnowledgeRepair(with"),
+    declaration(generic, "private var needsDirectKnowledgeConnection: Bool"),
     declaration(generic, "private var hostedCanRead: Bool"),
     declaration(generic, "private var hostedConnected: Bool"),
 ])).replace("__PILL__", declaration(pills, "private var selected: Bool") + "\n" +
