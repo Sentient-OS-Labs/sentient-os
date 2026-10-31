@@ -176,6 +176,7 @@ def main():
         fixture.write_text(collaborators + caller + FIXTURE)
         binary = root / "hosted-read-storage"
         sources = [APP / "Ingestion/ItemKey.swift", APP / "Ingestion/CycleStore.swift",
+                   APP / "Sources/HostedConnectorReadState.swift",
                    APP / "Sources/GmailReadState.swift", APP / "Sources/GmailConnect.swift",
                    APP / "Ingestion/InitialAnalysisRecovery.swift", fixture]
         subprocess.run(["xcrun", "swiftc", "-DDEBUG", "-parse-as-library", "-default-isolation", "MainActor",

@@ -57,7 +57,7 @@ LOOKUP
 }
 enum ConnectorCensus{
  struct DetectedConnector:Identifiable{
-  enum Origin:String{case chatgpt,claude,direct
+  enum Origin:String{case chatgpt,claude,direct,sentient
    init?(backend:ModelBackend){switch backend{case .chatgpt:self = .chatgpt;case .claude:self = .claude;default:return nil}}
   }
   let slug:String;var displayName:String;let origin:Origin
@@ -76,6 +76,11 @@ struct CuratedConnector{
  let slug:String;let displayName:String;var directProvider:DirectMCPProvider?=nil
  var capturedProvisional=false;var claudeServerURL:String?=nil;var claudeToolPrefix:String?=nil
  var codexCatalogID:String?=nil;var readTools:[String]?=nil;var codexReadTools:[String]?=nil
+}
+enum HostedConnectorStore {
+ struct Account { let service:String;let connected:Bool;let detected:ConnectorCensus.DetectedConnector }
+ static func accounts()->[Account]{[]}
+ static func account(_ slug:String)->Account?{nil}
 }
 enum ConnectorRegistry{
  static let packs:[CuratedConnector]=[

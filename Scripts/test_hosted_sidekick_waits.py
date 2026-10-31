@@ -47,6 +47,7 @@ nonisolated enum SidekickToolServer { static let name = "sentient_recovery" }
 nonisolated enum Diagnostics { static func isCancellation(_ error: Error) -> Bool { error is CancellationError } }
 nonisolated enum AgentRunDiagnostics { enum Reason: String { case unknown; static func classify(_ text: String) -> Self { .unknown } } }
 nonisolated enum CrashReporting {
+    static func diagnosticBreadcrumb(_ name: String, data: [String:String]) {}
     enum Level { case info }
     static func captureEvent(_ name: String, level: Level, tags: [String:String], extra: [String:String],
                              fingerprint: [String], cooldown: TimeInterval, includeInformational: Bool) {}

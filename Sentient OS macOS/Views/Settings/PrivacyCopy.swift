@@ -6,6 +6,7 @@
 import Foundation
 
 enum PrivacyCopy {
+    static let hostedConnectors = "Composio stores and refreshes this service’s credentials. Selected content passes through Composio and Sentient to Anthropic. Standard logs can retain requests and results for up to one year; zero retention requires an eligible project configuration. Drive content downloads use temporary file storage for up to 24 hours, including with ZDR. Disconnect to stop future access. Summaries are saved to your knowledge base."
     struct Section: Identifiable, Sendable {
         let id: String
         let title: String
@@ -64,13 +65,14 @@ enum PrivacyCopy {
             "Choose your own ChatGPT or Claude account, a compatible API provider such as OpenRouter, or a supported larger local model for knowledge organization, proactive intelligence, and Sidekick. Apple Mail and Calendar work without a ChatGPT or Claude subscription. Model capabilities and hardware needs depend on your setup.",
             "Sidekick uses your request, relevant knowledge, and screen or app context to carry out your task. Cloud models process this context under your chosen provider’s account settings, training choices, and retention policies. Double Tap has its own provider setting.",
             "Sidekick keeps your last 15 requests, task statuses, and recovery errors on this Mac. Relevant task history may be included as context for your next Sidekick task and processed by your chosen AI.",
-            "Connected services use the connections you authorize. Direct connections keep their credentials in your Mac’s Keychain; hosted connections use your own supported AI account. You do not need to create a separate Sentient account or login.",
+            "Connected services use the connections you authorize. Direct Notion and Granola connections keep credentials in your Mac’s Keychain. ChatGPT and Claude connectors use those AI accounts; Sentient-hosted cloud connections use Composio, as described below. You do not need a separate Sentient or Composio login.",
         ]),
         Section(id: "sentient-inference", title: "Hosted inference, covered by Sentient.", paragraphs: [
             sentientInference,
             sentientContext,
             sentientLimits,
             sentientIdentity,
+            hostedConnectors,
             "Sentient records usage and operational metadata to enforce allowances and operate the service. Optional knowledge sharing remains a separate choice; turning it off does not turn off hosted inference. Choose another frontier model to stop using Sentient’s hosted inference for new tasks.",
         ]),
         Section(id: "double-tap", title: "Fast replies, with privacy built in.", paragraphs: [

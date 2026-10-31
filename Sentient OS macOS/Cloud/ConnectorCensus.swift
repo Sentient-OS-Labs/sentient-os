@@ -29,6 +29,7 @@ nonisolated enum ConnectorCensus {
             case claude    // a claude.ai account connector (`claude mcp list`)
             case chatgpt   // a ChatGPT account connector (the codex plugins cache)
             case direct    // Step D: a spec-compliant remote MCP server, Sentient-owned OAuth
+            case sentient  // Server-owned Composio account; never a subscription census record.
 
             /// The origin an engine's census produces — a custom endpoint has no account to
             /// carry connectors, so it maps to none.
@@ -63,7 +64,10 @@ nonisolated enum ConnectorCensus {
         /// and account-bound checkpoints. A direct selection must still name a stored account;
         /// its prior health cannot prevent another attempt using the actual OAuth grant.
         var canAttempt: Bool {
-            origin != .direct || DirectMCPStore.connection(slug) != nil
+            // This is the explicit OAuth lifecycle, not a cached read-health observation.
+            // Failed reads never change it; disconnect/reconnect do invalidate authority.
+            if origin == .sentient { return HostedConnectorStore.account(slug)?.connected == true }
+            return origin != .direct || DirectMCPStore.connection(slug) != nil
         }
 
         var id: String { "\(origin.rawValue):\(slug)" }
@@ -257,7 +261,7 @@ nonisolated enum ConnectorCensus {
         case .chatgpt:
             guard let account = CodexRuntime.accountIdentity else { return nil }
             return "mcp.connectors.chatgpt.\(CodexRuntime.sessionScope).\(account)"
-        case .direct:  return nil   // DirectMCPStore owns this tier; it is not a CLI census.
+        case .direct, .sentient: return nil // Account stores own these tiers, not CLI census.
         }
     }
 

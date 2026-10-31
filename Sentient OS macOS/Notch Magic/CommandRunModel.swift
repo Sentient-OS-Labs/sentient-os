@@ -163,6 +163,8 @@ final class CommandRunModel {
                         guard self?.runID == generation else { throw CancellationError() }
                         owner.isPreparing = false
                         owner.statusLine = "Starting Sidekick…"
+                        try await HostedConnectorAuthorization.authorize(task0)
+                        try Task.checkCancellation()
                         // Capture after required permissions settle. Frames go to the user's
                         // own model provider and are deleted when this request ends.
                         let shots = await ScreenCapture.grab()

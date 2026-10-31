@@ -8,11 +8,12 @@ actor HostedVaultToolServer {
     nonisolated static let toolNames = ["vault_list", "vault_read", "vault_write", "vault_edit"]
     @TaskLocal static var connection: LocalMCPServer.Connection?
     private let files: HostedVaultFiles
+    private let readOnly: Bool
     private var transport: LocalMCPServer?
     private var closed = false
     private var calls: [String: (fingerprint: Data, result: Data)] = [:]
 
-    init(root: URL) throws { files = try HostedVaultFiles(root: root) }
+    init(root: URL, readOnly: Bool = false) throws { files = try HostedVaultFiles(root: root); self.readOnly = readOnly }
 
     nonisolated static let instructions = """
     KNOWLEDGE FILE TOOLS:
@@ -27,6 +28,17 @@ actor HostedVaultToolServer {
     """
 
     static func validateInvocation(_ invocation: CodexCLI.Invocation) throws {
+        if let root = invocation.hostedVaultReadRoot {
+            guard ModelBackend.current == .sentient, invocation.hostedVaultRoot == nil,
+                  invocation.cwd == root, invocation.sandbox == .readOnly, !invocation.bypassApprovals,
+                  !invocation.toolsDisabled, !invocation.webSearch, invocation.addDirs.isEmpty,
+                  invocation.configOverrides != CodexCLI.Invocation.approveConnectorWrites,
+                  invocation.mcpActionServer == nil, invocation.mcpAttachServer == nil,
+                  connection?.tools == ["vault_list", "vault_read"] else {
+                throw CodexCLI.CLIError.notAvailable(.notWorking("Invalid hosted knowledge read configuration."))
+            }
+            return
+        }
         let active = invocation.hostedVaultRoot != nil || connection != nil
         // Hosted workspace edits must never silently regain unrestricted Claude file tools.
         if ModelBackend.current == .sentient, invocation.sandbox == .workspaceWrite, !active {
@@ -44,10 +56,10 @@ actor HostedVaultToolServer {
         }
     }
 
-    static func withConnection<T>(root: String?, _ body: () async throws -> T) async throws -> T {
+    static func withConnection<T>(root: String?, readOnly: Bool = false, _ body: () async throws -> T) async throws -> T {
         guard let root else { return try await $connection.withValue(nil) { try await body() } }
         guard ModelBackend.current == .sentient else { throw HostedVaultFiles.Failure.invalidArguments }
-        let server = try HostedVaultToolServer(root: URL(fileURLWithPath: root))
+        let server = try HostedVaultToolServer(root: URL(fileURLWithPath: root), readOnly: readOnly)
         do {
             let connection = try await server.start()
             let value = try await withTaskCancellationHandler {
@@ -57,7 +69,7 @@ actor HostedVaultToolServer {
         } catch { await server.stop(); throw error }
     }
     func start() async throws -> LocalMCPServer.Connection {
-        let transport = LocalMCPServer(name: Self.name, tools: Self.toolNames, timeout: 60,
+        let transport = LocalMCPServer(name: Self.name, tools: readOnly ? ["vault_list", "vault_read"] : Self.toolNames, timeout: 60,
                                       maximumBody: 1_024 * 1_024) { [weak self] data in
             guard let self else { throw CancellationError() }
             return try await self.response(data)
@@ -80,10 +92,11 @@ actor HostedVaultToolServer {
             return try reply(["protocolVersion": versions.contains(requested) ? requested : versions[0],
                               "capabilities": ["tools": [:]], "serverInfo": ["name": Self.name, "version": "1"]])
         case "ping": return try reply([:])
-        case "tools/list": return try reply(["tools": Self.tools])
+        case "tools/list": return try reply(["tools": Self.tools.filter { !readOnly || ["vault_list", "vault_read"].contains($0["name"] as? String ?? "") }])
         case "tools/call":
             guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String,
-                  Self.toolNames.contains(name), let arguments = params["arguments"] as? [String: Any] else {
+                  Self.toolNames.contains(name), (!readOnly || ["vault_list", "vault_read"].contains(name)),
+                  let arguments = params["arguments"] as? [String: Any] else {
                 return try reply(Self.failure("invalid_arguments"))
             }
             let key = String(decoding: try Self.json(id), as: UTF8.self), fingerprint = Data(SHA256.hash(data: try Self.json(params)))

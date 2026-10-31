@@ -79,6 +79,11 @@ enum ConnectorCensus {
     static let codexSystemSlugs: Set<String> = ["openai-templates", "plugin-management"]
     // CENSUS
 }
+enum HostedConnectorStore {
+    struct Account { let connected: Bool; let detected: ConnectorCensus.DetectedConnector }
+    static func accounts() -> [Account] { [] }
+    static func account(_ slug: String) -> Account? { nil }
+}
 enum ConnectorRegistry {
     // PACK_SHAPE
     static let packs: [CuratedConnector] = ["gmail", "google-calendar", "google-drive", "slack", "outlook-mail", "outlook-calendar"].map {

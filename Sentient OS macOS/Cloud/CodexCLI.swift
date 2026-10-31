@@ -101,6 +101,7 @@ actor CodexCLI {
         var addDirs: [String] = []             // extra writable roots beyond cwd
         var webSearch = true                   // native web_search tool — available to EVERY call
         var hostedVaultRoot: String? = nil     // explicit staged Markdown capability for Sentient-hosted knowledge edits
+        var hostedVaultReadRoot: String? = nil // confined knowledge reads during hosted connector research
         var includeUserConfig = true           // load Sentient's private config + MCP servers (e.g.
                                                // their Gmail MCP) for EVERY call. Set false for a
                                                // hermetic run (then we pass --ignore-user-config).
@@ -171,6 +172,7 @@ actor CodexCLI {
             copy.mcpReadConnectors = mcpReadConnectors.map(ConnectorRegistry.canonicalSlug)
             return copy
         }
+        var hostedConnectorMode = "read" // External mutations require a user-fired action invocation.
         var mcpExpectedIdentity: String? = nil
         var slackExpectedMessage: String? = nil
         /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
@@ -717,6 +719,7 @@ actor CodexCLI {
         let nativeOverrides = try nativeConnection?.codexOverrides ?? (nativeConfiguration ?? .resolve()).codexOverrides
         for override in nativeOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
+        for override in HostedConnectorToolServer.connection?.codexOverrides ?? [] { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             // Research and app actions share one task; do not depend on CLI search defaults.
             args += ["-c", "web_search=\"live\""]
@@ -801,6 +804,7 @@ actor CodexCLI {
                 // tool activity needed by Sidekick recovery.
                 onLine("codex")
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName }
+                    + (HostedConnectorToolServer.connection == nil ? [] : ["mcp__sentient_connectors"])
                     + (SidekickToolServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
                     timeout: timeout, namespaces: namespaces,

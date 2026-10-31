@@ -1,0 +1,278 @@
+{
+  "verified_on": "2026-10-29",
+  "development_base": "e8fed23",
+  "builds": {
+    "Debug": "passed",
+    "Release": "passed",
+    "isolated_derived_data": true,
+    "code_signing": false
+  },
+  "server_tests": {
+    "passed": 68,
+    "failed": 0,
+    "database": "PGlite executing production PostgreSQL migration and RPC"
+  },
+  "actual_app": {
+    "phases": [
+      {
+        "checks": {
+          "inference_only_reset_needs_no_connector_service_or_keychain": true,
+          "isolated_defaults": true,
+          "unfinished_authorization_cannot_skip_cleanup": true
+        },
+        "passed": true,
+        "phase": "lifecycle"
+      },
+      {
+        "checks": {
+          "failed_read_still_admitted": true,
+          "interrupted_page_saved": true,
+          "isolated_defaults": true,
+          "oauth_completed": true,
+          "processing_admits_selection": true,
+          "real_failure_reported": true,
+          "subscription_gmail_not_borrowed": true,
+          "unfinished_window_does_not_advance_watermark": true
+        },
+        "passed": true,
+        "phase": "source-first"
+      },
+      {
+        "checks": {
+          "completed_windows_advance_watermark": true,
+          "isolated_defaults": true,
+          "processing_admits_selection": true,
+          "recovered_analysis_succeeded": true,
+          "reopened_selection_preserved": true,
+          "resumed_without_duplicate_pages": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "source-complete"
+      },
+      {
+        "checks": {
+          "isolated_defaults": true,
+          "one_foreground_scope": true,
+          "processing_admits_selection": true,
+          "structured_real_cli_completed": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "structured"
+      },
+      {
+        "checks": {
+          "bridge_completed": true,
+          "isolated_defaults": true,
+          "processing_admits_selection": true,
+          "real_codex_bridge_exit": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "bridge"
+      },
+      {
+        "checks": {
+          "computer_read_has_no_send_tool": true,
+          "isolated_defaults": true,
+          "late_inventory_cannot_roll_back_account": true,
+          "processing_admits_selection": true,
+          "read_request_clears_write_authority": true,
+          "requested_write_attaches": true,
+          "router_captures_requested_write": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "policy"
+      },
+      {
+        "checks": {
+          "cursor_restart_removes_entire_unfinished_window": true,
+          "failed_cursor_restart_preserves_cursor": true,
+          "failed_cursor_restart_preserves_notes": true,
+          "initial_recovery_preserves_committed_pages": true,
+          "initial_recovery_preserves_durable_pagination": true,
+          "isolated_defaults": true,
+          "processing_admits_selection": true,
+          "reconnect_retires_old_generation_pending_notes": true,
+          "stale_generation_cannot_publish": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "recovery"
+      },
+      {
+        "checks": {
+          "all_96_pages_have_unique_pending_summaries": true,
+          "bounded_progress_is_not_replayed_0": true,
+          "bounded_progress_is_not_replayed_1": true,
+          "bounded_progress_is_not_replayed_2": true,
+          "bounded_progress_is_not_replayed_3": true,
+          "bounded_progress_is_not_replayed_4": true,
+          "isolated_defaults": true,
+          "large_import_advances_watermark_only_when_complete": true,
+          "large_import_finishes_after_bounded_attempts": true,
+          "page_limit_is_partial_0": true,
+          "page_limit_is_partial_1": true,
+          "page_limit_is_partial_2": true,
+          "page_limit_is_partial_3": true,
+          "partial_import_keeps_watermark_0": true,
+          "partial_import_keeps_watermark_1": true,
+          "partial_import_keeps_watermark_2": true,
+          "partial_import_keeps_watermark_3": true,
+          "processing_admits_selection": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "bounded"
+      },
+      {
+        "checks": {
+          "isolated_defaults": true,
+          "processing_admits_selection": true,
+          "real_cli_selected_and_summarized_source_evidence": true,
+          "real_cli_summary_published_with_checkpoint": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "summary-cli"
+      },
+      {
+        "checks": {
+          "connection_view_rendered": true,
+          "hosted_picker_stays_hidden": true,
+          "isolated_defaults": true,
+          "processing_admits_selection": true,
+          "subscription_gmail_not_borrowed": true
+        },
+        "passed": true,
+        "phase": "render"
+      }
+    ],
+    "total_checks": 75,
+    "real_clis": true,
+    "provider_data": "synthetic",
+    "native_tool": "synthetic; no desktop access"
+  },
+  "gateway": {
+    "modelCalls": 6,
+    "toolResults": 2,
+    "selectionCalls": 1,
+    "summaryCalls": 1,
+    "operations": [
+      {
+        "tool": "gmail_read",
+        "status": "completed",
+        "count": 108
+      },
+      {
+        "tool": "gmail_search",
+        "status": "failed",
+        "count": 1
+      },
+      {
+        "tool": "gmail_search",
+        "status": "completed",
+        "count": 106
+      }
+    ],
+    "runs": [
+      {
+        "purpose": "sidekick",
+        "phase": "completed",
+        "count": 3
+      },
+      {
+        "purpose": "knowledge_update",
+        "phase": "completed",
+        "count": 8
+      }
+    ]
+  },
+  "regression_suites": [
+    {
+      "name": "test_hosted_claude_runtime",
+      "passed": true
+    },
+    {
+      "name": "test_hosted_source_readiness",
+      "passed": true
+    },
+    {
+      "name": "test_hosted_sidekick_waits",
+      "passed": true
+    },
+    {
+      "name": "test_hosted_inference_client",
+      "passed": true
+    },
+    {
+      "name": "test_hosted_vault_tools",
+      "passed": true
+    },
+    {
+      "name": "test_gmail_import_recovery",
+      "passed": true
+    },
+    {
+      "name": "test_connector_read_failures",
+      "passed": true
+    },
+    {
+      "name": "test_source_consent",
+      "passed": true
+    },
+    {
+      "name": "test_onboarding_provider_selection",
+      "passed": true
+    },
+    {
+      "name": "test_private_codex_sessions",
+      "passed": true
+    },
+    {
+      "name": "test_initial_analysis_resume",
+      "passed": true
+    },
+    {
+      "name": "test_google_read_origins",
+      "passed": true
+    },
+    {
+      "name": "test_processing_source_readiness",
+      "passed": true
+    },
+    {
+      "name": "test_sidekick_lifecycle",
+      "passed": true
+    }
+  ],
+  "real_service": {
+    "project_configuration_and_tool_contracts": "verified via current authenticated Composio v3.1 API",
+    "session_create_inventory_delete": "passed without a connected account",
+    "google_oauth": {
+      "gmail": "blocked by Google before consent",
+      "google-calendar": "blocked by Google before consent",
+      "google-drive": "blocked by Google before consent"
+    },
+    "real_content_reads": 0,
+    "real_sends_or_creates": 0,
+    "remaining_test_connections": 0,
+    "slack_and_outlook": "not tested with real accounts"
+  },
+  "deployment": {
+    "worker_bundle_dry_run": "passed",
+    "legacy_relay_hash_verified": true,
+    "production_actions_performed": [],
+    "hosted_routes_enabled": false,
+    "funded_policies_changed": false,
+    "provider_ui_exposed": false
+  },
+  "manual_acceptance": [
+    "Approved OAuth apps and real service reads/actions for the supported capability matrix",
+    "Real Supabase Auth and multi-process staging database concurrency",
+    "Signed builds and actual native desktop permissions",
+    "Operator-owned deployment, funded policy, retention decision and app endpoint"
+  ]
+}

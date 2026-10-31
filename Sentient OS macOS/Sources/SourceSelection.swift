@@ -201,7 +201,7 @@ enum SourceSelection {
         let packs = readyConnectors.compactMap { ConnectorRegistry.pack(for: $0) }
         let email = hostedSourceReady("gmail")
             || (!AppleMailSelection.accounts.isEmpty && ProtectedLocalSource.mail.isReadable)
-            || packs.contains { $0.slug == OutlookMailConnector.slug }
+            || packs.contains { ["gmail", OutlookMailConnector.slug].contains($0.slug) }
         let calendar = hostedSourceReady("calendar")
             || packs.contains { $0.providesCalendarContext }
             || AppleCalendarSource.isEnabled

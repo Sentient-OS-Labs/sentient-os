@@ -78,7 +78,7 @@ nonisolated enum ConnectorLinks { static func page(for slug: String) -> URL { UR
 @MainActor enum HostedConnectorSetup {
     static func processingStarted(slug: String) { ProcessingSpy.shared.record("hook") }
 }
-nonisolated enum MCPSource { enum MCPError: Error { case clockMovedBackwards, connectionChanged, toolFailure, connectorAuth } }
+nonisolated enum MCPSource { enum MCPError: Error { case clockMovedBackwards, connectionChanged, toolFailure, connectorAuth, storageFailure } }
 nonisolated enum ConnectorReadFailure {
     enum GmailFailure: Error { case accountLimit }
     static func isConnectionFailure(_ error: Error) -> Bool { (error as? MCPSource.MCPError) == .connectorAuth }

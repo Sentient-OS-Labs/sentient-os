@@ -32,6 +32,7 @@ def main():
             APP / "Ingestion/ItemKey.swift",
             APP / "Ingestion/CycleStore.swift",
             APP / "Sources/GmailReadState.swift",
+            APP / "Sources/HostedConnectorReadState.swift",
             APP / "Sources/GmailConnect.swift",
             ROOT / "Scripts/test_gmail_import_recovery.swift",
             APP / "Ingestion/InitialAnalysisRecovery.swift",
@@ -49,7 +50,8 @@ def main():
         models = (APP / "Ingestion/CycleStore.swift").read_text().split("// MARK: - The actor")[0]
         assert "    var gmailReadState: Data? = nil\n" in models
         legacy = root / "LegacyModels.swift"
-        legacy.write_text(models.replace("    var gmailReadState: Data? = nil\n", ""))
+        legacy.write_text(models.replace("    var gmailReadState: Data? = nil\n", "")
+                          .replace("    var hostedConnectorReadState: Data? = nil\n", ""))
         collaborators = (ROOT / "Scripts/test_gmail_import_recovery.swift").read_text().split("extension CycleStore {")[0]
         old_main = root / "LegacyMain.swift"
         old_main.write_text(collaborators + r'''

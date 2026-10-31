@@ -34,6 +34,11 @@ nonisolated final class SidekickInteraction: Sendable {
     }
     private let wait = OSAllocatedUnfairLock(initialState: Wait())
     private let hosted = OSAllocatedUnfairLock<HostedInference.Run?>(initialState: nil)
+    private let hostedWriteTargets = OSAllocatedUnfairLock(initialState: Set<String>())
+    /// Captured from the current request by HostedConnectorAuthorization before any external
+    /// content is read. Later tool output cannot widen a computer task's cloud authority.
+    var authorizedHostedWrites: Set<String> { hostedWriteTargets.withLock { $0 } }
+    func authorizeHostedWrites(_ targets: Set<String>) { hostedWriteTargets.withLock { $0 = targets } }
 
     /// Local MCP callbacks do not inherit task locals. Retain only the active run's short-lived
     /// authority so an explicit user question can pause and resume its server-side allowance.

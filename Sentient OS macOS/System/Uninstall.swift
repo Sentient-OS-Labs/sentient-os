@@ -165,11 +165,14 @@ enum Uninstall {
             appState?.isUninstalling = false
             return false
         }
-        do { try await DirectMCPConnections.shared.removeAll() }
+        do {
+            try await HostedConnectorClient.shared.disconnectAll()
+            try await DirectMCPConnections.shared.removeAll()
+        }
         catch {
             Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "connector_credentials", error: error)
-            Log("Uninstall: direct-connection Keychain cleanup needs retry")
-            lastFailure = "Uninstall paused because saved app connections couldn't be removed from Keychain. Unlock your Mac and retry to finish removing Sentient."
+            Log("Uninstall: connection cleanup needs retry")
+            lastFailure = "Uninstall paused because saved app connections could not be fully removed. Check your connection, unlock your Mac and retry."
             appState?.isUninstalling = false
             return false
         }

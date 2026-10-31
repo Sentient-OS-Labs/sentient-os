@@ -938,10 +938,10 @@ enum ConnectorLab {
             }
             let t0 = Date()
             let route = await CommandRouter.route(command, services: services)
-            if let wanted = mailOperations[command], case .connector(_, _, _, let operation, _) = route, operation != wanted {
+            if let wanted = mailOperations[command], case .connector(_, _, _, let operation, _, _) = route, operation != wanted {
                 otherMisses += 1; Log("FAIL Outlook operation: expected \(wanted.rawValue)")
             }
-            if let wanted = calendarOperations[command], case .connector(_, _, _, _, let operation) = route, operation != wanted {
+            if let wanted = calendarOperations[command], case .connector(_, _, _, _, let operation, _) = route, operation != wanted {
                 otherMisses += 1; Log("FAIL Calendar operation: expected \(wanted.rawValue)")
             }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
@@ -949,11 +949,11 @@ enum ConnectorLab {
             let got: String
             switch route {
             case .computer:                  got = "computer"
-            case .connector(let slug, _, _, _, _):    got = "connector(\(slug))"
+            case .connector(let slug, _, _, _, _, _):    got = "connector(\(slug))"
             }
             let verdict: String
             switch (expected, route) {
-            case (.connector(let want), .connector(let slug, _, _, _, _)):
+            case (.connector(let want), .connector(let slug, _, _, _, _, _)):
                 if slug == want { verdict = "PASS " } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.connector, .computer):
                 connectorToComputer += 1; verdict = "miss  (→ computer, counts vs the ≤2 budget)"
@@ -965,7 +965,7 @@ enum ConnectorLab {
                 verdict = "PASS "
             case (.computer, .connector):
                 otherMisses += 1; verdict = "FAIL  (multi/oddball → connector)"
-            case (.either(let want), .connector(let slug, _, _, _, _)):
+            case (.either(let want), .connector(let slug, _, _, _, _, _)):
                 if slug == want { verdict = "PASS  (the better route)" } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.either, .computer):
                 eitherComputer += 1; verdict = "PASS  (acceptable)"

@@ -54,6 +54,7 @@ import Foundation
     var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
 }
 @MainActor enum CodexAuth { static let connectorLockedTip = "Locked" }
+@MainActor enum HostedConnectorStore { static let services: Set<String> = ["gmail", "google-calendar", "google-drive", "slack", "outlook-mail", "outlook-calendar"] }
 @MainActor final class MemoryDefaults {
     var values: [String: Bool] = [:]
     func object(forKey key: String) -> Any? { values[key] }
