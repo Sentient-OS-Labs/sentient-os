@@ -90,12 +90,18 @@ struct NativeHelperPermissionNoteView: View {
             Text("Enable Accessibility and Screenshots (Screen Recording).")
                 .font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
             Text("You don’t need to enable the browser extension. Sentient doesn’t use it.")
-                .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                .font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(16)
-        .background(Color(white: 0.045), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.16), lineWidth: 1))
+        .background { PermissionWindowAtmosphere() }
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(LinearGradient(
+                    colors: [Theme.dawnCyan.opacity(0.95), Theme.accent.opacity(0.85)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+        }
         .preferredColorScheme(.dark)
     }
 }
