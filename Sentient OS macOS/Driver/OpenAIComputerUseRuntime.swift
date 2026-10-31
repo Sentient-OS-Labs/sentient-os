@@ -228,11 +228,19 @@ final class OpenAIComputerUseRuntime {
         } catch { endTask(id); throw error }
     }
 
+    /// Sample before the last client closes, which can normally terminate the helper.
+    /// A recovered session may own a replacement process rather than the initial handle.
+    func recordHelperBeforeCleanup(_ id: UUID) {
+        guard taskHelpers.removeValue(forKey: id) != nil else { return }
+        let expected = activeConfiguration?.appURL.standardizedFileURL
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+            .contains { !$0.isTerminated && $0.bundleURL?.standardizedFileURL == expected }
+        AgentRunDiagnostics.current?.recordHelper(running: running, atStart: false)
+        CrashReporting.diagnosticBreadcrumb("computer_use.task_ended", data: ["helper_running": String(running)])
+    }
+
     func endTask(_ id: UUID) {
-        if let app = taskHelpers.removeValue(forKey: id) {
-            AgentRunDiagnostics.current?.recordHelper(running: !app.isTerminated, atStart: false)
-            CrashReporting.diagnosticBreadcrumb("computer_use.task_ended", data: ["helper_running": String(!app.isTerminated)])
-        }
+        recordHelperBeforeCleanup(id)
         activeTasks.remove(id)
         if activeTasks.isEmpty { activeConfiguration = nil }
     }

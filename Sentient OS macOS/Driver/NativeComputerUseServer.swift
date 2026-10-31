@@ -21,6 +21,8 @@ actor NativeComputerUseServer {
     private var closed = false
     private var busy = false
     private var offeredPermissionSetup = false
+    private var reopenOnNextRead = false
+    private var recoveredSinceLastState = false
     private var fingerprints: [Data: Data] = [:]
     private var replies: [Data: Data] = [:]
     private var replyOrder: [Data] = []
@@ -318,11 +320,21 @@ actor NativeComputerUseServer {
     /// restart a healthy session merely because a native tool returned an error.
     private func currentSession(for tool: String) async throws -> OpenAIComputerUseSession {
         guard !closed else { throw CancellationError() }
+        if reopenOnNextRead, tool == "get_app_state" || tool == "list_apps" {
+            reopenOnNextRead = false
+            recoveredSinceLastState = true
+            await session?.close()
+            session = nil
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
+        }
         if let session, await session.isUsable() { return session }
         guard tool == "get_app_state" || tool == "list_apps" else {
             throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .disconnected, stage: .transport)
         }
         await session?.close(); session = nil
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
         let diagnostics = CaptureDiagnostics(source: .native, context: diagnosticContext)
         diagnostics.record(.started, fields: ["recovery_decision": "reopen_on_read", "tool": tool])
         let opened = try await openSession()
@@ -361,7 +373,11 @@ actor NativeComputerUseServer {
                 nativeError = result
                 throw NativeComputerUseFailure.classify(result, stage: isState ? .appState : .action)
             }
-            if isState { result = try OpenAIComputerUseProbe.appStateResult(result) }
+            if isState {
+                result = try OpenAIComputerUseProbe.appStateResult(result)
+                reopenOnNextRead = false
+                recoveredSinceLastState = false
+            }
             diagnostics.record(.passed, fields: evidence.merging([
                 "tool": tool, "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000))
             ]) { _, new in new })
@@ -377,6 +393,9 @@ actor NativeComputerUseServer {
                 ?? .init(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
             failure.actionEffectsUnconfirmed = dispatched && tool != "list_apps" && !isState
             NativeComputerUseErrorLog.record(tool: tool, failure: failure)
+            if failure.permitsSessionRecovery, !recoveredSinceLastState {
+                reopenOnNextRead = true
+            }
             if failure.kind == .permission || failure.requiresSystemPermissionSetup {
                 let permissionFailure = failure
                 await MainActor.run { NativePermissionCheck.shared.invalidate(failure: permissionFailure) }

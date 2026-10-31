@@ -151,6 +151,12 @@ final class MockHTTP: URLProtocol, @unchecked Sendable {
             "message": "screen capture failed"]])
         check(declined.kind == .permission && !ComputerUseCheckReport.allowsConnectionRepair(declined),
               "An explicit OS capture denial needs a grant, not repeated helper restarts")
+        let capture = NativeComputerUseFailure.classify(["error": ["domain": "SCStreamErrorDomain", "code": -3811,
+            "message": "Failed to start due to video/audio capture failure"]])
+        check(capture.kind == .capture && capture.detail == .screenCaptureFailed, "OS internal capture failure remains distinct from a grant denial")
+        check(ComputerUseCheckReport.allowsConnectionRepair(capture) && capture.permitsSessionRecovery, "Typed capture failure can recover its session")
+        check(!capture.requiresSystemPermissionSetup, "Internal capture failure never opens grant setup")
+        check(ComputerUseCheckReport.allowsConnectionRepair(.init(kind: .timeout, code: -10005, detail: .timeoutReached)), "Native timeouts can be repaired like RPC deadlines")
         check(ComputerUseCheckReport.outcome(for: declined) == .permissionsNeeded, "OS denial routes to specific permission help")
         for detail in [NativeComputerUseFailure.Detail.senderNotAuthenticated, .approvalDenied, .blockedByPolicy] {
             check(ComputerUseCheckReport.outcome(for: .init(kind: .permission, code: nil, detail: detail)) == .needsAttention,

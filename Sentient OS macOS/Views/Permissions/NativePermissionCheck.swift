@@ -290,7 +290,10 @@ import Observation
         let configuration = try supplied.afterRuntimeLease()
         _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
         try ensureOperation(attempt)
-        for startupAttempt in 0..<2 {
+        var setupDeadline: TimeInterval?
+        // One initial connection, one startup replacement, and one grant-driven relaunch.
+        // Only the helper's read-only setup request can retry across that relaunch.
+        for startupAttempt in 0..<3 {
             var opened: OpenAIComputerUseSession?
             var stage = ProofStage.helperStart
             var began = Date()
@@ -319,9 +322,16 @@ import Observation
                 let result: NativePermissionReadiness.Snapshot
                 if useHelperSetup {
                     stage = .windowRead; began = Date()
+                    let deadline = setupDeadline
+                        ?? (ProcessInfo.processInfo.systemUptime + OpenAIComputerUseSession.permissionSetupTimeout)
+                    setupDeadline = deadline
+                    let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                    guard remaining > 0 else {
+                        throw NativeComputerUseFailure(kind: .timeout, code: nil, detail: .requestTimedOut, stage: .probe)
+                    }
                     result = try await NativeHelperPermissionNote.withGuide(appURL: configuration.appURL) {
                         try await NativePermissionReadiness.helperSetup { tool, arguments in
-                            try await session.call(tool, arguments: arguments)
+                            try await session.call(tool, arguments: arguments, timeout: remaining)
                         }
                     }
                 } else {
@@ -365,7 +375,17 @@ import Observation
                 return
             } catch {
                 recordProofStage(stage, began: began, error: error, helperStable: helperStable)
+                if let failure = error as? NativeComputerUseFailure {
+                    NativeComputerUseErrorLog.record(tool: "permission_setup", failure: failure)
+                }
                 await opened?.close()
+                let canReconnect = (error as? NativeComputerUseFailure)?.permitsSessionRecovery == true
+                    || (error as? OpenAIComputerUse.RuntimeError) == .backendUnavailable
+                if useHelperSetup, startupAttempt < 2, canReconnect,
+                   setupDeadline.map({ $0 > ProcessInfo.processInfo.systemUptime }) == true {
+                    try ensureOperation(attempt)
+                    continue
+                }
                 if activeCheckID == attempt, activeCheckEpoch == epoch {
                     clearProof(failure: error as? NativeComputerUseFailure)
                 }

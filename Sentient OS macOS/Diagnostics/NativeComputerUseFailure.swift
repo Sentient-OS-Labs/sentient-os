@@ -41,6 +41,21 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
 
     var effectsMayBeUnknown: Bool { actionEffectsUnconfirmed ?? (stage == .action) }
 
+    /// These failures can leave the native session unusable while its RPC process still runs.
+    /// A subsequent explicit read may open a new session. App/element errors need fresh state,
+    /// and permission failures need consent, so neither belongs to connection recovery.
+    var permitsSessionRecovery: Bool {
+        guard !requiresSystemPermissionSetup else { return false }
+        switch detail {
+        case .disconnected, .unexpectedEOF, .processExited, .writeFailed, .requestTimedOut,
+             .senderNotAuthenticated, .timeoutReached,
+             .screenshotCaptureFailed, .screenCaptureFailed, .unknownCaptureFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Only native system-grant failures open permission setup. Auth, app approvals, policy,
     /// window/capture failures and timeouts are separate recovery paths.
     var requiresSystemPermissionSetup: Bool {
@@ -218,6 +233,10 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         if ["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(failure.systemDomain ?? ""),
            failure.systemCode == -3801 {
             failure.kind = .permission; failure.detail = .permissionDenied
+        }
+        if ["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(failure.systemDomain ?? ""),
+           failure.systemCode == -3811 {
+            failure.kind = .capture; failure.detail = .screenCaptureFailed
         }
         return failure
     }

@@ -233,18 +233,19 @@ import Foundation
         NativePermissionSetup.shared=NativePermissionSetup(defaults:fixtureDefaults,processID:"confirmed-relaunch")
         let token=NativePermissionSetup.shared.permissionFailed()
         let recovery=ComputerUseGate.fixture();var recoveredFired=0
+        proof.nextFailure = .init(kind:.timeout,code:nil,detail:.requestTimedOut,stage:.probe)
         _=recovery.intercept({recoveredFired+=1});try await settle(recovery)
         check(recovery.visible && !recovery.isReadyForTask && !recovery.requiresPermissionRestart,
-              "Known permission failure offers helper recovery rather than endless restart")
-        proof.nextFailure = .init(kind:.timeout,code:nil,detail:.requestTimedOut,stage:.probe)
-        recovery.verifyNativePermissions();try await settle(recovery)
-        check(proof.calls == 1 && recovery.capabilityCheckFailed && !recovery.isReadyForTask,"Timed out recovery never becomes ready")
+              "Failed native recovery leaves an explicit repair action instead of an endless restart")
+        check(proof.calls == 1 && recovery.capabilityCheckFailed && recovery.canRepairHelperPermissions,
+              "Confirmed denial opens real setup once and a timeout leaves repair enabled")
         recovery.fixturePassiveRefresh();try await settle(recovery)
         check(proof.calls == 1 && recovery.capabilityCheckFailed,"Passive refresh does not repeat helper setup")
-        recovery.verifyNativePermissions();try await settle(recovery)
-        check(proof.calls == 2 && recovery.allRequiredGranted && recovery.isReadyForTask,"Explicit successful helper response completes recovery")
-        recovery.continueNow();recovery.continueNow();try await settle(recovery)
-        check(recoveredFired == 1 && !recovery.visible,"Repeated Continue releases exactly one waiting action")
+        recovery.continueNow();try await settle(recovery)
+        check(proof.calls == 2 && recovery.allRequiredGranted && recovery.isReadyForTask,"Repair CTA retries real helper setup")
+        check(recoveredFired == 1 && !recovery.visible,"Successful repair resumes the waiting user task once")
+        recovery.continueNow();try await settle(recovery)
+        check(recoveredFired == 1,"A late Continue cannot duplicate the resumed task")
         _=NativePermissionSetup.shared.permissionFailed();proof.snapshot = .init()
         proof.publishNewProof();recovery.refresh();try await settle(recovery)
         check(recovery.isReadyForTask && !NativePermissionSetup.shared.recoveryNeeded,
@@ -395,6 +396,27 @@ import Foundation
         check(proof.staleRefreshes == previousStaleRefreshes+1 && proof.proofID == newerProofID && proof.snapshot.isReady,
               "Refresh carries the pre-start proof observation so an old producer cannot invalidate a newer proof")
         proof.invalidateOnRefresh=false
+
+        NativePermissionSetup.shared.verified(); proof.snapshot = .init()
+        Permissions.screen = false
+        let manualContinue = ComputerUseGate.fixture(); var manuallyFired = 0
+        _ = manualContinue.intercept { manuallyFired += 1 }
+        try await settle(manualContinue)
+        Permissions.screen = true
+        manualContinue.refresh(); try await settle(manualContinue)
+        manualContinue.continueNow(); try await settle(manualContinue)
+        check(manuallyFired == 1, "Manual Continue still admits the held task after the missing local grant changes")
+
+        proof.snapshot = .init(); proof.hold = true
+        _ = NativePermissionSetup.shared.permissionFailed()
+        let cancelledRepair = ComputerUseGate.fixture(); var cancelledFired = 0
+        _ = cancelledRepair.intercept { cancelledFired += 1 }
+        try await settle(cancelledRepair)
+        check(cancelledRepair.requestingAutomation, "New task starts the native recovery window")
+        cancelledRepair.fixtureClose(); proof.hold = false; try await settle(cancelledRepair)
+        check(cancelledFired == 0 && NativePermissionSetup.shared.recoveryNeeded,
+              "Closing setup cancels native repair and never revives a cancelled task")
+        NativePermissionSetup.shared.verified(); proof.snapshot = .init()
 
         let observedEntryPoints=Set(checkTerminals.compactMap {$0.parameters["entry_point"]})
         check(observedEntryPoints.isSuperset(of:["passive","explicit_check","held_task","continue"]),

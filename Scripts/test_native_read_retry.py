@@ -36,6 +36,11 @@ actor Script {
     private var names = ["list_apps", "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text"]
     func configure(delay: Duration = .zero, names: [String]? = nil) { self.delay = delay; if let names { self.names = names } }
     func catalog() -> [String] { names }
+    private var opens = 0
+    private var closes = 0
+    func opened() { opens += 1 }
+    func closed() { closes += 1 }
+    func lifecycle() -> (opens: Int, closes: Int) { (opens, closes) }
     private var remaining: [Reply]
     private var observed: [Call] = []
     init(_ replies: [Reply]) { remaining = replies }
@@ -58,7 +63,8 @@ actor OpenAIComputerUseSession {
     let script: Script
     init(script: Script) { self.script = script }
     static func open(_ configuration: OpenAIComputerUse.Configuration) async throws -> OpenAIComputerUseSession {
-        OpenAIComputerUseSession(script: configuration.script)
+        await configuration.script.opened()
+        return OpenAIComputerUseSession(script: configuration.script)
     }
     func catalog() async throws -> Data {
         let names = await script.catalog()
@@ -68,7 +74,7 @@ actor OpenAIComputerUseSession {
     func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         try await script.call(tool, arguments: arguments, timeout: timeout)
     }
-    func close() {}
+    func close() async { await script.closed() }
     func isUsable() -> Bool { true }
 }
 
@@ -330,6 +336,37 @@ import AppKit
             check(try await server.respond(rpc) == failed, "Error duplicate is cached")
             check(try successful(await server.respond(request(2,"click"))), "Error does not create a local action veto")
             check(await script.calls().count == 2, "No automatic retry")
+            await server.stop()
+        }
+        // Native capture failures can strand an otherwise live RPC session. Only a new
+        // model-requested read resets it, once until a successful state read proves recovery.
+        do {
+            let raw = try json(["isError": true, "content": [["type": "text",
+                "text": "Computer Use server error -10005: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3811 \"Failed to start due to video/audio capture failure\""]]])
+            let (server, script) = try await open([.data(raw), .data(raw), reply, .data(raw), reply])
+            let first = try await server.respond(request(200))
+            check(try json(result(first)) == raw, "Original capture error is preserved")
+            check(await script.lifecycle().opens == 1, "Error alone cannot open a replacement session")
+            _ = try await server.respond(request(201))
+            check(await script.lifecycle().opens == 2, "Next explicit read reopens the failed native session")
+            _ = try await server.respond(request(202))
+            check(await script.lifecycle().opens == 2, "Persistent failure cannot restart on every read")
+            _ = try await server.respond(request(203))
+            check(await script.lifecycle().opens == 2, "No hidden retry after later error")
+            check(try successful(await server.respond(request(204))), "Later explicit read can recover")
+            check(await script.lifecycle().opens == 3, "A successful state read permits a future independent recovery")
+            check(await script.calls().count == 5, "Recovery never injects extra native actions or reads")
+            await server.stop()
+        }
+        do {
+            let error = try json(["isError": true, "content": [["type": "text", "text": "disconnected"]]])
+            let (server, script) = try await open([.data(error), reply, reply])
+            _ = try await server.respond(request(210, "click"))
+            _ = try await server.respond(request(211, "press_key"))
+            check(await script.lifecycle().opens == 1, "An action never triggers connection replacement or replay")
+            _ = try await server.respond(request(212))
+            check(await script.lifecycle().opens == 2, "Agent-requested state read recovers after action failure")
+            check(await script.calls().map(\.tool) == ["click", "press_key", "get_app_state"], "Only explicitly requested actions reach native tools")
             await server.stop()
         }
         // FIFO, including simultaneous identical IDs: only one physical action per request.

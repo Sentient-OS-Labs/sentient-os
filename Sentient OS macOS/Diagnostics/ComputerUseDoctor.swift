@@ -13,6 +13,18 @@ import UniformTypeIdentifiers
     private var ownsCheckSurface = false
     var uploadMessage: String?
     var uploading = false
+    var explanation: String {
+        if let report, [.needsAttention, .interrupted].contains(report.outcome),
+           report.steps.contains(where: { $0.check == .accessibility && $0.status != .passed }) {
+            let copies = NSWorkspace.shared.runningApplications.filter {
+                !$0.isTerminated && $0.bundleURL?.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+            }
+            if copies.count > 1 {
+                return "More than one copy of Sentient is running. The helper may be reading the other copy’s window. Close the extra copy, then run this check again."
+            }
+        }
+        return report?.explanation ?? "Test the tools Sidekick uses across your computer."
+    }
     @ObservationIgnored private var work: Task<ComputerUseCheckReport, Never>?
     @ObservationIgnored private var window: NSWindow?
     #if DEBUG
@@ -241,6 +253,9 @@ import UniformTypeIdentifiers
                     await session?.close(); session = nil
                     if error is CancellationError || Task.isCancelled { throw CancellationError() }
                     let failure = error as? NativeComputerUseFailure
+                    if let failure {
+                        NativeComputerUseErrorLog.record(tool: "diagnostic_" + stage.rawValue, failure: failure)
+                    }
                     guard attempt == 0, source == .settings, let failure,
                           ComputerUseCheckReport.allowsConnectionRepair(failure) else { throw error }
                     // Only idle-runtime repair, once, followed by the complete real check.

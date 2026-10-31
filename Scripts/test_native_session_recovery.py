@@ -125,6 +125,7 @@ for line in sys.stdin:
         if scenario.startswith('permission'): state['permission_scenario'] = scenario
         save()
         result = {'content': [{'type': 'text', 'text': 'Synthetic app state; generation ' + str(state['opens'])}]}
+        if scenario == 'native_capture': result = {'isError':True,'content':[{'type':'text','text':'Computer Use server error -10005: Error Domain=SCStreamErrorDomain Code=-3811 capture failed'}]}
         if scenario == 'tool_error': result = {'isError': True, 'content': [{'type': 'text', 'text': 'Element is not settable'}]}
         if scenario.startswith('permission'):
             result = {'isError':True,'content':[{'type':'text','text':'Computer Use server error -10009: permissionsNotGranted'}]}
@@ -192,6 +193,18 @@ import Darwin
             check(!NativeComputerUseFailure.isError(try result(next)), "Agent can decide to act after a fresh read")
             check(try state(url)["effects"] as? Int == 2, "Only the agent's explicitly requested actions ran")
             await server.stop()
+        }
+        do {
+            let (server, url) = try await open("native-capture-live-client")
+            let first = try await server.respond(rpc(1, "get_app_state", "native_capture"))
+            check(NativeComputerUseFailure.isError(try result(first)), "Live RPC native capture failure remains an error")
+            check(try state(url)["opens"] as? Int == 1, "Error result does not secretly retry")
+            let next = try await server.respond(rpc(2))
+            check(!NativeComputerUseFailure.isError(try result(next)), "Next explicit read can recover a live but failing native client")
+            check(try state(url)["opens"] as? Int == 2, "Failing client was actually replaced")
+            check(try (state(url)["calls"] as? [String]) == ["get_app_state", "get_app_state"], "Session replacement injects no tool actions")
+            await server.stop()
+            check(try (state(url)["pids"] as! [Int32]).allSatisfy { kill($0, 0) != 0 }, "Recovered sessions are drained on Stop")
         }
         do {
             let (server, url) = try await open("ordinary-error")

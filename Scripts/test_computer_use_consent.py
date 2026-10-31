@@ -132,7 +132,7 @@ import Foundation
             try await fail(s,apps:apps)
             let reply = try status(await invoke(s,"diagnose_computer_use"))
             check(reply["status"] as? String == "not_needed","One app or browser-only failures never offer diagnostics")
-            check(await script.closes == 0,"Ineligible check does not reset the connection")
+            check(await script.closes == 1,"Ineligible diagnostic adds no reset after native read recovery")
             await s.stop()
         }
         for detail in [NativeComputerUseFailure.Detail.focusChanged,.inputInterrupted,.staleState,.chromiumAppChanged,.noWindowsAvailable,.permissionDenied] {
@@ -152,7 +152,7 @@ import Foundation
             let reply = try status(await invoke(s,"diagnose_computer_use"))
             check(reply["status"] as? String == (permission.hasPrefix("unknown") ? "permission_unverified" : "permission_needed"),
                   "Missing or unverified grants suppress diagnostics even after broad failures")
-            check(await script.closes == 0 && ComputerUseDoctor.shared.started == 0,
+            check(await script.closes == 1 && ComputerUseDoctor.shared.started == 0,
                   "Permission guidance never resets the connection or starts a diagnostic")
             Permissions.screen = true; Permissions.tcc = .granted; Permissions.automation = .granted
             await s.stop()
@@ -164,7 +164,7 @@ import Foundation
             for _ in 0..<3 { _ = try await invoke(s,"list_apps") }
             check(try status(await invoke(s,"diagnose_computer_use"))["status"] as? String == "needs_confirmation",
                   "Confirmed post-restart setup can still request a consented diagnostic")
-            check(await script.closes == 0 && ComputerUseDoctor.shared.started == 0,
+            check(await script.closes == 1 && ComputerUseDoctor.shared.started == 0,
                   "Workflow admission never bypasses diagnostic consent")
             NativePermissionSetup.shared.canAttemptTask = false
             await s.stop()
@@ -184,12 +184,12 @@ import Foundation
             let request = try status(await invoke(s,"diagnose_computer_use"))
             check(request["status"] as? String == "needs_confirmation","Broad outage first returns a consent request")
             let id = UUID(uuidString:request["approval_id"] as! String)!
-            check(await script.closes == 0 && ComputerUseDoctor.shared.started == 0,"No reset or window before consent")
+            check(await script.closes == 1 && ComputerUseDoctor.shared.started == 0,"Only normal read recovery occurs before diagnostic consent")
             check(try status(await invoke(s,"diagnose_computer_use",args:["approval_id":id.uuidString]))["status"] as? String == "not_approved","Model-provided ID is not approval")
             interaction!.computerUseCheckConsent.recordAnswer(id:id,selectedAnswer:1,text:"Not now")
             check(try status(await invoke(s,"diagnose_computer_use",args:["approval_id":id.uuidString]))["status"] as? String == "not_approved","Decline cannot authorize the check")
             check(try status(await invoke(s,"diagnose_computer_use"))["status"] as? String == "already_offered","Decline suppresses repeated offers for this task")
-            check(await script.closes == 0,"Decline preserves connection")
+            check(await script.closes == 1,"Decline preserves connection")
             await script.set(nil)
             _ = try await invoke(s,"get_app_state",args:["app":"com.apple.TextEdit"])
             check(await script.reads == 4,"The original task still uses its tools after decline")
@@ -202,7 +202,7 @@ import Foundation
             let id = UUID(uuidString:request["approval_id"] as! String)!
             interaction!.computerUseCheckConsent.recordAnswer(id:id,selectedAnswer:0,text:"Run check")
             _ = try await invoke(s,"diagnose_computer_use",args:["approval_id":id.uuidString])
-            check(await script.closes == 1 && ComputerUseDoctor.shared.started == 1,"Only actual approval permits reset and check")
+            check(await script.closes == 2 && ComputerUseDoctor.shared.started == 1,"Actual approval permits the additional diagnostic reset and check")
             _ = try await invoke(s,"diagnose_computer_use",args:["approval_id":id.uuidString])
             check(ComputerUseDoctor.shared.started == 1,"Approval is single-use")
             await s.stop()
@@ -216,7 +216,7 @@ import Foundation
             await script.set(nil)
             _ = try await invoke(s,"get_app_state",args:["app":"com.apple.TextEdit"])
             check(try status(await invoke(s,"diagnose_computer_use",args:["approval_id":id.uuidString]))["status"] as? String == "not_needed","Recovered UI cancels an unnecessary approved check")
-            check(await script.closes == 0,"Recovery avoids resetting a now-working connection")
+            check(await script.closes == 1,"Recovery avoids resetting a now-working connection")
             await s.stop()
         }
         do {

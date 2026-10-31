@@ -18,8 +18,9 @@ enum Diagnostics {
     static func report(_ kind: Kind, phase: Phase, error: Error) {}
 }
 final class AgentRunDiagnostics {
-    static var current: AgentRunDiagnostics?
-    func recordHelper(running: Bool, atStart: Bool) {}
+    static var current: AgentRunDiagnostics? = AgentRunDiagnostics()
+    var samples: [(running: Bool, atStart: Bool)] = []
+    func recordHelper(running: Bool, atStart: Bool) { samples.append((running, atStart)) }
 }
 enum Permissions {
     enum State { case granted }
@@ -165,6 +166,18 @@ extension OpenAIComputerUseRuntime {
             fatalError("Unbounded launch failure")
         } catch OpenAIComputerUse.RuntimeError.launchFailed {}
         check(NSWorkspace.shared.launches == 3, "startup retry budget is bounded")
+
+        let observed = fresh()
+        let observedTask = try await observed.beginTask(configuration: configuration)
+        NSRunningApplication.apps[0].isTerminated = true
+        let recoveredHelper = NSRunningApplication(configuration.appURL)
+        NSRunningApplication.apps.append(recoveredHelper)
+        observed.recordHelperBeforeCleanup(observedTask)
+        check(AgentRunDiagnostics.current!.samples.last!.running, "End evidence samples the recovered helper, not the dead initial process")
+        let sampled = AgentRunDiagnostics.current!.samples.count
+        recoveredHelper.isTerminated = true // normal last-client cleanup
+        observed.endTask(observedTask)
+        check(AgentRunDiagnostics.current!.samples.count == sampled, "Cleanup cannot overwrite observed liveness as a false crash")
 
         let leased = fresh()
         let lease = try await leased.beginTask(configuration: configuration)

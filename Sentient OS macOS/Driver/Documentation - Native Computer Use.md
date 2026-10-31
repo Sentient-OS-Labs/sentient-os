@@ -128,6 +128,11 @@ tool remains an error and the agent must read current state before continuing. D
 and timeout keep recovery available in Permissions & Health. The custom marker/screenshot test is
 retained for explicit diagnostics, with its existing lifetime and cancellation guards.
 
+Settings uses the same five-minute permission budget. After a confirmed native denial, a new
+user task opens native setup again. A failed or dismissed attempt leaves an enabled repair action.
+Successful setup resumes only the currently waiting task; closing setup or pressing Stop discards
+that waiter. Ordinary capability-check failures do not reset the recorded setup workflow.
+
 
 Automation checks use Apple's asynchronous permission API after starting the helper through
 LaunchServices. A stopped target is not treated as denied permission. Visible setup surfaces request unasked Apple Events consent through the macOS dialog. The Automation row reflects that state; the user still chooses Allow in the system prompt. Denial exposes a Settings
@@ -187,7 +192,17 @@ or evicted results are rejected as duplicate requests rather than misreported as
 
 After a dead transport, a new model-requested read (`get_app_state` or `list_apps`) opens a replacement
 session. An action against that dead transport returns a connection error without replay. Ordinary
-native tool errors do not restart healthy sessions. The agent decides what to do with each result.
+native app/element errors do not restart healthy sessions. A native connection, timeout or capture
+failure can leave the RPC process alive but its session broken. In that case the next explicit read
+reopens the session once, with no replay of the failed operation. A successful state read resets
+that recovery allowance. ScreenCaptureKit -3811 is a capture failure; -3801 remains a permission
+denial. Both retain the original native error for the model and local log.
+
+Helper liveness is sampled before task cleanup, against the current helper process. Closing the
+last client can normally terminate the helper, so that later state must not be recorded as the
+cause of a failed task. A failed self-check with multiple copies of the same Sentient app running
+explains the potential wrong-window target. The live diagnostic test runner uses a distinct,
+unchanged signed app copy so its own fixture cannot create that ambiguity.
 
 ## Agent-owned recovery
 

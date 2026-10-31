@@ -78,6 +78,14 @@ final class ComputerUseGate {
         runtimeFailure?.message ?? automationFailure?.message ?? unresolvedCapabilityFailure?.message
     }
     var capabilityCheckFailed: Bool { unresolvedCapabilityFailure != nil }
+    var needsHelperPermissionRepair: Bool {
+        backend == .openAI && NativePermissionSetup.shared.recoveryNeeded
+    }
+    var canRepairHelperPermissions: Bool {
+        needsHelperPermissionRepair && nativeInstallationReady && sentientScreen
+            && automation == .granted && !requestingAutomation && !checkingCapabilities
+            && pendingCheck == nil && teardownDepth == 0
+    }
     /// A competing helper is a recoverable startup condition, not missing permission.
     private var nativeHelperConflict = false
     var nativeRestartRequired: Bool { runtimeFailure?.restartRequired == true }
@@ -305,7 +313,13 @@ final class ComputerUseGate {
                                             explicitRepair: explicitRepair,
                                             operationID: id, entryPoint: .explicitCheck)
                 if explicitRepair { nativeRepairSucceeded = helperPermissionState.isReady && automation == .granted }
+                finishPermissionRequest(id)
                 refresh()
+                if explicitRepair, nativeRepairSucceeded, isReadyForTask, let action = pending {
+                    pending = nil
+                    dismissWindow()
+                    action.proceed()
+                }
             } catch {
                 recordNativeFailure(error, operationID: id)
             }
@@ -568,7 +582,7 @@ final class ComputerUseGate {
         pending = intent
         showingVoiceRepair = false
         if backend == .openAI, nativeInstallationReady, sentientScreen,
-           mayVerifyCapabilities, window == nil, !requestingAutomation {
+           (mayVerifyCapabilities || needsHelperPermissionRepair), window == nil, !requestingAutomation {
             // Even a cached green result must finish scoped async validation before admission.
             refreshAutomation(force: true)
             Log("ComputerUseGate: waiting for native readiness before presenting setup")
@@ -604,6 +618,9 @@ final class ComputerUseGate {
             Analytics.signal("PermissionGate.shown", parameters: ["blocking": String(blocking)])
             Log("ComputerUseGate: setup window up (\(blocking ? blockingReason : "required setup ready"))")
         }
+        // A new user task after a confirmed denial uses the helper's real grant flow.
+        // Failure/dismissal keeps this window available for an explicit retry.
+        if canRepairHelperPermissions { fixNativePermissions() }
     }
 
     private var blockingReason: String {
@@ -735,6 +752,10 @@ final class ComputerUseGate {
         guard teardownDepth == 0 else { return }
         if showingVoiceRepair { dismissWindow(); return }
         if requiresPermissionRestart { restartAfterPermissions(); return }
+        if needsHelperPermissionRepair {
+            if canRepairHelperPermissions { fixNativePermissions() }
+            return
+        }
         guard window != nil, pendingCheck == nil else { return }
         refresh()
         afterNativeRefresh(entryPoint: .continueSetup) { gate, validated in

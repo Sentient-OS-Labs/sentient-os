@@ -12,8 +12,7 @@ struct ComputerUseGateView: View {
     var body: some View {
         PermissionSetupView(title: gate.showingVoiceRepair ? "Set up voice input" : "Let Sidekick use your computer",
                             continueTitle: continueTitle,
-                            canContinue: gate.showingVoiceRepair || (gate.requiresPermissionRestart
-                                ? gate.canRestartAfterPermissions : gate.isReadyForTask),
+                            canContinue: canContinue,
                             onContinue: gate.continueNow, compact: !gate.showingVoiceRepair,
                             edgeGlow: !gate.showingVoiceRepair) {
             if !gate.showingVoiceRepair {
@@ -52,11 +51,22 @@ struct ComputerUseGateView: View {
         if gate.requiresPermissionRestart {
             return SafeAppRelaunch.shared.isPreparing ? "Restarting Sentient…" : "Restart Sentient"
         }
+        if gate.needsHelperPermissionRepair {
+            return gate.requestingAutomation || gate.checkingCapabilities
+                ? "Finish helper setup…" : "Fix computer-use permissions"
+        }
         if gate.isReadyForTask { return "Continue" }
         if gate.backend == .openAI {
             return gate.checkingCapabilities ? "Finish helper setup…" : "Finish setup to continue"
         }
         return "Grant permissions to continue"
+    }
+
+    private var canContinue: Bool {
+        if gate.showingVoiceRepair { return true }
+        if gate.requiresPermissionRestart { return gate.canRestartAfterPermissions }
+        if gate.needsHelperPermissionRepair { return gate.canRepairHelperPermissions }
+        return gate.isReadyForTask
     }
 
     private var micSpeechNote: String {
@@ -219,10 +229,12 @@ struct NativeComputerUsePermissionRows: View {
                     SettingsProse("Checking permissions…")
                 }
                 if gate.setup.ready, !gate.requiresPermissionRestart, gate.automation == .granted, NativePermissionSetup.shared.recoveryNeeded,
-                   gate.nativePermissionError == nil, !gate.requestingAutomation, !gate.checkingCapabilities {
-                    SettingsProse("Computer use reported a missing permission. Finish setup in its helper window; Chrome is optional.")
-                    SettingsPillButton(title: "Open helper setup") { gate.verifyNativePermissions() }
-                        .disabled(gate.checkingAutomation)
+                   !gate.requestingAutomation, !gate.checkingCapabilities {
+                    SettingsProse("Finish Accessibility and Screen Recording in the helper’s window. Sentient doesn’t use its browser extension.")
+                    if !compact {
+                        SettingsPillButton(title: "Open helper setup") { gate.fixNativePermissions() }
+                            .disabled(!gate.canRepairHelperPermissions)
+                    }
                 }
                 if showsRestartAction, gate.requiresPermissionRestart {
                     NativePermissionRestartSection(gate: gate)

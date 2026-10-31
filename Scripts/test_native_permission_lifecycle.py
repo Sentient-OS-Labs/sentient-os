@@ -61,10 +61,14 @@ nonisolated enum OpenAIComputerUse {
     func close() { Self.closed += 1 }
     func waitUntilCurrent() async throws {try Task.checkCancellation()}
 }
+nonisolated enum NativeComputerUseErrorLog { static func record(tool: String, failure: NativeComputerUseFailure) {} }
 actor OpenAIComputerUseSession {
+    static let permissionSetupTimeout: TimeInterval = 300
     @MainActor static var sessions: [OpenAIComputerUseSession] = []
     @MainActor static var delay = false
     @MainActor static var closeDelay = false
+    @MainActor static var restartDuringSetup = false
+    @MainActor static var setupFailures: [NativeComputerUseFailure] = []
     var usable = true
     var closes = 0
     static func open(_ config: OpenAIComputerUse.Configuration) async throws -> OpenAIComputerUseSession {
@@ -74,7 +78,21 @@ actor OpenAIComputerUseSession {
     func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         let values = try JSONSerialization.jsonObject(with: arguments) as? [String:String]
         let helperSetup = values?["app"] == "com.apple.systempreferences"
-        precondition(timeout > 0 && timeout <= (helperSetup ? 125 : 12) && tool == "get_app_state")
+        precondition(timeout > 0 && timeout <= (helperSetup ? 300 : 12) && tool == "get_app_state")
+        if helperSetup {
+            precondition(timeout > 298 && timeout <= 300, "Manual setup shares its full five-minute budget across reconnects")
+            await MainActor.run {
+                if Self.restartDuringSetup {
+                    Self.restartDuringSetup = false
+                    OpenAIComputerUseRuntime.shared.helper.isTerminated = true
+                    OpenAIComputerUseRuntime.shared.helper = NSRunningApplication(99)
+                }
+            }
+        }
+        if helperSetup {
+            let failure = await MainActor.run { Self.setupFailures.isEmpty ? nil : Self.setupFailures.removeFirst() }
+            if let failure { throw failure }
+        }
         if await Self.delay { try await Task.sleep(for:.seconds(30)) }
         let marker = helperSetup ? "Native settings fixture" : await NativePermissionCheckWindow.currentMarker
         return try JSONSerialization.data(withJSONObject:["content":[["type":"text","text":marker],["type":"image","data":"fixture"]]])
@@ -256,6 +274,30 @@ import Foundation
         check(OpenAIComputerUseSession.sessions.count == sessionsBefore+2,
               "Every explicit helper repair performs a fresh native request instead of reusing cached grants")
         check(NativePermissionCheckWindow.shown == windowsBefore,"Helper repair never opens the synthetic test window")
+        await cache.close()
+        OpenAIComputerUseSession.restartDuringSetup = true
+        let beforeRestart = OpenAIComputerUseSession.sessions.count
+        try await cache.check(configuration: config, helper: OpenAIComputerUseRuntime.shared.helper, useHelperSetup: true)
+        check(cache.snapshot.isReady && OpenAIComputerUseSession.sessions.count == beforeRestart + 2,
+              "Grant-driven helper replacement reconnects and verifies the new process")
+        await cache.close()
+        let dropped = NativeComputerUseFailure(kind: .connection, code: nil, detail: .disconnected)
+        OpenAIComputerUseSession.setupFailures = [dropped]
+        let beforeDrop = OpenAIComputerUseSession.sessions.count
+        try await cache.check(configuration: config, helper: OpenAIComputerUseRuntime.shared.helper, useHelperSetup: true)
+        check(cache.snapshot.isReady && OpenAIComputerUseSession.sessions.count == beforeDrop + 2,
+              "A dropped setup connection gets a fresh read and real proof")
+        await cache.close()
+        OpenAIComputerUseSession.setupFailures = [dropped, dropped, dropped]
+        let beforePersistent = OpenAIComputerUseSession.sessions.count
+        do {
+            try await cache.check(configuration: config, helper: OpenAIComputerUseRuntime.shared.helper, useHelperSetup: true)
+            fatalError("Persistent setup failure claimed success")
+        } catch let failure as NativeComputerUseFailure {
+            check(failure.detail == .disconnected && !cache.snapshot.isReady,
+                  "Persistent setup failure preserves its error without a false grant")
+        }
+        check(OpenAIComputerUseSession.sessions.count == beforePersistent + 3, "Setup reconnection is bounded")
         await cache.close()
         print("PASS \(count) native permission lifecycle checks")
     }

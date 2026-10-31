@@ -107,6 +107,16 @@ import SwiftUI
                               to: receipts.appendingPathComponent(command.id + "-accepted.json"))
                     continue
                 }
+                if command.kind == "simulate-permission-denial" {
+                    guard !run.isRunning, activeCommand == nil else { continue }
+                    NativePermissionCheck.shared.invalidate(failure: .init(kind: .permission, code: -10009,
+                        detail: .permissionDenied, stage: .appState))
+                    try write(["id": command.id, "kind": command.kind, "accepted": true,
+                               "recovery_needed": NativePermissionSetup.shared.recoveryNeeded],
+                              to: receipts.appendingPathComponent(command.id + "-accepted.json"))
+                    seen.insert(command.id)
+                    continue
+                }
                 guard ["submit", "answer", "card"].contains(command.kind), let prompt = command.prompt else {
                     seen.insert(command.id); continue
                 }
@@ -195,6 +205,8 @@ import SwiftUI
                     "recent_messages": recent, "submitted": submitted, "completed": completed,
                     "captures": captureCount, "capture_errors": captureErrors,
                     "home_active": conversation.isVisible, "app_active": NSApp.isActive,
+                    "permission_recovery_needed": NativePermissionSetup.shared.recoveryNeeded,
+                    "permission_request_active": ComputerUseGate.shared.requestingAutomation,
                     "follows_latest": presentation.followsLatest, "at_latest": presentation.atLatest,
                     "can_follow_latest": presentation.canFollowLatest,
                     "navigation_target": presentation.navigationTarget ?? "",

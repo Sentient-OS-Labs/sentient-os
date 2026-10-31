@@ -14,7 +14,7 @@ struct ComputerUseDoctorView: View {
             }
             VStack(alignment: .leading, spacing: 9) {
                 Text(doctor.report?.title ?? "Computer-use check").font(.system(size: 25, weight: .semibold))
-                Text(doctor.report?.explanation ?? "Test the tools Sidekick uses across your computer.")
+                Text(doctor.explanation)
                     .font(.system(size: 13)).foregroundStyle(.white.opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true).lineSpacing(3)
             }
@@ -141,6 +141,6 @@ struct ComputerUseCheckRow: View {
         if report.outcome == .passed || report.outcome == .repaired {
             return "Last check passed " + ended.formatted(date: .abbreviated, time: .shortened) + "."
         }
-        return report.explanation
+        return doctor.explanation
     }
 }

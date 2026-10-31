@@ -156,6 +156,7 @@ nonisolated enum NativeComputerUseLab {
                 while ComputerUseDoctor.shared.isRunning { try await Task.sleep(for: .milliseconds(100)) }
                 guard let report = ComputerUseDoctor.shared.report else { throw LabError.invalidCapture }
                 result["diagnostic"] = try JSONSerialization.jsonObject(with: report.encoded())
+                result["explanation"] = ComputerUseDoctor.shared.explanation
                 result["injectedFault"] = fault
                 result["expectedOutcome"] = expected.rawValue
                 result["repairClaimVerified"] = report.repairVerified == (expected == .repaired)

@@ -833,6 +833,7 @@ actor CodexCLI {
             }
             try Task.checkCancellation()
             if let error = await bridge?.failure { throw error }
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.recordHelperBeforeCleanup(nativeTask) }
             await bridge?.stop()
             await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
@@ -845,6 +846,7 @@ actor CodexCLI {
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return result
         } catch {
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.recordHelperBeforeCleanup(nativeTask) }
             await bridge?.stop()
             await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
