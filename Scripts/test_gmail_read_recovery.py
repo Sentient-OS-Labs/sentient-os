@@ -43,7 +43,7 @@ extension Diagnostics {
 }
 nonisolated struct NoteDraft: Sendable {}
 nonisolated struct ItemKey: Sendable { let order: TimeInterval; let tiebreak: String }
-actor CycleStore { static let shared = CycleStore(); enum Outcome { case saved, diskFull }; func commitMCPRead(bucketKey: String, notes: [NoteDraft], through: ItemKey, origin: String, replaceNotes: Bool) -> Outcome { fatalError("No storage writes permitted") } }
+actor CycleStore { static let shared = CycleStore(); enum Outcome { case saved, diskFull }; func commitMCPRead(bucketKey: String, notes: [NoteDraft], through: ItemKey, origin: String, replaceNotes: Bool) throws -> Outcome { fatalError("No storage writes permitted") } }
 nonisolated func Log(_ message: String) {}
 
 actor Scenario {

@@ -107,7 +107,7 @@ enum OutlookCurationTests {
                 let note = NoteDraft(kind: .mcp, sourceID: "fixture-old", folder: "Outlook Mail", itemDate: oldTime,
                     text: "Existing pending note", title: "Fixture", reminderFlagged: false)
                 let origin = ConnectorRegistry.readOrigin(slug: OutlookMailConnector.slug, backend: .chatgpt)
-                _ = await store.commitMCPRead(bucketKey: bucket, notes: [note],
+                _ = try await store.commitMCPRead(bucketKey: bucket, notes: [note],
                     through: .init(order: oldTime.timeIntervalSince1970, tiebreak: ""), origin: origin, replaceNotes: true)
                 let failing: MCPSource.Reader = { _, _, _, window in
                     if window.upper == now { throw MCPSource.MCPError.toolFailure(slug: OutlookMailConnector.slug) }

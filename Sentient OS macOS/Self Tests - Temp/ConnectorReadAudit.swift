@@ -149,7 +149,7 @@ enum ConnectorReadAudit {
                 let identity = try await MCPSource.readIdentity(slug: slug, onReceipt: observer)
                 let origin = MCPSource.checkpointOrigin(slug: slug, backend: backend, fingerprint: identity,
                     fallback: ConnectorRegistry.readOrigin(slug: slug, backend: backend))
-                let saved = await store.commitMCPRead(bucketKey: MCPSource.bucketKey(slug), notes: [],
+                let saved = try await store.commitMCPRead(bucketKey: MCPSource.bucketKey(slug), notes: [],
                     through: ItemKey(order: date.timeIntervalSince1970, tiebreak: ""),
                     origin: origin, replaceNotes: false)
                 guard saved == .saved else { throw MCPSource.MCPError.storageFailure }
