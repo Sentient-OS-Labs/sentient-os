@@ -588,9 +588,9 @@ struct ProcessingView: View {
         if ModelBackend.current == .sentient {
             switch kind {
             case .loggedOut:
-                return "Reconnect in Frontier Model Choice, then retry. Your saved knowledge stays on this Mac. No ChatGPT or Claude sign-in is needed."
+                return "Reconnect in AI Models & Accounts, then retry. Your saved knowledge stays on this Mac. No ChatGPT or Claude sign-in is needed."
             case .usageLimit:
-                return "Hosted knowledge work has its own allowance and service limits. Check Frontier Model Choice for your connection and usage, then retry when available. Your saved knowledge stays on this Mac."
+                return "Hosted knowledge work has its own allowance and service limits. Check AI Models & Accounts for your connection and usage, then retry when available. Your saved knowledge stays on this Mac."
             case .inputTooLarge:
                 return "This batch exceeded the hosted model’s request limit. Your saved knowledge stays on this Mac. Try again after updating Sentient."
             case .connectorAuth:

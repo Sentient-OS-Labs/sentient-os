@@ -45,7 +45,7 @@ enum HealthCaution {
             switch self {
             case .permissions(let missing):
                 guard missing.count == 1, let one = missing.first else {
-                    return "Some selected sources or overnight settings need attention. Check Permissions & Health."
+                    return "Some selected sources or overnight settings need attention. Check Permissions & Help."
                 }
                 switch one {
                 case .fullDiskAccess: return "A selected protected source needs access. Your other sources remain available."
@@ -56,7 +56,7 @@ enum HealthCaution {
                 }
             case .codexMissing:
                 return ModelBackend.current == .claude || ModelBackend.current == .sentient
-                    ? "Computer use needs Codex CLI. A quick setup in Permissions & Health fixes it."
+                    ? "Computer use needs Codex CLI. A quick setup in Permissions & Help fixes it."
                     : "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .codexSignedOut:
                 return "ChatGPT is signed out. Sign back in to use Sidekick and resume any scheduled work."

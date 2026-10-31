@@ -83,7 +83,7 @@ actor Proactive {
         return windowed
     }
 
-    /// The user's OWN standing proactive instructions (Settings → Proactive & Sidekick), rendered as a
+    /// The user's OWN standing proactive instructions (Settings → Overnight & Suggestions), rendered as a
     /// prompt block — or "" when they've set none. Shared by PART 1 (decide) and PART 2 (research +
     /// prepare), like `recent`/`summaryLines`, so both honor the user's wishes with one wording. It's a
     /// high-priority directive but NEVER overrides the accuracy / never-fire rules.

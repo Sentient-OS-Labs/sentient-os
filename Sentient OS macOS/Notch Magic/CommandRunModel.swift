@@ -905,7 +905,7 @@ final class CommandRunModel {
         // standing prefer-the-tool-over-the-UI instruction. "" when nothing attaches.
         let services = ConnectorRegistry.connectedServicesBlock()
         let servicesLine = services.isEmpty ? "" : "\(services)\n\n"
-        // The user's standing Sidekick context (Settings → Proactive & Sidekick) — preferred apps,
+        // The user's standing Sidekick context (Settings → Sidekick) — preferred apps,
         // browser, norms. Empty string when they've set none, so the prompt is unchanged by default.
         // Live runs receive one frozen snapshot through SidekickInteraction on every route.
         // File memory is read on the main actor at request start and injected once by FrontierRun.

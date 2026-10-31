@@ -6,6 +6,9 @@ import Foundation
 import Darwin
 
 nonisolated final class OpenAIComputerUseSession: @unchecked Sendable {
+    // User-facing permission setup gets its own budget. Ordinary calls still enforce
+    // their shorter deadlines in request(); the MCP ceiling must not cut setup short.
+    static let permissionSetupTimeout: TimeInterval = 300
     private let queue = DispatchQueue(label: "sentient.native-session")
     private let process = Process(), input = Pipe(), output = Pipe(), errorOutput = Pipe()
     private var profile: URL?
@@ -69,7 +72,8 @@ nonisolated final class OpenAIComputerUseSession: @unchecked Sendable {
                     process.currentDirectoryURL = directory
                     let overrides = configuration.codexOverrides + ["features.apps=false", "features.plugins=false",
                         "analytics.enabled=false", "cli_auth_credentials_store=\"ephemeral\"",
-                        "mcp_servers.sentient_native.startup_timeout_sec=15"]
+                        "mcp_servers.sentient_native.startup_timeout_sec=15",
+                        "mcp_servers.sentient_native.tool_timeout_sec=\(Int(Self.permissionSetupTimeout + 10))"]
                     process.arguments = ["app-server", "--listen", "stdio://"] + overrides.flatMap { ["-c", $0] }
                     process.standardInput = input; process.standardOutput = output
                     process.standardError = errorOutput

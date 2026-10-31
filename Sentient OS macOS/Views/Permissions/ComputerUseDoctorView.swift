@@ -117,19 +117,26 @@ private struct TestControlsHost: NSViewRepresentable {
 struct ComputerUseCheckRow: View {
     @State private var doctor = ComputerUseDoctor.shared
     var body: some View {
-        SettingsGroup(label: "A real check") {
-            SettingsRow(title: "Test & repair computer use", subtitle: note) {
-                SettingsPillButton(title: doctor.isRunning ? "View check" : "Test & repair…") {
-                    if doctor.isRunning { doctor.show() } else { doctor.start() }
-                }
-                .disabled(!doctor.isRunning && (NativePermissionCheck.shared.isChecking || ComputerUseGate.shared.requestingAutomation))
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Test & repair computer use")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.Ink.statusInk)
+                Text(note).font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsPillButton(title: doctor.isRunning ? "View check" : "Test & repair…") {
+                if doctor.isRunning { doctor.show() } else { doctor.start() }
+            }
+            .disabled(!doctor.isRunning && (NativePermissionCheck.shared.isChecking || ComputerUseGate.shared.requestingAutomation))
         }
+        .padding(.vertical, 4)
     }
     private var note: String {
         guard let report = doctor.report, let ended = report.finishedAt,
               report.environment.binaryID == BuildIdentity.identifier else {
-            return "Test reading, screenshots, clicks and text entry in a small Sentient window."
+            return "Check reading, screenshots, and controls in a test window."
         }
         if report.outcome == .passed || report.outcome == .repaired {
             return "Last check passed " + ended.formatted(date: .abbreviated, time: .shortened) + "."

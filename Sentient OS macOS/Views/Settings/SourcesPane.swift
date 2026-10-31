@@ -10,7 +10,7 @@ import SwiftUI
 struct SourcesPane: View {
     var body: some View {
         SettingsPane(title: "Knowledge Sources",
-                     whisper: "The context your Sentient learns from, every night.", legacyLayout: true) {
+                     whisper: "What Sentient learns from to understand your life.", legacyLayout: true) {
             KnowledgeSourcesPicker()
                 .environment(\.settingsHeadingStyle, true)
         }

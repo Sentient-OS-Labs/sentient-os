@@ -22,6 +22,9 @@ import AppKit
 // MARK: - The ChatGPT panel: log in to codex
 
 struct OnboardingCodexLoginPanel: View {
+    var settingsStyle = false
+    @State private var plan: CodexAuth.Plan?
+    @State private var checkingPlan = false
     @State private var codex = CodexSetup.shared
     @State private var preparationTask: Task<Void, Never>?
     @State private var loginRequestID = UUID()
@@ -31,13 +34,23 @@ struct OnboardingCodexLoginPanel: View {
     private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
 
     var body: some View {
-        SettingsGroup(label: "Your ChatGPT") {
-            VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, and the most battle-tested engine.")
-
+        ModelSelectionPanel(title: "ChatGPT", subtitle: "Connect your ChatGPT account to power Sentient.") {
+            VStack(spacing: 18) {
                 loginStates
+                if settingsStyle && codex.loggedIn {
+                    Button(checkingPlan ? "Checking plan…" : "Refresh plan") {
+                        checkingPlan = true
+                        Task {
+                            if let fresh = try? await CodexAuth.refreshPlan() { plan = fresh }
+                            checkingPlan = false
+                        }
+                    }
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
+                    .buttonStyle(.plain).disabled(checkingPlan)
+                }
             }
         }
+        .task(id: codex.loggedIn) { plan = CodexAuth.currentPlan() }
         .task(id: codex.loggingIn) {
             // The sign-in watcher (replaces the old "I've finished" button): while the browser
             // flow is out, quietly re-check `codex login status` every 2s — the section flips to
@@ -55,11 +68,12 @@ struct OnboardingCodexLoginPanel: View {
     /// The login state machine: done → browser out → install failed → the button.
     @ViewBuilder private var loginStates: some View {
         if codex.loggedIn {
-            OnboardingDoneLine("Logged in to Codex")
+            ModelConnectionLine(text: (backend == .chatgpt ? "In use" : "Connected")
+                + (plan.map { " · \($0.displayName)" } ?? ""))
             if backend != .chatgpt {
                 // A custom engine won Test & Select earlier — logging in doesn't switch
                 // by itself (browsing never disturbs a live engine); this does.
-                SettingsPillButton(title: "Use ChatGPT") {
+                OnboardingNextButton(title: "Use ChatGPT", glow: 0.18) {
                     preparationTask = Task {
                         guard await codex.ensureCurrent(), !Task.isCancelled else { return }
                         backendRaw = ModelBackend.chatgpt.rawValue
@@ -83,9 +97,9 @@ struct OnboardingCodexLoginPanel: View {
             // THIS click installs or updates Codex; a broken existing executable can be
             // repaired here too. Sign-in follows only after preparation succeeds.
             VStack(spacing: 10) {
-                OnboardingNextButton(title: "Log in with ChatGPT",
+                OnboardingNextButton(title: codex.preparing || codex.installing ? "Preparing…" : "Sign in with ChatGPT",
                                      enabled: !codex.preparing && !codex.installing,
-                                     action: prepareAndLogin)
+                                     glow: 0.18, action: prepareAndLogin)
                 OnboardingStatusText(codex.loginStatusLine)
             }
             .frame(maxWidth: .infinity)

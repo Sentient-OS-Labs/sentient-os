@@ -176,7 +176,12 @@ Foreground route loss/recovery emits phase `connectivity` with started/unavailab
 through the same consent-controlled breadcrumbs and extended analytics. A route hint does not emit
 a failure or cancel the task. Native tool failures retain categorical evidence independently of
 the eventual task outcome; classification no longer decides whether the agent continues.
-Raw native error excerpts are reserved for the model's local tool response and never enter these sinks.
+Original native errors remain in the model's tool response. `NativeComputerUseErrorLog` also writes
+complete failed envelopes, error codes/details and classification to local-only
+`~/Library/Logs/SentientOS/ComputerUse/errors.jsonl`. Rotation retains the current and previous file
+at an 8 MiB target without truncating individual errors; transport limits bound each record.
+Files use mode 0600 in a 0700 directory. Write failures never block computer use. This logger does
+not call `Log()`, Sentry or automatic report export; raw errors never enter those remote sinks.
 # Computer-use recovery and explicit support reports (October 2026)
 
 Native tool errors are observations, not task endings. Individual `agent.tool_failed` and native

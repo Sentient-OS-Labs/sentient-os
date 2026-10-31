@@ -49,7 +49,7 @@ final class ComputerUseGate {
     private(set) var checkingAutomation = false
     private enum CheckStage: String { case runtime, automation, capability }
     private enum CheckEntryPoint: String {
-        case passive, explicitCheck = "explicit_check", restart, heldTask = "held_task", continueSetup = "continue"
+        case passive, settingsCheck = "settings_check", explicitCheck = "explicit_check", restart, heldTask = "held_task", continueSetup = "continue"
     }
     private enum CheckOutcome: String { case success, blocked, failure, cancelled, stale }
     private enum CheckReason: String {
@@ -252,6 +252,33 @@ final class ComputerUseGate {
     /// Settings repair is explicit and cannot depend on an unqueryable helper-grant cache.
     func fixNativePermissions() {
         requestNativeAccess(ask: true, verifyCapabilities: true, explicitRepair: true)
+    }
+
+    /// Revalidate completed setup when Settings opens. The native helper can finish immediately
+    /// with existing grants, or present its own setup if access has since changed.
+    func checkNativePermissionsIfNeeded() async {
+        let evidence = helperPermissionState
+        guard !Task.isCancelled, teardownDepth == 0, backend == .openAI, setup.ready,
+              sentientScreen, automation == .granted, NativePermissionSetup.shared.canAttemptTask,
+              !evidence.isReady, evidence.accessibility != .denied, evidence.screenRecording != .denied,
+              nativePermissionError == nil, !nativeHelperConflict,
+              !requestingAutomation, !checkingAutomation, !restartingNative,
+              pending == nil, pendingCheck == nil, !NativePermissionCheck.shared.isChecking,
+              OpenAIComputerUseRuntime.shared.canReserveDiagnostic else { return }
+
+        let id = beginNativeOperation()
+        permissionRequestID = id
+        requestingAutomation = true
+        defer { finishPermissionRequest(id) }
+        do {
+            try await checkNativeAccess(ask: false, verifyCapabilities: true,
+                                        operationID: id, entryPoint: .settingsCheck)
+        } catch {
+            // A task may acquire the runtime after the initial idle check.
+            let underlying = (error as? AccessFailure)?.underlying ?? error
+            if (underlying as? OpenAIComputerUse.RuntimeError) == .helperRunning { return }
+            recordNativeFailure(error, operationID: id, passive: true)
+        }
     }
 
     private func requestNativeAccess(ask: Bool, verifyCapabilities: Bool, explicitRepair: Bool = false) {

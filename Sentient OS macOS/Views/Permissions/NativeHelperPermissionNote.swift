@@ -8,7 +8,10 @@ import SwiftUI
     private var panel: NSPanel?
 
     private init(helper: NSRunningApplication) {
-        tracker = SettingsWindowTracker(application: helper, pollInterval: 0.1, usesAccessibility: false)
+        // The helper's main setup window floats at level 3. Its separate drag guide
+        // sits at level 0 over System Settings and must never receive this note.
+        tracker = SettingsWindowTracker(application: helper, pollInterval: 0.1, usesAccessibility: false,
+            windowLevels: [NSWindow.Level.floating.rawValue], onlyWhenApplicationActive: true)
         tracker.onFrameChange = { [weak self] frame in self?.show(beside: frame) }
         tracker.onWindowMissing = { [weak self] in self?.panel?.orderOut(nil) }
         tracker.onTrackingEnded = { [weak self] in self?.close() }
@@ -86,7 +89,7 @@ struct NativeHelperPermissionNoteView: View {
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
             Text("Enable Accessibility and Screenshots (Screen Recording).")
                 .font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
-            Text("The browser extension is optional. Choose Skip to finish.")
+            Text("You don’t need to enable the browser extension. Sentient doesn’t use it.")
                 .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
         }
         .fixedSize(horizontal: false, vertical: true)

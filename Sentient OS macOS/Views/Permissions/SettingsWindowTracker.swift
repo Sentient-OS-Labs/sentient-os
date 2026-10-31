@@ -24,6 +24,8 @@ final class SettingsWindowTracker {
     private let pollInterval: TimeInterval
     private let application: NSRunningApplication?
     private let usesAccessibility: Bool
+    private let windowLevels: Set<Int>
+    private let onlyWhenApplicationActive: Bool
 
     /// Lookup misses are common while System Settings opens or swaps panes; requiring several
     /// avoids false "window closed" detection.
@@ -43,10 +45,13 @@ final class SettingsWindowTracker {
     private var missingAppPollCount = 0
 
     init(application: NSRunningApplication? = nil, pollInterval: TimeInterval = 1.0 / 30.0,
-         usesAccessibility: Bool = true) {
+         usesAccessibility: Bool = true, windowLevels: Set<Int> = [0],
+         onlyWhenApplicationActive: Bool = false) {
         self.application = application
         self.pollInterval = pollInterval
         self.usesAccessibility = usesAccessibility
+        self.windowLevels = windowLevels
+        self.onlyWhenApplicationActive = onlyWhenApplicationActive
     }
 
     /// Start locating the System Settings window and emitting frame updates.
@@ -88,6 +93,10 @@ final class SettingsWindowTracker {
         hasActiveTrackingTarget = true
         missingAppPollCount = 0
 
+        guard !onlyWhenApplicationActive || app.isActive else {
+            publishWindowServerFrame(nil)
+            return
+        }
         updateFrameFromWindowServer(for: app.processIdentifier)
         guard usesAccessibility, AXIsProcessTrusted() else { return }
 
@@ -115,7 +124,11 @@ final class SettingsWindowTracker {
 
     /// Window-server geometry — needs no permission; the initial and fallback source.
     private func updateFrameFromWindowServer(for pid: pid_t) {
-        guard let frame = windowServerFrame(for: pid) else {
+        publishWindowServerFrame(windowServerFrame(for: pid))
+    }
+
+    private func publishWindowServerFrame(_ frame: CGRect?) {
+        guard let frame else {
             currentFrame = nil
             onWindowMissing?()
             return
@@ -220,7 +233,7 @@ final class SettingsWindowTracker {
             .max(by: { ($0.activationPolicy == .prohibited ? 0 : 1) < ($1.activationPolicy == .prohibited ? 0 : 1) })
     }
 
-    /// Largest visible layer-0 window-server window for the System Settings process. Upstream note:
+    /// Largest visible window at the requested level for the exact tracked process. Upstream note:
     /// kCGWindowBounds can read visually taller than the useful content edge (outer framing), which
     /// is why panel attachment is tuned in PermissionDragPanel.targetFrame, not here.
     private func windowServerFrame(for pid: pid_t) -> CGRect? {
@@ -229,13 +242,17 @@ final class SettingsWindowTracker {
                 as? [[String: Any]]
         else { return nil }
 
+        return selectedFrame(for: pid, windows: windows)
+    }
+
+    private func selectedFrame(for pid: pid_t, windows: [[String: Any]]) -> CGRect? {
         return windows
             .filter { window in
                 guard let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t else { return false }
                 guard ownerPID == pid else { return false }
                 let layer = window[kCGWindowLayer as String] as? Int ?? 0
                 let alpha = window[kCGWindowAlpha as String] as? Double ?? 1
-                return layer == 0 && alpha > 0
+                return windowLevels.contains(layer) && alpha > 0
             }
             .compactMap { window -> CGRect? in
                 guard let bounds = window[kCGWindowBounds as String] as? NSDictionary else { return nil }

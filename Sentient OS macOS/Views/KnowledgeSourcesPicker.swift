@@ -195,7 +195,7 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private var chatsGroup: some View {
-        SettingsGroup(label: "Your conversations") {
+        SettingsGroup(label: "Messages") {
             VStack(alignment: .leading, spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 18) { conversationPills }
@@ -227,7 +227,7 @@ struct KnowledgeSourcesPicker: View {
     // MARK: - Hosted and direct connectors
 
     private var emailAndCalendarGroup: some View {
-        SettingsGroup(label: "Email & calendar") {
+        SettingsGroup(label: "Email & calendars") {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 18) {
@@ -298,7 +298,7 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private var otherAppsGroup: some View {
-        SettingsGroup(label: "More of your world") {
+        SettingsGroup(label: "Apps & notes") {
             VStack(alignment: .leading, spacing: 12) {
                 ChipFlow {
                     ForEach(connectorSources.filter {

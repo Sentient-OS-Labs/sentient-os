@@ -14,18 +14,19 @@ import AppKit
 struct SettingsView: View {
     /// The sections, in sidebar order.
     enum Pane: CaseIterable, Identifiable {
-        case sources, frontierModel, doubleTap, proactive, shareKnowledge, system, health
+        case frontierModel, sources, proactive, doubleTap, overnight, shareKnowledge, system, health
 
         var id: Self { self }
         var title: String {
             switch self {
             case .sources:   return "Knowledge Sources"
-            case .frontierModel: return "Frontier Model Choice"
+            case .frontierModel: return "AI Models & Accounts"
             case .doubleTap: return "Double Tap"
-            case .proactive: return "Proactive & Sidekick"
-            case .shareKnowledge: return "Give AIs Knowledge"
+            case .proactive: return "Sidekick"
+            case .overnight: return "Overnight & Suggestions"
+            case .shareKnowledge: return "Knowledge Sharing"
             case .system:    return "System"
-            case .health:    return "Permissions & Health"
+            case .health:    return "Permissions & Help"
             }
         }
         var icon: String {
@@ -34,6 +35,7 @@ struct SettingsView: View {
             case .frontierModel: return "cpu"
             case .doubleTap: return "hand.tap"
             case .proactive: return "sparkles"
+            case .overnight: return "moon.stars"
             case .shareKnowledge: return "antenna.radiowaves.left.and.right"
             case .system:    return "gearshape"
             case .health:    return "checkmark.shield"
@@ -41,6 +43,19 @@ struct SettingsView: View {
         }
     }
 
+    enum SidebarGroup: String, CaseIterable, Identifiable {
+        case app = "App", personalization = "Personalization", privacy = "Support"
+        var id: Self { self }
+        var panes: [Pane] {
+            switch self {
+            case .app: [.frontierModel]
+            case .personalization: [.sources, .proactive, .doubleTap, .overnight, .shareKnowledge]
+            case .privacy: [.system, .health]
+            }
+        }
+    }
+
+    @State private var showInvitations = false
     @Bindable private var navigation = MainNavigation.shared
     private var selection: Pane { navigation.settingsPane }
 
@@ -67,36 +82,74 @@ struct SettingsView: View {
                 .padding(.top, 27)
                 .padding(.bottom, 18)
 
-            VStack(spacing: 4) {
-                ForEach(Pane.allCases) { pane in
-                    SidebarRow(pane: pane, selected: selection == pane) { navigation.settingsPane = pane }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(SidebarGroup.allCases) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.rawValue)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(SettingsStyle.secondary)
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 3)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(group.panes) { pane in
+                                SidebarRow(pane: pane, selected: selection == pane) {
+                                    if pane == .frontierModel { navigation.modelSettingsSection = .main }
+                                    navigation.settingsPane = pane
+                                }
+                            }
+                        }
+                    }
                 }
+                .padding(.bottom, 18)
             }
+            .scrollIndicators(.hidden)
 
-            Spacer(minLength: 20)
             aboutFooter
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 22)
-        .frame(width: 248)
+        .frame(width: 286)
         .background(Color(white: 0.065).ignoresSafeArea())
     }
 
-    /// The About corner — what used to want its own tab, tucked where it belongs.
+    /// Two quiet rows: invitations, then version/build and the open-source link.
     private var aboutFooter: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SettingsHairline(opacity: 0.09).padding(.bottom, 2)
-            HStack(spacing: 8) {
-                OrbMark(size: 17)
-                Text("Sentient OS").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.85))
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsHairline(opacity: 0.06)
+            Button { showInvitations = true } label: {
+                Label("Invite friends", systemImage: "gift")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.70))
             }
-            Text("Version \(UpdateController.currentVersionString)")
-                .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
-            footerLink("Open source on GitHub", icon: "arrow.up.right",
-                       url: "https://github.com/Sentient-OS-Labs/sentient-os", leadingHeart: true)
-            footerLink("Report an issue", icon: "arrow.up.right",
-                       url: "https://github.com/Sentient-OS-Labs/sentient-os/issues")
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showInvitations) {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack {
+                        Text("Invite friends").font(.system(size: 24, weight: .medium))
+                        Spacer()
+                        Button("Done") { showInvitations = false }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    InviteSettingsSection()
+                }
+                .padding(28)
+                .frame(width: 520)
+                .background(Theme.bg)
+                .preferredColorScheme(.dark)
+            }
+            HStack(spacing: 12) {
+                Text("v\(UpdateController.currentVersionString)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(SettingsStyle.secondary)
+                    .fixedSize()
+                    .accessibilityLabel("Version \(UpdateController.currentVersionString)")
+                Spacer(minLength: 0)
+                footerLink("Open source", icon: "arrow.up.right",
+                           url: "https://github.com/Sentient-OS-Labs/sentient-os", leadingHeart: true)
+                    .accessibilityLabel("Open source on GitHub")
+                    .help("Open source on GitHub")
+            }
         }
         .padding(.horizontal, 14)
     }
@@ -105,17 +158,18 @@ struct SettingsView: View {
         Button {
             if let u = URL(string: url) { NSWorkspace.shared.open(u) }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 if leadingHeart {
                     Image(systemName: "heart.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundStyle(Theme.Ink.gold)
                         .accessibilityHidden(true)
                 }
-                Text(title).font(.system(size: 12))
-                Image(systemName: icon).font(.system(size: 9))
+                Text(title).font(.system(size: 11))
+                Image(systemName: icon).font(.system(size: 8))
             }
             .foregroundStyle(SettingsStyle.secondary)
+            .fixedSize()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -131,6 +185,7 @@ struct SettingsView: View {
                 case .frontierModel: FrontierModelPane()
                 case .doubleTap: DoubleTapPane()
                 case .proactive: ProactivePane()
+                case .overnight: OvernightPane()
                 case .shareKnowledge: ShareKnowledgePane()
                 case .system:    SystemPane()
                 case .health:    HealthPane()
@@ -143,7 +198,7 @@ struct SettingsView: View {
         }
     }
 
-    /// The trust ribbon — in Settings it rides ONLY Knowledge Sources and Permissions & Health,
+    /// The trust ribbon — in Settings it rides ONLY Knowledge Sources and Permissions & Help,
     /// the panes where the files story is the message (what we read · what the grants allow);
     /// boilerplate on every pane would cheapen it.
     private var trustFooter: some View {

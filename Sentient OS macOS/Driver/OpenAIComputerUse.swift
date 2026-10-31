@@ -121,17 +121,17 @@ nonisolated enum OpenAIComputerUse {
         case cliUnavailable, unsupportedCLI, backendUnavailable, permissionRequired, restartRequired
         var errorDescription: String? {
             switch self {
-            case .incomplete: "OpenAI computer use is missing or incomplete. Set it up again in Permissions & Health."
-            case .invalidSignature: "OpenAI computer use could not be verified. Repair it in Permissions & Health."
+            case .incomplete: "OpenAI computer use is missing or incomplete. Set it up again in Permissions & Help."
+            case .invalidSignature: "OpenAI computer use could not be verified. Repair it in Permissions & Help."
             case .unsupportedSystem: "This OpenAI computer-use version needs a newer version of macOS."
             case .helperRunning: "Computer use is currently running. Finish the active task, then try the repair again."
-            case .changedInstallation: "Computer use changed during setup. Repair it in Permissions & Health."
+            case .changedInstallation: "Computer use changed during setup. Repair it in Permissions & Help."
             case .conflictingHelper: "Computer use couldn’t get ready. Please try again."
-            case .launchFailed: "OpenAI computer use could not start. Try again in Permissions & Health."
-            case .cliUnavailable: "Codex could not be found. Set up Codex in Permissions & Health."
+            case .launchFailed: "OpenAI computer use could not start. Try again in Permissions & Help."
+            case .cliUnavailable: "Codex could not be found. Set up Codex in Permissions & Help."
             case .unsupportedCLI: "This Codex version cannot check computer use. Check for updates to Codex and Sentient, then try again."
             case .backendUnavailable: "Computer use couldn’t connect. Please try again."
-            case .permissionRequired: "Allow Sentient to control computer use in Permissions & Health."
+            case .permissionRequired: "Allow Sentient to control computer use in Permissions & Help."
             case .restartRequired: "Computer use needs to restart. Finish any computer-use tasks in other apps, then choose Restart computer use."
             }
         }
@@ -279,10 +279,9 @@ nonisolated enum OpenAIComputerUse {
     Opening an app can take a moment. A launch, splash screen, loading indicator or temporarily
     empty window is not a blocker. Wait briefly and read fresh state, up to three times, before
     saying you cannot continue. Do this quietly rather than asking the user to keep the app open
-    or retry while it is still starting. The app-state tool itself waits and retries transient
-    window-not-ready, capture and native read-timeout failures up to three times before returning
-    an error. That budget applies to one tool call; you may request fresh state again when
-    useful, inspect another available source, or explain a remaining blocker to the user.
+    or retry while it is still starting. Each app-state tool call makes one attempt and returns its actual result. You may request
+    fresh state again when useful, inspect another available source, or explain a remaining
+    blocker to the user.
     Never repeat a click, send, like, purchase, upload or other change just because reading the
     result failed. Re-read state to determine what already happened before any further action.
     For a recoverable action error, read fresh app state before deciding what to do next.

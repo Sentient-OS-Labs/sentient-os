@@ -2,7 +2,7 @@
 //  OvernightWakeRow.swift
 //  Sentient OS macOS · Views/Settings/
 //
-//  Shared native helper setup for onboarding and Permissions & Health. refresh checks actual
+//  Shared native helper setup for onboarding and Permissions & Help. refresh checks actual
 //  readiness; setUp requests registration; monitor follows approval while the row is visible.
 //  Doc: Documentation - Settings.md
 //

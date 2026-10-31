@@ -3,12 +3,12 @@
 //  Sentient OS macOS
 //
 //  The shared frontier-engine picker: six choices over each engine's
-//  setup panel, rendered identically by Settings → Frontier Model Choice and onboarding's
+//  setup panel, rendered identically by Settings → AI Models & Accounts and onboarding's
 //  choose-your-frontier-model step. Shares its visible tab with the host and owns the endpoint fields
 //  (ModelBackend/CustomProvider — the one source of truth), Test & Select (vision-gated
 //  activation: an unproven model can never become the engine), and the local-models
-//  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
-//  onboarding embeds the live codex login. Hosted entry points follow the shared presentation
+//  warning. The ChatGPT panel is the host's slot: both Settings and onboarding embed
+//  the shared, owned codex login flow. Hosted entry points follow the shared presentation
 //  gate. Doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
 //
 
@@ -17,7 +17,7 @@ import SwiftUI
 struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     @Environment(\.settingsFormStyle) private var formStyle
 
-    /// Settings aligns the grid to its content edge; onboarding centers it.
+    /// The host controls commitment behavior; both use the same centered selector.
     enum Layout { case settingsGrid, onboardingGrid }
 
     typealias Tab = FrontierEngineTab
@@ -27,9 +27,8 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     private static var kimiSlug: String { "moonshotai/kimi-k3" }
 
     let layout: Layout
-    /// Whether the ChatGPT engine counts as healthy (wears the pill's active dot). Settings
-    /// passes true — login honesty lives in Permissions & Health there; onboarding passes the
-    /// live codex login state.
+    /// Whether the ChatGPT engine counts as healthy (wears the pill's active dot).
+    /// Settings and onboarding pass the live codex login state.
     let chatgptHealthy: Bool
     private let chatgptPanel: () -> ChatGPTPanel
 
@@ -73,7 +72,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: layout == .onboardingGrid ? .center : .leading, spacing: 26) {
+        VStack(spacing: 26) {
             tabStrip
 
             Group {
@@ -89,7 +88,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             }
             // The Settings editorial measure — panels never stretch wider than prose stays
             // readable, in either host (SettingsPane caps at the same width).
-            .frame(maxWidth: formStyle ? .infinity : 640, alignment: .leading)
+            .frame(maxWidth: 640, alignment: .leading)
             .id(tab)
             // A quiet crossfade — no lateral slide: panels differ in height, and a slide on
             // top of the height change read as an abrupt jump (field feedback 2026-07-25).
@@ -113,58 +112,18 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     // MARK: - The engine tab strip
 
-    @ViewBuilder private var tabStrip: some View {
-        if layout == .onboardingGrid {
-            VStack(spacing: 16) {
-                if Tab.hostedUsageVisible {
-                    OnboardingHostedUsageButton(selected: tab == .sentient,
-                                                active: activeTab == .sentient && isActiveEngineHealthy(.sentient)) {
-                        selectTab(.sentient)
-                    }
-
-                    Text("Or connect your own AI")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondary)
-                }
-
-                VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        pill(.chatgpt); pill(.claude)
-                    }
-                    HStack(spacing: 8) {
-                        pill(.openRouter); pill(.lmStudio); pill(.custom)
-                    }
-                }
-            }
-            .frame(width: EngineTab.pillWidth * 3 + 16)
-        } else if formStyle {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-                ForEach(Tab.visibleCases) { pill($0) }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    if Tab.hostedUsageVisible { pill(.sentient) }
-                    pill(.chatgpt); pill(.claude)
-                }
-                HStack(spacing: 8) {
-                    pill(.openRouter); pill(.lmStudio); pill(.custom)
-                }
-            }
-            .fixedSize()
-        }
-    }
-
-    private func pill(_ t: Tab) -> some View {
-        EngineTab(label: t.label, badge: t.badge,
-                  selected: tab == t, active: activeTab == t && isActiveEngineHealthy(t)) {
-            selectTab(t)
+    private var tabStrip: some View {
+        ModelChoiceBar(items: Tab.visibleCases.map {
+            ModelChoiceItem(id: $0.rawValue,
+                            title: $0.label.replacingOccurrences(of: " Subscription", with: ""),
+                            active: activeTab == $0 && isActiveEngineHealthy($0))
+        }, selection: tab.rawValue) { raw in
+            if let choice = Tab(rawValue: raw) { selectTab(choice) }
         }
     }
 
     /// The active dot stays honest: a custom engine only wears it once it's proven usable,
-    /// Claude's is its live login, and ChatGPT's honesty is the host's call (Settings: always;
-    /// onboarding: logged in).
+    /// Claude and ChatGPT reflect their live login state supplied by the host.
     private func isActiveEngineHealthy(_ t: Tab) -> Bool {
         switch t {
         case .sentient: return sentient.ready && sentient.configured
@@ -204,23 +163,18 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     // MARK: - Claude (the claude -p engine)
 
     private var claudePanel: some View {
-        SettingsGroup(label: formStyle ? "Claude" : "Your Claude") {
-            VStack(alignment: .leading, spacing: 14) {
-                SettingsProse(formStyle ? "Use your Claude Pro, Max, or Team subscription for knowledge, morning suggestions, and Sidekick." : "Claude Code runs on your own Claude subscription (Pro, Max, or Team), so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, computer use.")
+        ModelSelectionPanel(title: "Claude", subtitle: "Use your Pro, Max, or Team subscription to power Sentient.") {
+            VStack(spacing: 18) {
 
                 claudeStates
 
                 if claude.preparing || claude.installing { MonoWaitLine("preparing claude code…") }
                 OnboardingStatusText(claude.installStatus)
 
-                if formStyle {
-                    SettingsDetails(title: "Using Gmail and Google Calendar") {
-                        SettingsProse("Connect them in Claude’s Settings → Connectors to use them in Sentient.")
-                    }
-                } else {
-                    SettingsHairline()
-                    SettingsProse("Gmail and Calendar can ride your claude.ai connectors: connect them once at claude.ai, under Settings, then Connectors, and Sentient's reads use them here.")
+                SettingsDetails(title: "Using Gmail and Google Calendar") {
+                    SettingsProse("Connect them in Claude’s Settings → Connectors to use them in Sentient.")
                 }
+
             }
         }
         .onAppear {
@@ -245,12 +199,10 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// out → install failed → the sign-in CTA (which lazily installs the CLI first).
     @ViewBuilder private var claudeStates: some View {
         if claude.loggedIn {
-            OnboardingDoneLine(claude.plan.map { "Signed in to Claude Code · \($0) plan" }
-                               ?? "Signed in to Claude Code")
-            if backend == .claude {
-                FrontierActiveLine("Sentient is running on your Claude.")
-            } else if layout == .settingsGrid {
-                SettingsPillButton(title: "Use Claude") {
+            ModelConnectionLine(text: (backend == .claude ? "In use" : "Connected")
+                + (claude.plan.map { " · \($0) plan" } ?? ""))
+            if backend != .claude && layout == .settingsGrid {
+                OnboardingNextButton(title: "Use Claude", glow: 0.18) {
                     prepareClaude(signIn: false)
                 }
                 .disabled(claude.preparing || claude.installing)
@@ -276,7 +228,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsPillButton(title: claude.preparing || claude.installing ? "Setting up…" : claude.loginActionTitle) {
+                OnboardingNextButton(title: claude.preparing || claude.installing ? "Setting up…" : claude.loginActionTitle, glow: 0.18) {
                     prepareClaude(signIn: true)
                 }
                 .disabled(claude.preparing || claude.installing)
@@ -305,19 +257,12 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     // MARK: - Configurable endpoints (OpenRouter · Custom + its local presets)
 
     private func endpointPanel(for preset: CustomProvider.Preset) -> some View {
-        SettingsGroup(label: preset == .openRouter ? "Your OpenRouter"
-                           : preset == .lmStudio ? "Your LM Studio" : "Your Endpoint") {
-            VStack(alignment: .leading, spacing: 14) {
-                switch preset {
-                case .openRouter:
-                    SettingsProse("Any model on OpenRouter, billed to your own key.")
-                case .lmStudio:
-                    SettingsProse(formStyle
-                        ? "Use an image-capable model from LM Studio. Keep its local server running while you use Sentient."
-                        : "A model running on your own hardware, through LM Studio's local server. Sentient's translator makes it a first-class engine, computer use included; whether the model is up to the job is the honest question (see the note when this tab opens).")
-                case .custom:
-                    SettingsProse("Any endpoint that speaks the OpenAI Responses API (a /v1/responses route). Base URL, model name, key if it needs one.")
-                }
+        ModelSelectionPanel(title: preset == .openRouter ? "OpenRouter"
+                            : preset == .lmStudio ? "LM Studio" : "Your endpoint",
+                            subtitle: preset == .openRouter ? "Choose a model with your own OpenRouter API key."
+                            : preset == .lmStudio ? "Use an image-capable model running on this Mac."
+                            : "Connect a model that supports the OpenAI Responses API.", centered: false) {
+            VStack(alignment: .leading, spacing: 18) {
                 if preset != .lmStudio {
                     if formStyle {
                         SettingsDetails(title: "Choosing a model for computer use") {
@@ -349,8 +294,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     : "Your model has to be able to see: Sentient acts on your Mac by looking at the screen, so a text-only model can't drive it. The test below checks that for you by asking your model to read a picture.")
 
                 HStack(spacing: 10) {
-                    SettingsPillButton(title: testing ? "Testing…" : "Test & Select",
-                                       tint: Theme.Ink.bright) {
+                    OnboardingNextButton(title: testing ? "Testing…" : "Test & Select", enabled: !testing, glow: 0.18) {
                         guard !testing else { return }
                         runTest(preset: preset)
                     }
@@ -538,58 +482,6 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             return "The endpoint answered but has no /v1/responses route.\(v1Hint.isEmpty ? " It must support the OpenAI Responses API." : v1Hint)"
         }
         return "No answer from the endpoint.\(v1Hint) \(detail.prefix(180))"
-    }
-}
-
-// MARK: - The engine tab
-
-/// One tab in the engine strip: a fixed-size pill that reads like a place, not a button —
-/// EVERY pill the same width and height so the row's geometry never shifts (scrollbars,
-/// badges, and selection can't reflow it). Selected = elevated wash + white ring; the ACTIVE
-/// engine wears the small green status dot (the same honest LED the health rows use). Badges
-/// whisper in mono-caps under the label.
-struct EngineTab: View {
-    @Environment(\.settingsFormStyle) private var formStyle
-    static var pillWidth: CGFloat { 176 }
-    static var pillHeight: CGFloat { 52 }
-
-    let label: String
-    var badge: String? = nil
-    let selected: Bool
-    let active: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    if active { HealthDot(color: Theme.Ink.green) }
-                    Text(formStyle ? label.replacingOccurrences(of: " Subscription", with: "") : label)
-                        .font(.system(size: formStyle ? 15 : 12.5, weight: selected ? .medium : .regular))
-                        .foregroundStyle(selected ? .white : Theme.Ink.body)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.92)
-                }
-                if let badge {
-                    if formStyle {
-                        Text(label == "Custom" ? "Your endpoint" : badge.capitalized)
-                            .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
-                    } else {
-                        MonoCaps(badge, size: 7, tracking: 1.4,
-                                 color: badge == "recommended" ? Theme.Ink.green.opacity(0.85) : .white.opacity(0.45))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .frame(width: formStyle ? nil : Self.pillWidth, height: formStyle ? 68 : Self.pillHeight)
-            .background(selected ? Theme.elevated : Color.white.opacity(0.02),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
-                selected ? Color.white.opacity(0.28) : Color.white.opacity(0.10), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(PressScaleStyle())
     }
 }
 

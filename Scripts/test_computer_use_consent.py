@@ -7,6 +7,8 @@ import tempfile
 
 APP = Path(__file__).resolve().parents[1] / 'Sentient OS macOS'
 SUPPORT = r'''
+nonisolated enum NativeComputerUseErrorLog { static func record(tool: String, failure: NativeComputerUseFailure) {} }
+
 import Foundation
 import AppKit
 nonisolated enum ModelBackend: Sendable { case chatgpt; static let current = ModelBackend.chatgpt }
@@ -43,6 +45,7 @@ actor Script {
     }
 }
 actor OpenAIComputerUseSession {
+    static let permissionSetupTimeout: TimeInterval = 300
     let script: Script
     init(script: Script) { self.script = script }
     static func open(_ config: OpenAIComputerUse.Configuration) async throws -> OpenAIComputerUseSession { .init(script: config.script) }
@@ -244,7 +247,7 @@ with tempfile.TemporaryDirectory(prefix='sentient-diagnostic-consent-') as direc
     (p/'Support.swift').write_text(SUPPORT)
     (p/'Tests.swift').write_text(TESTS)
     files = ['Diagnostics/NativeComputerUseFailure.swift','Diagnostics/ComputerUseDiagnosticConsent.swift',
-             'Diagnostics/ComputerUseDiagnosticPolicy.swift','Driver/NativeAppStateRetry.swift',
+             'Diagnostics/ComputerUseDiagnosticPolicy.swift',
              'Driver/OpenAIComputerUseProbe.swift','Driver/NativePermissionReadiness.swift','Driver/NativeComputerUseServer.swift']
     binary = p/'tests'
     subprocess.run(['xcrun','swiftc','-swift-version','5','-parse-as-library','-target',f'{platform.machine()}-apple-macos15.0',

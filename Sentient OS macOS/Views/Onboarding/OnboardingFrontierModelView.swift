@@ -68,20 +68,8 @@ struct OnboardingFrontierModelView: View {
             // below the pills changes; the ScrollView carries the tall endpoint panels.
             ScrollView {
                 VStack(spacing: 34) {
-                    VStack(spacing: 14) {
-                        OnboardingWhisper("FRONTIER MODEL")
-
-                        Text("Choose your frontier model")
-                            .display(26)
-                            .foregroundStyle(Theme.Ink.bright)
-
-                        Text(PrivacyCopy.frontierSummary)
-                            .font(.system(size: 14.5))
-                            .foregroundStyle(Theme.secondary)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .frame(maxWidth: 640)
-                    }
+                    ModelSelectionHeading(title: "Choose your frontier model",
+                                          subtitle: "Your most intelligent AI clicks around for Sidekick")
 
                     FrontierEnginePicker(tab: $tab, layout: .onboardingGrid,
                                          chatgptHealthy: codex.loggedIn) {
@@ -110,11 +98,13 @@ struct OnboardingFrontierModelView: View {
                                          enabled: engineReady && !continuing && !enginePreparing,
                                          glow: 0.28, action: continueWithEngine)
                 }
-                .padding(.horizontal, 40)
-                .padding(.vertical, 48)
+                .frame(maxWidth: 680)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 40)
                 .frame(maxWidth: .infinity)
             }
             .scrollBounceBehavior(.basedOnSize)
+            .environment(\.settingsFormStyle, true)
 
             // Keep room for the privacy controls and invitation ticket while tall provider
             // panels scroll. OnboardingView hosts the ticket so its gift covers all chrome.

@@ -500,7 +500,7 @@ struct HomeView: View {
     // computer use regressed) renders red, because the product is broken RIGHT NOW; otherwise
     // the morning-after caution renders amber (last night's UNATTENDED run hit a knowable snag —
     // OvernightCaution recorded it at ProactiveCycle's choke point; the next fully successful
-    // cycle clears it on its own). Both roads lead to Settings → Permissions & Health. Live
+    // cycle clears it on its own). Both roads lead to Settings → Permissions & Help. Live
     // issues re-probe on foreground and melt away when fixed; ✕ mutes a live issue's kind for
     // the session (a lower rung may then surface), while the amber ✕ clears the record. Below
     // both: skipped-connector warnings from the last completed KB pass, then the green
@@ -584,7 +584,7 @@ struct HomeView: View {
     }
 
     /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in
-    /// Permissions & Health; a full disk in System Settings' Storage pane. Weather kinds (offline,
+    /// Permissions & Help; a full disk in System Settings' Storage pane. Weather kinds (offline,
     /// usage limit) have nothing to click.
     private func cautionAction(_ kind: OvernightCaution.Kind) -> (title: String, run: () -> Void)? {
         switch kind {
@@ -596,7 +596,7 @@ struct HomeView: View {
         }
     }
 
-    /// Land directly on Permissions & Health — every banner's fix lives there; never strand the
+    /// Land directly on Permissions & Help — every banner's fix lives there; never strand the
     /// user on the default pane.
     private func openHealthSettings() {
         HomeWindowOpening.open(.settings, settingsPane: .health)

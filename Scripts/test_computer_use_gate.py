@@ -46,9 +46,9 @@ nonisolated enum ComputerUseBackend { case cua, openAI; nonisolated(unsafe) stat
 @MainActor final class ComputerUseSetup {
     static let shared=ComputerUseSetup()
     static func instance(for:ComputerUseBackend)->ComputerUseSetup {shared}
-    var ready=true;var isInstalling=false;var holdInstall=false
+    var ready=true;var isInstalling=false;var holdInstall=false;var installChecks=0
     func refresh() {}
-    func ensureInstalled() async -> Bool {while holdInstall {try? await Task.sleep(for:.milliseconds(5));await Task.yield()};return true}
+    func ensureInstalled() async -> Bool {installChecks+=1;while holdInstall {try? await Task.sleep(for:.milliseconds(5));await Task.yield()};return true}
 }
 @MainActor final class CodexSetup {static let shared=CodexSetup();var computerUseReady=true}
 nonisolated enum Permissions {
@@ -56,7 +56,9 @@ nonisolated enum Permissions {
     nonisolated(unsafe) static var automation=AutomationState.granted
     nonisolated(unsafe) static var hold=false
     nonisolated(unsafe) static var screen=true
+    nonisolated(unsafe) static var promptRequests=0
     static func nativeAutomationState(ask:Bool) async -> AutomationState {
+        if ask {promptRequests+=1}
         let captured=automation
         while hold {try? await Task.sleep(for:.milliseconds(5));await Task.yield()};return captured
     }
@@ -73,15 +75,18 @@ nonisolated enum SFSpeechRecognizer {
 }
 nonisolated enum OpenAIComputerUse {
     struct Configuration:Sendable {static func resolveForSetup() async throws -> Self {Self()}}
-    enum RuntimeError:Error {case incomplete,conflictingHelper,restartRequired,backendUnavailable}
+    enum RuntimeError:Error {case incomplete,conflictingHelper,restartRequired,backendUnavailable,helperRunning}
 }
 @MainActor final class OpenAIComputerUseRuntime {
     static let shared=OpenAIComputerUseRuntime()
     var nextStartFailure:OpenAIComputerUse.RuntimeError?
     var holdStart=false
     var permissionRestarts=0
+    var canReserveDiagnostic=true
+    var takeovers=0
     func prepareForPermissionRestart(configuration:OpenAIComputerUse.Configuration) async throws {permissionRestarts+=1}
     func start(configuration:OpenAIComputerUse.Configuration,stoppingConflictingHelpers:Bool) async throws -> Int {
+        if stoppingConflictingHelpers {takeovers+=1}
         while holdStart {try? await Task.sleep(for:.milliseconds(5));await Task.yield()}
         if let failure=nextStartFailure {nextStartFailure=nil;throw failure};return 1
     }
@@ -93,6 +98,7 @@ nonisolated enum OpenAIComputerUse {
     var proofID:UUID?
     var snapshot=NativePermissionReadiness.Snapshot() {didSet {if snapshot.isReady {if proofID == nil {proofID=UUID()}} else {proofID=nil}}}
     var calls=0
+    var isChecking=false
     var hold=false
     var cancelAfterPublishing=false
     var holdRefresh=false
@@ -486,6 +492,52 @@ import Foundation
               "Explicit native repair works without prior setup receipts or Sentient capture grant")
         check(!repair.isReadyForTask,"Helper repair never invents Sentient's own Screen Recording grant")
         Permissions.screen=true
+        NativePermissionSetup.shared.verified();proof.snapshot = .init()
+        Permissions.automation = .granted
+        let automatic=ComputerUseGate.fixture()
+        automatic.refresh();try await settle(automatic)
+        let beforeAutomatic=proof.calls
+        let beforePrompts=Permissions.promptRequests
+        let beforeTakeovers=OpenAIComputerUseRuntime.shared.takeovers
+        let beforeInstall=ComputerUseSetup.shared.installChecks
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1 && automatic.allRequiredGranted,
+              "Opening Settings verifies unknown access after completed setup")
+        check(Permissions.promptRequests == beforePrompts && OpenAIComputerUseRuntime.shared.takeovers == beforeTakeovers
+              && ComputerUseSetup.shared.installChecks == beforeInstall,
+              "Automatic verification uses passive Automation and avoids install or helper takeover")
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1,"Already verified access reuses its proof")
+        proof.snapshot = .init()
+        OpenAIComputerUseRuntime.shared.canReserveDiagnostic=false
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1,"Active computer work defers the automatic check")
+        OpenAIComputerUseRuntime.shared.canReserveDiagnostic=true
+        proof.isChecking=true
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1,"An existing native check is not duplicated")
+        proof.isChecking=false
+        Permissions.automation = .notAsked
+        automatic.fixturePassiveRefresh();try await settle(automatic)
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1 && Permissions.promptRequests == beforePrompts,
+              "Unasked Automation remains an explicit setup action")
+        Permissions.automation = .granted;Permissions.screen=false
+        automatic.fixturePassiveRefresh();try await settle(automatic)
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1,"Missing Sentient capture keeps automatic verification deferred")
+        Permissions.screen=true
+        automatic.fixturePassiveRefresh();try await settle(automatic)
+        NativePermissionSetup.shared.requestRestart()
+        await automatic.checkNativePermissionsIfNeeded()
+        check(proof.calls == beforeAutomatic+1,"Pending permission restart keeps automatic verification deferred")
+        NativePermissionSetup.shared.verified()
+        proof.hold=true
+        let pendingAutomatic=Task {await automatic.checkNativePermissionsIfNeeded()}
+        try await Task.sleep(for:.milliseconds(20))
+        pendingAutomatic.cancel();await pendingAutomatic.value;proof.hold=false
+        check(!automatic.requestingAutomation && !automatic.checkingCapabilities && automatic.nativePermissionError == nil,
+              "Leaving Settings cancels its automatic verification without a false failure")
         ComputerUseBackend.current = .cua
         let legacy=ComputerUseGate.fixture()
         check(!legacy.intercept({}),"Legacy CUA admission does not acquire the native restart requirement")

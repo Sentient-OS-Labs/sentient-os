@@ -88,6 +88,12 @@ The override belongs to `/onboarding`; it does not change the Mac's setting or a
 the page footer. This behavior is implemented in the website and takes effect for installed apps
 when that website build is deployed; changing app documentation does not publish it.
 
+The model step shares `ModelChoiceBar`, `ModelSelectionHeading`, and `ModelSelectionPanel`
+with Settings: animated white capsule selections, a centered title, and the permission window's
+soft edge lighting. It only configures the main AI; the Main AI / Double Tap switch and all
+Double Tap model controls remain exclusive to Settings. Provider activation and login ownership
+are unchanged by the presentation.
+
 **1 · Choose your frontier model.** The shared `FrontierEnginePicker` in a single centered row over
 the per-engine panels, with `OnboardingCodexLoginPanel` as the ChatGPT panel and the picker's own
 self-contained Claude panel. **Shared computer-use setup starts at app launch:** Codex CLI and the
@@ -185,7 +191,10 @@ policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `
 - `DisplayAwake` holds the screen on during the introduction and model connection; Home ends that hold.
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
 - Sidekick is available after the model connection and remains available during personal setup. The film retains its isolated notch demo and the existing pre-Home gesture policy.
-- The DEBUG "SKIP TO HOME" handle quietly flips the flag (no finale). `FactoryReset` rewinds here.
+- The DEBUG "SKIP INTRO" handle jumps straight to the frontier-model picker from any intro phase,
+  including loading and the native lessons. It skips the transition animation, tears down the demos,
+  and records the intro as passed without choosing a model or completing onboarding. The separate
+  "SKIP TO HOME" handle quietly flips the completion flag (no finale). `FactoryReset` rewinds here.
 
 ## Related docs
 

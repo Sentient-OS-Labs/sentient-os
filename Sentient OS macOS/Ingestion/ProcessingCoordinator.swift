@@ -319,7 +319,7 @@ final class ProcessingCoordinator {
             if !helperHeld {
                 record = .init(status: .scheduled, trigger: .overnight,
                     due: OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes),
-                    notice: "Overnight wake needs attention. Open Settings, Permissions & Health.")
+                    notice: "Overnight wake needs attention. Open Settings, Permissions & Help.")
                 state = .scheduled
                 if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "wake_helper") }
                 return

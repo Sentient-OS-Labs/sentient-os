@@ -84,7 +84,7 @@ enum FactoryReset {
         d.removeObject(forKey: "onboarding.emailSubmitted")
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
         d.removeObject(forKey: CodexAuth.assertedPlusKey)   // …and asks again before trusting
-        // The Frontier Model Choice (ModelBackend/CustomProvider + its Keychain key) SURVIVES
+        // The AI Models & Accounts (ModelBackend/CustomProvider + its Keychain key) SURVIVES
         // reset on purpose — like the wake helper it's a setup choice, not a learning; a rebuild
         // should come back up on the same engine. Uninstall is what destroys it.
         d.removeObject(forKey: AppState.onboardingKey)

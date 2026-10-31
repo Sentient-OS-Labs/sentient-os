@@ -24,9 +24,6 @@ struct OnboardingFilmView: View {
     let onContinue: () -> Void
 
     #if DEBUG
-    /// Publishes the active web intro to the shared dev footer; nil during native screens.
-    var onWebIntroChange: (FilmDriver?) -> Void = { _ in }
-
     /// Preview the restaurant film at its invitation park using isolated test preferences.
     static func invitationForTesting() -> Self {
         precondition(ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-invitation")
@@ -305,20 +302,7 @@ struct OnboardingFilmView: View {
             guard !Task.isCancelled else { return }
             if phase == .ridingToInvitation { armNotchBeat() }
         }
-        #if DEBUG
-        .onChange(of: phase, initial: true) { publishWebIntro() }
-        .onDisappear { onWebIntroChange(nil) }
-        #endif
     }
-
-    #if DEBUG
-    private func publishWebIntro() {
-        switch phase {
-        case .loading, .doubleTap, .unavailable: onWebIntroChange(nil)
-        default: onWebIntroChange(driver)
-        }
-    }
-    #endif
 
     private func setPhase(_ new: Phase) {
         if new == .unavailable { filmUnavailable = true }
@@ -444,20 +428,6 @@ struct OnboardingFilmView: View {
     @ObservationIgnored
     weak var webView: WKWebView?
 
-    #if DEBUG
-    private(set) var introSpedUp = false
-    @ObservationIgnored private var currentEnd = 0.42
-    @ObservationIgnored private var currentSeconds: Double?
-
-    /// Restart the remaining ride from its current scroll position at 50×. The flag also
-    /// applies to later Continue calls, without skipping any of the film's interaction stops.
-    func speedUpIntro() {
-        guard !introSpedUp else { return }
-        introSpedUp = true
-        continueTo(currentEnd, delay: 0, seconds: currentSeconds)
-    }
-    #endif
-
     /// Replay the first chapter using the existing page and bridge. Restoring the
     /// opening before continueTo resets the parked scroll and starts a fresh ride.
     func replayIntro() async -> Bool {
@@ -472,15 +442,7 @@ struct OnboardingFilmView: View {
               return true;
             })()
             """)
-            let restarted = result as? Bool == true
-            #if DEBUG
-            if restarted {
-                introSpedUp = false
-                currentEnd = 0.42
-                currentSeconds = nil
-            }
-            #endif
-            return restarted
+            return result as? Bool == true
         } catch {
             Log("Onboarding film: replay unavailable — \(ErrorLabel(error))")
             return false
@@ -496,26 +458,9 @@ struct OnboardingFilmView: View {
     /// the site's pace).
     func continueTo(_ end: Double, delay: Double = 0.1, seconds: Double? = nil) {
         Log("Onboarding film: continueTo(\(end), delay: \(delay), seconds: \(seconds.map { "\($0)" } ?? "site pace"))")
-        var playbackRate = 1.0
-        var paceArg = "undefined"
-        #if DEBUG
-        currentEnd = end
-        currentSeconds = seconds
-        if introSpedUp {
-            playbackRate = 50
-            // Match Autopilot's default (30s), including a dev URL's valid duration override.
-            // Its third argument scales the normal scene pacing; the fourth pins Sidekick.
-            paceArg = """
-            (() => {
-              const duration = Number(new URLSearchParams(window.location.search).get('duration'));
-              return (Number.isFinite(duration) && duration >= 1 ? duration : 30) / 50;
-            })()
-            """
-        }
-        #endif
-        let secondsArg = seconds.map { "\($0 / playbackRate)" } ?? "undefined"
+        let secondsArg = seconds.map { "\($0)" } ?? "undefined"
         webView?.evaluateJavaScript(
-            "window.__sentientAutopilot?.continueTo(\(end), \(delay / playbackRate), \(paceArg), \(secondsArg))")
+            "window.__sentientAutopilot?.continueTo(\(end), \(delay), undefined, \(secondsArg))")
     }
 
     /// The website brings its logo back after the notch invitation. Keep it hidden for

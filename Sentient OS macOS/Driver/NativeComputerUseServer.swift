@@ -1,5 +1,5 @@
 // Per-task native MCP boundary: authenticates through Codex, preserves native state/action IDs,
-// and retries transient app-state reads before they reach the model. Never retries actions.
+// forwards native results unchanged. FIFO calls, cancellation and request deduplication are transport concerns.
 // Doc: Documentation - Native Computer Use.md
 
 import Foundation
@@ -21,18 +21,29 @@ actor NativeComputerUseServer {
     private var closed = false
     private var busy = false
     private var offeredPermissionSetup = false
-    private var verified: Set<String> = []
     private var fingerprints: [Data: Data] = [:]
     private var replies: [Data: Data] = [:]
     private var replyOrder: [Data] = []
     private var replyBytes = 0
-    private static let nativeNames: Set<String> = ["list_apps", "get_app_state", "click", "perform_secondary_action",
-        "set_value", "select_text", "scroll", "drag", "press_key", "type_text"]
-    private static let names = nativeNames.union(["diagnose_computer_use"])
+    private var names: Set<String> = []
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+        let expiry: Task<Void, Never>
+    }
+    private var waiters: [Waiter] = []
+    private let requestTimeout: TimeInterval
+    private let permissionSetupTimeout: TimeInterval
 
     init(configuration: OpenAIComputerUse.Configuration,
          interaction: SidekickInteraction? = SidekickInteraction.current,
+         requestTimeout: TimeInterval = 120,
+         permissionSetupTimeout: TimeInterval = OpenAIComputerUseSession.permissionSetupTimeout,
          resolveTarget: @escaping @MainActor @Sendable (String) -> String? = { NativeComputerUseServer.target($0) }) {
+        self.requestTimeout = requestTimeout.isFinite && requestTimeout > 0 ? min(requestTimeout, 120) : 120
+        self.permissionSetupTimeout = permissionSetupTimeout.isFinite && permissionSetupTimeout > 0
+            ? min(permissionSetupTimeout, OpenAIComputerUseSession.permissionSetupTimeout)
+            : OpenAIComputerUseSession.permissionSetupTimeout
         self.configuration = configuration
         self.interaction = interaction
         self.resolveTarget = resolveTarget
@@ -49,14 +60,19 @@ actor NativeComputerUseServer {
                   let catalog = server["tools"] as? [String: [String: Any]] else {
                 throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .catalog)
             }
-            tools = catalog.values.filter { Self.nativeNames.contains($0["name"] as? String ?? "") }
+            tools = catalog.values.filter { ($0["name"] as? String) != "diagnose_computer_use" }
                 .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
-            guard Set(tools.compactMap { $0["name"] as? String }) == Self.nativeNames else {
+            guard !tools.isEmpty, tools.allSatisfy({ ($0["name"] as? String)?.isEmpty == false }),
+                  Set(tools.compactMap { $0["name"] as? String }).count == tools.count else {
                 throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .catalog)
             }
             tools.append(Self.diagnosticTool)
+            names = Set(tools.compactMap { $0["name"] as? String })
             try Task.checkCancellation()
-            let transport = LocalMCPServer(name: "sentient_native", tools: Self.names.sorted(), timeout: 130,
+            // A normal request can discover missing grants at the end of its budget.
+            // Keep its outer MCP call alive for the separate permission-setup phase.
+            let transport = LocalMCPServer(name: "sentient_native", tools: names.sorted(),
+                timeout: requestTimeout + permissionSetupTimeout + 10,
                 maximumBody: 1_048_576) { [weak self] request in
                 guard let self else { throw CancellationError() }
                 return try await self.respond(request)
@@ -70,6 +86,11 @@ actor NativeComputerUseServer {
     }
     func stop() async {
         closed = true
+        let queued = waiters; waiters.removeAll()
+        for waiter in queued {
+            waiter.expiry.cancel()
+            waiter.continuation.resume(throwing: CancellationError())
+        }
         interaction?.computerUseCheckConsent.invalidate(owner: diagnosticOwner)
         let opening = openingSession
         opening?.cancel()
@@ -77,7 +98,6 @@ actor NativeComputerUseServer {
         await session?.close(); session = nil
         if let opened = try? await opening?.value { await opened.close() }
         replies.removeAll(); fingerprints.removeAll(); tools.removeAll()
-        verified.removeAll()
     }
     func respond(_ data: Data) async throws -> Data {
         guard !closed, let rpc = try JSONSerialization.jsonObject(with: data) as? [String: Any], let id = rpc["id"] else { throw CancellationError() }
@@ -91,40 +111,43 @@ actor NativeComputerUseServer {
         case "tools/list": return try reply(["tools": tools])
         case "tools/call":
             guard let params = rpc["params"] as? [String: Any], let tool = params["name"] as? String,
-                  Self.names.contains(tool), let arguments = params["arguments"] as? [String: Any] else {
-                verified.removeAll()
+                  names.contains(tool), let arguments = params["arguments"] as? [String: Any] else {
                 return try reply(Self.errorResult(.init(kind: .unknown, code: -32602, detail: .malformedResponse, stage: .transport)))
             }
+            let deadline = ProcessInfo.processInfo.systemUptime + requestTimeout
+            do { try await acquire(deadline: deadline) }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                let failure = (error as? NativeComputerUseFailure) ?? Self.queueTimeout()
+                NativeComputerUseErrorLog.record(tool: tool, failure: failure)
+                return try reply(Self.errorResult(failure))
+            }
+            defer { release() }
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
             // Keep compact consumed-ID hashes for this task. A fixed count ceiling made
             // every later request fail permanently, including attempts to recover.
             let key = Data(SHA256.hash(data: try JSONSerialization.data(withJSONObject: id, options: [.fragmentsAllowed, .sortedKeys])))
             let fingerprint = Data(SHA256.hash(data: try JSONSerialization.data(withJSONObject: params, options: .sortedKeys)))
             if let old = fingerprints[key] {
                 guard old == fingerprint, let response = replies[key] else {
-                    verified.removeAll()
-                    return try reply(Self.errorResult(.init(kind: .unknown, code: nil, detail: .staleState, stage: .action)))
+                    return try reply(Self.errorResult(.init(kind: .unknown, code: nil, detail: .duplicateRequest, stage: .transport)))
                 }
                 return response
             }
-            guard !busy else {
-                verified.removeAll()
-                return try reply(Self.errorResult(.init(kind: .connection, code: nil, detail: .concurrentCall, stage: .transport)))
-            }
             fingerprints[key] = fingerprint
-            busy = true
-            defer { busy = false }
             let payload: [String: Any]
             do {
                 if tool == "diagnose_computer_use" {
                     payload = try await requestDiagnostic(arguments)
-                } else { payload = try await observedCall(tool, arguments: arguments) }
+                } else { payload = try await observedCall(tool, arguments: arguments, deadline: deadline) }
             }
             catch is CancellationError { throw CancellationError() }
             catch {
-                verified.removeAll()
                 let failure = (error as? NativeComputerUseFailure) ?? .init(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
                 try Task.checkCancellation()
                 guard !closed else { throw CancellationError() }
+                NativeComputerUseErrorLog.record(tool: tool, failure: failure)
                 payload = Self.errorResult(failure)
             }
             let response = try reply(payload)
@@ -139,6 +162,48 @@ actor NativeComputerUseServer {
             return try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id,
                 "error": ["code": -32601, "message": "Method unavailable"]])
         }
+    }
+
+    private static func queueTimeout() -> NativeComputerUseFailure {
+        var failure = NativeComputerUseFailure(kind: .timeout, code: nil, detail: .requestTimedOut, stage: .transport)
+        failure.actionEffectsUnconfirmed = false
+        failure.modelError = "Computer-use request expired before it could be sent. No action was executed."
+        return failure
+    }
+
+    private func acquire(deadline: TimeInterval) async throws {
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
+        if !busy { busy = true; return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled, !closed else { continuation.resume(throwing: CancellationError()); return }
+                let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                guard remaining > 0 else { continuation.resume(throwing: Self.queueTimeout()); return }
+                let expiry = Task {
+                    do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
+                    self.removeWaiter(id, error: Self.queueTimeout())
+                }
+                waiters.append(Waiter(id: id, continuation: continuation, expiry: expiry))
+            }
+        } onCancel: {
+            Task { await self.removeWaiter(id, error: CancellationError()) }
+        }
+    }
+
+    private func removeWaiter(_ id: UUID, error: Error) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        waiter.expiry.cancel()
+        waiter.continuation.resume(throwing: error)
+    }
+
+    private func release() {
+        guard !waiters.isEmpty else { busy = false; return }
+        let waiter = waiters.removeFirst()
+        waiter.expiry.cancel()
+        waiter.continuation.resume()
     }
 
     private static var diagnosticTool: [String: Any] {
@@ -171,11 +236,11 @@ actor NativeComputerUseServer {
         }
         guard !permissionState.missing else {
             interaction?.computerUseCheckConsent.invalidate(owner: diagnosticOwner)
-            return try response("permission_needed", "A required macOS grant is missing. Help the user fix the specific permission in Permissions & Health. A diagnostic window is unnecessary and was not opened.")
+            return try response("permission_needed", "A required macOS grant is missing. Help the user fix the specific permission in Permissions & Help. A diagnostic window is unnecessary and was not opened.")
         }
         guard permissionState.readyForDiagnostic else {
             interaction?.computerUseCheckConsent.invalidate(owner: diagnosticOwner)
-            return try response("permission_unverified", "The app cannot confirm that all required permissions are granted. Do not assume a broad outage or offer a diagnostic window. Continue available recovery; the user can review Permissions & Health or choose Test & repair there.")
+            return try response("permission_unverified", "The app cannot confirm that all required permissions are granted. Do not assume a broad outage or offer a diagnostic window. Continue available recovery; the user can review Permissions & Help or choose Test & repair there.")
         }
         guard let interaction else {
             return try response("approval_unavailable", "This run cannot ask for interactive approval. Do not open a diagnostic window. The user can run Test & repair in Health if needed.")
@@ -188,7 +253,7 @@ actor NativeComputerUseServer {
             try Task.checkCancellation()
             guard !closed else { throw CancellationError() }
             // Both the window and connection change follow an actual, single-use user approval.
-            await session?.close(); session = nil; verified.removeAll()
+            await session?.close(); session = nil
             let report = try await ComputerUseDoctor.shared.checkFromAgent(authorization: authorization, backend: modelBackend) { [weak self] name, data in
                 guard let self, let values = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CancellationError() }
                 return try await self.diagnosticCall(name, arguments: values)
@@ -204,33 +269,30 @@ actor NativeComputerUseServer {
             "question": ComputerUseDiagnosticConsent.question, "answers": ComputerUseDiagnosticConsent.answers])
     }
 
-    private func observedCall(_ tool: String, arguments: [String: Any]) async throws -> [String: Any] {
-        do {
-            let result = try await call(tool, arguments: arguments)
+    private func observedCall(_ tool: String, arguments: [String: Any], deadline: TimeInterval) async throws -> [String: Any] {
+        let result = try await call(tool, arguments: arguments, deadline: deadline)
+        guard NativeComputerUseFailure.isError(result) else {
             diagnosticPolicy.observe(tool: tool, target: nil, failure: nil)
             return result
-        } catch {
-            let selector = arguments["app"] as? String
-            let identity = await targetIdentity(selector)
-            let browser = await MainActor.run {
-                guard let app = selector.flatMap({ Self.resolve($0) }) else { return false }
-                if let id = app.bundleIdentifier, ComputerUseDiagnosticPolicy.isBrowser(id) { return true }
-                guard let url = app.bundleURL else { return false }
-                if ComputerUseDiagnosticPolicy.isBrowser(url.path) { return true }
-                // Conservatively exclude unfamiliar browsers too, using their declared web schemes.
-                let types = Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] ?? []
-                return types.contains { type in
-                    let schemes = type["CFBundleURLSchemes"] as? [String] ?? []
-                    return schemes.contains { ["http", "https"].contains($0.lowercased()) }
-                }
-            }
-            let target = identity.map { ComputerUseDiagnosticPolicy.Target(id: $0,
-                isBrowser: browser || ComputerUseDiagnosticPolicy.isBrowser($0)) }
-            if let failure = error as? NativeComputerUseFailure {
-                diagnosticPolicy.observe(tool: tool, target: target, failure: failure)
-            } else { diagnosticPolicy = ComputerUseDiagnosticPolicy() }
-            throw error
         }
+        let selector = arguments["app"] as? String
+        let identity = await targetIdentity(selector)
+        let browser = await MainActor.run {
+            guard let app = selector.flatMap({ Self.resolve($0) }) else { return false }
+            if let id = app.bundleIdentifier, ComputerUseDiagnosticPolicy.isBrowser(id) { return true }
+            guard let url = app.bundleURL else { return false }
+            if ComputerUseDiagnosticPolicy.isBrowser(url.path) { return true }
+            let types = Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] ?? []
+            return types.contains { type in
+                let schemes = type["CFBundleURLSchemes"] as? [String] ?? []
+                return schemes.contains { ["http", "https"].contains($0.lowercased()) }
+            }
+        }
+        let target = identity.map { ComputerUseDiagnosticPolicy.Target(id: $0,
+            isBrowser: browser || ComputerUseDiagnosticPolicy.isBrowser($0)) }
+        diagnosticPolicy.observe(tool: tool, target: target,
+            failure: NativeComputerUseFailure.classify(result, stage: tool == "get_app_state" ? .appState : .action))
+        return result
     }
 
     private func diagnosticCall(_ name: String, arguments: [String: Any]) async throws -> Data {
@@ -257,9 +319,8 @@ actor NativeComputerUseServer {
     private func currentSession(for tool: String) async throws -> OpenAIComputerUseSession {
         guard !closed else { throw CancellationError() }
         if let session, await session.isUsable() { return session }
-        verified.removeAll()
         guard tool == "get_app_state" || tool == "list_apps" else {
-            throw NativeComputerUseFailure(kind: .unknown, code: nil, detail: .staleState, stage: .action)
+            throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .disconnected, stage: .transport)
         }
         await session?.close(); session = nil
         let diagnostics = CaptureDiagnostics(source: .native, context: diagnosticContext)
@@ -270,82 +331,52 @@ actor NativeComputerUseServer {
         return opened
     }
 
-    private func call(_ tool: String, arguments: [String: Any]) async throws -> [String: Any] {
+    private func call(_ tool: String, arguments: [String: Any],
+                      deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 120) async throws -> [String: Any] {
         guard !closed else { throw CancellationError() }
         let diagnostics = CaptureDiagnostics(source: .native, context: diagnosticContext)
         let isState = tool == "get_app_state"
-        let selector = arguments["app"] as? String
-        let target = await MainActor.run { selector.flatMap { Self.resolve($0) } }
-        let identity = await targetIdentity(selector)
-        if tool != "list_apps", !isState, identity.map({ verified.contains($0) }) != true {
-            verified.removeAll()
-            throw NativeComputerUseFailure(kind: .unknown, code: nil, detail: .staleState, stage: .action)
-        }
+        let target = await MainActor.run { (arguments["app"] as? String).flatMap { Self.resolve($0) } }
         let encoded = try JSONSerialization.data(withJSONObject: arguments)
         let evidence = await CaptureDiagnostics.environment(target: target)
         let began = ProcessInfo.processInfo.systemUptime
-        var attempt = 1
+        var nativeError: [String: Any]?
+        var dispatched = false
         do {
+            try Task.checkCancellation()
+            guard deadline > ProcessInfo.processInfo.systemUptime else { throw Self.queueTimeout() }
             let session = try await currentSession(for: tool)
-            while true {
-                try Task.checkCancellation()
-                guard !closed else { throw CancellationError() }
-                let elapsed = max(0, ProcessInfo.processInfo.systemUptime - began)
-                let remaining = NativeAppStateRetry.timeout - elapsed
-                if isState && remaining <= 0 {
-                    throw NativeComputerUseFailure(kind: .timeout, code: nil, detail: .requestTimedOut, stage: .appState)
-                }
-                do {
-                    // All retries share one deadline inside the outer 130s MCP timeout.
-                    // A timed-out client request closes its transport and is not retryable.
-                    let data = try await session.call(tool, arguments: encoded, timeout: isState ? remaining : 125)
-                    try Task.checkCancellation()
-                    guard !closed else { throw CancellationError() }
-                    guard var result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                        throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
-                    }
-                    if NativeComputerUseFailure.isError(result) {
-                        throw NativeComputerUseFailure.classify(result, stage: isState ? .appState : .action)
-                    }
-                    if isState {
-                        result = try OpenAIComputerUseProbe.appStateResult(result)
-                        let current = await targetIdentity(selector)
-                        try Task.checkCancellation()
-                        guard !closed else { throw CancellationError() }
-                        if let current { verified.insert(current) }
-                        diagnostics.record(attempt == 1 ? .passed : .recovered, attempt: attempt,
-                            fields: evidence.merging([
-                                "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000)),
-                                "image_valid": String((result["content"] as? [[String: Any]])?.contains { $0["type"] as? String == "image" } == true)
-                            ]) { _, new in new })
-                    }
-                    return result
-                } catch {
-                    guard !Task.isCancelled, !closed else { throw CancellationError() }
-                    guard isState, let failure = error as? NativeComputerUseFailure,
-                          let delay = NativeAppStateRetry.delay(afterAttempt: attempt, failure: failure,
-                              elapsed: ProcessInfo.processInfo.systemUptime - began) else { throw error }
-                    if let identity { verified.remove(identity) }
-                    // Transient attempts stay internal: one model tool call remains pending.
-                    // The final failed read reaches the model, which decides the next step.
-                    diagnostics.record(.skipped, attempt: attempt, failure: failure,
-                        fields: evidence.merging(["tool": tool, "recovery_decision": "wait_and_reread",
-                            "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000))]) { _, new in new })
-                    try await Task.sleep(for: .seconds(delay))
-                    attempt += 1
-                }
+            try Task.checkCancellation()
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard !closed else { throw CancellationError() }
+            guard remaining > 0 else { throw Self.queueTimeout() }
+            dispatched = true
+            let data = try await session.call(tool, arguments: encoded, timeout: min(isState ? 90 : 120, remaining))
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
+            guard var result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
             }
+            if NativeComputerUseFailure.isError(result) {
+                nativeError = result
+                throw NativeComputerUseFailure.classify(result, stage: isState ? .appState : .action)
+            }
+            if isState { result = try OpenAIComputerUseProbe.appStateResult(result) }
+            diagnostics.record(.passed, fields: evidence.merging([
+                "tool": tool, "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000))
+            ]) { _, new in new })
+            return result
         } catch {
-            verified.removeAll()
             let fields = evidence.merging(["tool": tool,
                 "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000))]) { _, new in new }
             if error is CancellationError || Task.isCancelled || closed {
-                diagnostics.record(.cancelled, attempt: attempt, fields: fields)
+                diagnostics.record(.cancelled, fields: fields)
                 throw CancellationError()
             }
             var failure = (error as? NativeComputerUseFailure)
                 ?? .init(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
-            failure.actionEffectsUnconfirmed = tool != "list_apps" && !isState
+            failure.actionEffectsUnconfirmed = dispatched && tool != "list_apps" && !isState
+            NativeComputerUseErrorLog.record(tool: tool, failure: failure)
             if failure.kind == .permission || failure.requiresSystemPermissionSetup {
                 let permissionFailure = failure
                 await MainActor.run { NativePermissionCheck.shared.invalidate(failure: permissionFailure) }
@@ -357,38 +388,63 @@ actor NativeComputerUseServer {
                 }
                 try Task.checkCancellation()
                 guard !closed else { throw CancellationError() }
-                // One explicit permission recovery per task. Never replay the failed action;
-                // it may already have had effects. The agent receives its original failure.
-                let remaining = min(115, 120 - (ProcessInfo.processInfo.systemUptime - began))
-                if let token, !offeredPermissionSetup, remaining > 5, let connection = session {
+                // One permission-setup phase per task, with a fresh user-facing budget.
+                // Keep it owned by this call so Stop cancels it and drains the same session.
+                // The failed action is never replayed; return its original error afterward.
+                if let token, !offeredPermissionSetup, let connection = session {
                     offeredPermissionSetup = true
+                    let setupTimeout = permissionSetupTimeout
                     do {
                         _ = try await NativeHelperPermissionNote.withGuide(appURL: configuration.appURL) {
                             try await NativePermissionReadiness.helperSetup { tool, arguments in
-                                try await connection.call(tool, arguments: arguments, timeout: remaining)
+                                try await connection.call(tool, arguments: arguments, timeout: setupTimeout)
                             }
                         }
                         try Task.checkCancellation()
                         guard !closed else { throw CancellationError() }
                         await MainActor.run { NativePermissionSetup.shared.recovered(ifCurrent: token) }
-                        failure.modelError = (failure.modelError ?? failure.localizedDescription)
-                            + "\nThe helper's permission setup completed. The failed action was not replayed. Read the target app again and verify its current state before continuing."
                     } catch {
                         if error is CancellationError || Task.isCancelled || closed { throw CancellationError() }
+                        if let setupFailure = error as? NativeComputerUseFailure {
+                            NativeComputerUseErrorLog.record(tool: "permission_setup", failure: setupFailure)
+                        }
                         // Leave recovery available in Sentient's permission screen. A helper
                         // relaunch, dismissal or timeout never becomes a false success.
                     }
                 }
             }
-            diagnostics.record(.failed, attempt: attempt, failure: failure, fields: fields)
-            throw failure
+            diagnostics.record(.failed, failure: failure, fields: fields)
+            return nativeError ?? Self.errorResult(failure)
         }
     }
 
     @MainActor private static func resolve(_ selector: String) -> NSRunningApplication? {
-        let matches = NSWorkspace.shared.runningApplications.filter {
-            !$0.isTerminated && ($0.bundleIdentifier == selector || $0.bundleURL?.path == selector
-                || $0.localizedName?.caseInsensitiveCompare(selector) == .orderedSame)
+        let apps = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }
+        guard let index = matchingTargetIndex(selector, targets: apps.map {
+            (id: $0.bundleIdentifier, path: $0.bundleURL?.path, name: $0.localizedName)
+        }) else { return nil }
+        return apps[index]
+    }
+
+    /// Best-effort diagnostic attribution only; never gates or rewrites a native request.
+    /// Display names may contain invisible direction marks (WhatsApp starts with U+200E).
+    /// Match their visible spelling without weakening exact bundle/path identity or choosing
+    /// arbitrarily between apps whose display names normalize to the same text.
+    static func matchingTargetIndex(_ selector: String,
+                                    targets: [(id: String?, path: String?, name: String?)]) -> Int? {
+        let exact = targets.indices.filter { targets[$0].id == selector || targets[$0].path == selector }
+        if !exact.isEmpty { return exact.count == 1 ? exact[0] : nil }
+        func visibleName(_ value: String) -> String {
+            String(String.UnicodeScalarView(value.unicodeScalars.filter {
+                // Unicode Bidi_Control only; preserve meaningful joiners, accents and letters.
+                ![0x061C, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                  0x2066, 0x2067, 0x2068, 0x2069].contains($0.value)
+            }))
+        }
+        let name = visibleName(selector)
+        guard !name.isEmpty else { return nil }
+        let matches = targets.indices.filter {
+            targets[$0].name.map { visibleName($0).caseInsensitiveCompare(name) == .orderedSame } == true
         }
         return matches.count == 1 ? matches[0] : nil
     }
@@ -407,12 +463,13 @@ actor NativeComputerUseServer {
             "stage": failure.stage.rawValue,
             "effects_may_be_unknown": failure.effectsMayBeUnknown]
         if let code = failure.code { evidence["native_code"] = code }
-        var lines = ["\(failure.code.map { "Computer Use server error \($0): " } ?? "Native computer use failed: ")\(failure.detail.rawValue)"]
-        if let detail = failure.modelError { lines.append("Native error detail: " + detail) }
-        lines.append(failure.modelGuidance)
-        // Codex's model-facing failed-tool formatter retains only the first text block.
-        // Preserve the actual native error and recovery guidance together in that block.
-        return ["isError": true, "content": [["type": "text", "text": lines.joined(separator: "\n")]],
-            "structuredContent": ["sentient_native_failure": evidence]]
+        let message = failure.rawError.flatMap { String(data: $0, encoding: .utf8) }
+            ?? failure.modelError ?? "Sentient computer-use error: \(failure.detail.rawValue)"
+        var metadata: [String: Any] = ["sentient_native_failure": evidence]
+        if let raw = failure.rawError, let object = try? JSONSerialization.jsonObject(with: raw, options: .fragmentsAllowed) {
+            metadata["native_error"] = object
+        }
+        return ["isError": true, "content": [["type": "text", "text": message]],
+            "structuredContent": metadata]
     }
 }

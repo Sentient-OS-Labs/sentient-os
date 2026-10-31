@@ -38,7 +38,7 @@ actor CodexCLI {
     /// ingestion = `.medium`, knowledge-base work = `.high`. Nothing runs `.xhigh`
     /// anymore — gpt-5.6-sol thinks far too long there (the initial vault build was downgraded
     /// to `.high`, 2026-07-10). A CUSTOM backend never uses this enum: the user's free-form
-    /// reasoning level (Frontier Model Choice — `none`, `xhigh`, `adaptive`, whatever their
+    /// reasoning level (AI Models & Accounts — `none`, `xhigh`, `adaptive`, whatever their
     /// model speaks) rides the wire as a raw string via backendTuned.
     enum Effort: String, Sendable {
         case low
@@ -62,7 +62,7 @@ actor CodexCLI {
 
     /// Model resolution for structured runs and custom-provider computer use. ChatGPT computer
     /// use gets its plan-aware model and effort from ComputerUseSpeed instead.
-    ///  - Custom backend (Settings → Frontier Model Choice): the user's endpoint model rides
+    ///  - Custom backend (Settings → AI Models & Accounts): the user's endpoint model rides
     ///    EVERY call — the tier enums collapse to one model, and the caller's effort is
     ///    replaced by the pane's ONE per-endpoint reasoning level (per-call effort tuning is
     ///    ChatGPT's alone; providers have hard reasoning quirks — Claude-class needs off,
@@ -502,7 +502,7 @@ actor CodexCLI {
         return "custom|\(p.baseURL)|\(p.modelName)|\(runtime)"
     }
 
-    /// The Frontier Model Choice pane's "Test Connection" — one call that settles BOTH questions
+    /// The AI Models & Accounts pane's "Test Connection" — one call that settles BOTH questions
     /// for the saved custom endpoint (regardless of the active backend, since the pane tests
     /// before activating): does it answer, and can it SEE? A random 4-digit code is rendered to a
     /// PNG, attached with `-i`, and the model is asked to read it back. Vision is a hard

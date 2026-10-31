@@ -155,7 +155,7 @@ import WebKit
                  "frame": [$0.frame.minX, $0.frame.minY, $0.frame.width, $0.frame.height]] }
         checks["settings_has_open_source_footer"] = settings.contains { $0.label == "Open source on GitHub" }
         let menu = settings.first(where: {
-            ($0.identifier == "settings.menu.Sidekick shortcut" || $0.label == "Sidekick shortcut") && $0.frame.width >= 100
+            ($0.identifier == "settings.menu.Shared shortcut key" || $0.label == "Shared shortcut key") && $0.frame.width >= 100
         })
         checks["shortcut_has_full_width_hit_target"] = menu != nil
         guard let menu else { throw Failure.accessibility }

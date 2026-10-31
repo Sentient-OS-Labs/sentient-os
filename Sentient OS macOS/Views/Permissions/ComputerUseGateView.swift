@@ -254,7 +254,7 @@ struct NativeComputerUseSettings: View {
                 .accessibilityLabel("Fix computer-use permissions")
             }
             if !gate.setup.ready {
-                SettingsProse("Finish installing computer use above, then open its permission setup.")
+                SettingsProse("Finish installing computer use, then open its permission setup.")
             } else if gate.automation == .denied {
                 SettingsProse("Allow Sentient OS to control ChatGPT/Codex Computer Use in System Settings → Privacy & Security → Automation.")
                 SettingsPillButton(title: "Open Automation Settings") { Permissions.openAutomationSettings() }

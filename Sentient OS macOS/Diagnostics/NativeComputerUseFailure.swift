@@ -14,7 +14,7 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case windowNotFoundForID, windowNotFoundAtPosition, failedToGetWindowIDForElement
         case blockedByPolicy, missingImage, invalidImage, malformedResponse, responseTooLarge
         case unexpectedEOF, processExited, requestTimedOut, unexpectedRequest, launchFailed, writeFailed
-        case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall
+        case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall, duplicateRequest
         case imageEncodingFailed, displayUnavailable, invalidArguments, testWindowNotObserved
         case testWindowNotCurrentBeforeRead, testWindowNotCurrentAfterRead, testWindowMarkerMissing
         case focusChanged, inputInterrupted, elementUnavailable
@@ -33,6 +33,8 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
     var stderrCode: Int?
     // A bounded tool-error excerpt for the model only. Never included in diagnostic fields.
     var modelError: String?
+    // Original failed response, retained locally and forwarded to the agent. Never in fields.
+    var rawError: Data?
     // A transport error can occur after an action was dispatched; retain that fact
     // separately from the diagnostic stage without deciding how the agent proceeds.
     var actionEffectsUnconfirmed: Bool?
@@ -85,9 +87,9 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
 
     var errorDescription: String? {
         return switch kind {
-        case .capture: "Sidekick couldn’t capture the app’s window. Check Screen Recording access in Permissions & Health, then try again."
+        case .capture: "Sidekick couldn’t capture the app’s window. Check Screen Recording access in Permissions & Help, then try again."
         case .noWindows: "Sidekick couldn’t find a readable window. Keep the app open on your current desktop, then try again."
-        case .permission: "Computer use could not access the app. Check its permissions in Permissions & Health."
+        case .permission: "Computer use could not access the app. Check its permissions in Permissions & Help."
         case .connection: "Computer use lost its connection. Try the task again."
         case .timeout: "Computer use took too long to read the window. Keep the app open on your current desktop, then try again."
         case .unknown: "Sidekick couldn’t complete this computer-use step."
@@ -201,6 +203,7 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
                            rpcCode: codes.first(where: { (-32768 ... -32000).contains($0) }),
                            systemDomain: structuredDomain, systemCode: structuredCode)
         if explicitError(value) {
+            failure.rawError = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
             failure.modelError = texts.first(where: {
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{")
             }).map { String(decoding: $0.utf8.prefix(2048), as: UTF8.self) }

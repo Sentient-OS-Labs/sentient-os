@@ -26,10 +26,14 @@ final class OpenAIComputerUseRuntime {
     private var restarting = false
     private var diagnosticLease: UUID?
 
+    var canReserveDiagnostic: Bool {
+        activeTasks.isEmpty && diagnosticLease == nil && !restarting
+    }
+
     /// A user-requested repair owns the idle runtime. Ordinary tasks wait cancellably;
     /// repairs never tear down a helper underneath an existing agent.
     func reserveDiagnostic() -> UUID? {
-        guard activeTasks.isEmpty, diagnosticLease == nil, !restarting else { return nil }
+        guard canReserveDiagnostic else { return nil }
         let id = UUID(); diagnosticLease = id; return id
     }
     func endDiagnostic(_ id: UUID) { if diagnosticLease == id { diagnosticLease = nil } }
