@@ -20,7 +20,7 @@ successful non-demo Sidekick task, the setup invitation gains emphasis when Home
 | `PersonalSetupView.swift` | Optional independent window; Home and Sidekick retain their lifetime while sources are connected. |
 | `OnboardingPermissionsView.swift` | `OvernightSetupRequirements`: wake and login controls shown only after choosing overnight analysis. |
 | `OnboardingReadyView.swift` | Resumable source picker with three usable selections required before first analysis. No mandatory email prompt. |
-| `AnalysisTimingSheet.swift` | Explicit Run now or Overnight choice, and overnight-only prerequisites. |
+| `AnalysisTimingSheet.swift` | Required wake/login setup with guidance and immediate first-analysis start. |
 | `App/PersonalSetupProgress.swift` | Separate Home, personal-setup, first-task milestones and legacy migration. |
 | `System/SafeAppRelaunch.swift` | Refuses active-work restarts, preserves an unsent draft and resumes personal setup after an explicit source-permission relaunch. |
 | `OnboardingTelemetryConsent.swift` | Privacy policy and diagnostic controls over the frontier-model step; Read More opens the policy and Configure Telemetry uses the same two keys as Settings. |
@@ -90,6 +90,12 @@ The override belongs to `/onboarding`; it does not change the Mac's setting or a
 the page footer. This behavior is implemented in the website and takes effect for installed apps
 when that website build is deployed; changing app documentation does not publish it.
 
+The model step shares `ModelChoiceBar`, `ModelSelectionHeading`, and `ModelSelectionPanel`
+with Settings: animated white capsule selections, a centered title, and the permission window's
+soft edge lighting. It only configures the main AI; the Main AI / Double Tap switch and all
+Double Tap model controls remain exclusive to Settings. Provider activation and login ownership
+are unchanged by the presentation.
+
 **1 · Choose your frontier model.** The shared `FrontierEnginePicker` in a single centered row over
 the per-engine panels, with `OnboardingCodexLoginPanel` as the ChatGPT panel and the picker's own
 self-contained Claude panel. **Shared computer-use setup starts at app launch:** Codex CLI and the
@@ -129,15 +135,18 @@ user-selected folders use their appropriate access paths. No broad FDA screen pr
 The pending protected source survives a deliberate restart, while resetting Sentient clears that UI
 intent. Relaunch preserves the current unsent request and cannot interrupt an active task or analysis.
 
-Start Analysis opens timing selection. Its chosen result is handed off only after SwiftUI reports
+Continue opens background setup. Start analysis is handed off only after SwiftUI reports
 dismissal and the native parent window has no attached sheet. `AnalysisTimingHandoff` combines the
 native did-end-sheet notification with attachment observation, consumes the result once, and cancels
 it if the owner closes, detaches or resets. This avoids closing setup underneath a live native sheet.
 
-Start Analysis opens timing selection. Run now records an explicit request and opens the separate
-progress window. Overnight shows wake and launch-at-login controls, then records a scheduled request.
-Neither path asks for voice or notification access. A timing choice completes personal *setup*;
-`ProcessingPlan.initialCompletedAt` remains the separate proof of successful initial *analysis*.
+First analysis has no overnight timing choice. Wake helper readiness and launch-at-login must both
+pass before Start analysis is enabled; already enabled settings count without extra clicks. Only
+explicit setup actions request registration, and approval-required states open the floating System
+Settings guide. Start rechecks both services and source count, and dismissing the sheet cancels a
+pending start. First analysis begins now; Pause/Resume remains available in the analysis window.
+Neither path asks for voice or notifications. Background setup plus Start completes personal
+*setup*; `ProcessingPlan.initialCompletedAt` remains the proof of successful initial *analysis*.
 Local-source analysis waits for the local model; cloud-only analysis can proceed without it.
 Partial and empty runs retain useful work and explain what needs attention without unlocking
 personal-context features prematurely. Sidekick stays available throughout.
@@ -149,7 +158,7 @@ Missing connections/addresses remain pending. There is no forced manual email fo
 ## Durable state and migration
 
 - `hasCompletedOnboarding` now admits Home after the model step. It does not consent to sources.
-- `onboarding.personalSetupCompleted` records the explicit analysis-timing choice.
+- `onboarding.personalSetupCompleted` records completed background setup and the explicit Start analysis action.
 - `scheduler.firstCycleCompletedAt` retains the shipped successful-analysis milestone.
 - `onboarding.firstSuccessfulSidekickTask` excludes demos, cancelled work and proactive-card runs.
 - `onboarding.personalSetupStage` remembers Sources/Timing; ordinary quit returns to Home.
@@ -158,8 +167,8 @@ Missing connections/addresses remain pending. There is no forced manual email fo
   legacy setup on a later launch.
 
 Old completed users retain access, source choices, knowledge and schedule intent. Users already past
-the old model step enter Home with setup still optional. Interrupted analysis retains its persisted
-plan. Factory Reset clears the new milestones and restart intent while retaining explicit sources.
+the old model step enter Home with setup still optional. Interrupted first analysis reopens paused, including old scheduled-first-run plans. An explicit
+pause stays paused until Resume; later nightly updates keep their existing recovery policy. Factory Reset clears the new milestones and restart intent while retaining explicit sources.
 After successful cleanup, `AppState.didResetPersonalData` also clears the app-owned Home presentation:
 conversation/search controls, old cards, and remembered visit state. Completing onboarding in that
 same process returns to the Sidekick invitation and four suggestions. Ordinary window reopen still
@@ -184,7 +193,10 @@ policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `
 - `DisplayAwake` holds the screen on during the introduction and model connection; Home ends that hold.
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
 - Sidekick is available after the model connection and remains available during personal setup. The film retains its isolated notch demo and the existing pre-Home gesture policy.
-- The DEBUG "SKIP TO HOME" handle quietly flips the flag (no finale). `FactoryReset` rewinds here.
+- The DEBUG "SKIP INTRO" handle jumps straight to the frontier-model picker from any intro phase,
+  including loading and the native lessons. It skips the transition animation, tears down the demos,
+  and records the intro as passed without choosing a model or completing onboarding. The separate
+  "SKIP TO HOME" handle quietly flips the completion flag (no finale). `FactoryReset` rewinds here.
 
 ## Related docs
 

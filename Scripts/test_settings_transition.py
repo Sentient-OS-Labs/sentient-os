@@ -16,7 +16,7 @@ import Foundation
 import SwiftUI
 
 struct SettingsView: View {
-    enum Pane: Equatable { case sources, frontierModel, doubleTap, proactive, shareKnowledge, system, health }
+    enum Pane: Equatable { case sources, frontierModel, doubleTap, proactive, overnight, shareKnowledge, system, health }
     var body: some View { Color.clear }
 }
 enum Theme { enum Ink { static let bright = Color.white } }
@@ -223,6 +223,15 @@ struct BackButtonStyle: ButtonStyle {
         check(nav.page == .knowledge && nav.previousPage == .home && !nav.animatesSettingsTransition,
               "explicit Knowledge entrance acquired Settings animation")
         nav.reset()
+        nav.show(.settings, settingsPane: .frontierModel)
+        nav.modelSettingsSection = .doubleTap
+        nav.show(.settings, settingsPane: .overnight)
+        check(nav.settingsPane == .overnight, "overnight deep link lost its dedicated page")
+        nav.show(.settings, settingsPane: .frontierModel)
+        check(nav.modelSettingsSection == .main, "Main AI repair link retained the Double Tap editor")
+        nav.modelSettingsSection = .doubleTap
+        nav.reset()
+        check(nav.modelSettingsSection == .main, "reset retained the old model-settings section")
         nav.show(.settings, settingsPane: .health)
         nav.show(.settings)
         check(nav.page == .settings && nav.settingsPane == .health && nav.previousPage == .home,

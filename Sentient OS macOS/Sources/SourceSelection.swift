@@ -113,35 +113,25 @@ enum SourceSelection {
         return sources
     }
 
-    /// A connection belongs to the selected backend. Old global connected flags cannot prove
-    /// a connection after a provider switch; preserve them, but require confirmation in that
-    /// provider's census before counting the source. No live probe runs.
+    /// Done is the user's saved instruction to read this hosted source. Discovery and prior
+    /// read failures cannot revoke that choice; the next actual read reports its own outcome.
     static func hostedSourceReady(_ service: String) -> Bool {
         guard ModelBackend.connectorsAvailable,
               !(ModelBackend.current == .chatgpt && UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey)),
-              isSelected("dbg.run.\(service)"), isSelected("dbg.\(service).connected"),
-              let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current) else { return false }
-        let slug = service == "calendar" ? "google-calendar" : service
-        return ConnectorCensus.cached(for: origin).first(where: { $0.slug == slug })?.isReady ?? false
+              isSelected("dbg.run.\(service)"), isSelected("dbg.\(service).connected") else { return false }
+        return true
     }
 
     static var readyConnectors: [ConnectorCensus.DetectedConnector] {
-        ConnectorRegistry.kbEnabledConnectors().filter(\.isReady)
+        ConnectorRegistry.kbEnabledConnectors().filter(\.canAttempt)
     }
 
-    /// Legacy completed users keep attempting explicitly selected healthy sources. A missing
-    /// new verification marker is not a disconnection; first-setup counts remain stricter.
+    /// First analysis and later runs share the same explicit-selection policy.
     static func hostedSourceCanAttempt(_ service: String) -> Bool {
-        if hostedSourceReady(service) { return true }
-        guard ProcessingPlan.initialCompletedAt() != nil, ModelBackend.connectorsAvailable,
-              isSelected("dbg.run.\(service)"), isSelected("dbg.\(service).connected"),
-              let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current) else { return false }
-        let slug = service == "calendar" ? "google-calendar" : service
-        return ConnectorCensus.cached(for: origin).first(where: { $0.slug == slug })?.canAttempt(legacyCompleted: true) == true
+        hostedSourceReady(service)
     }
     static var connectorsToAttempt: [ConnectorCensus.DetectedConnector] {
-        let completed = ProcessingPlan.initialCompletedAt() != nil
-        return ConnectorRegistry.kbEnabledConnectors().filter { $0.canAttempt(legacyCompleted: completed) }
+        readyConnectors
     }
 
     /// Each usable selected folder, conversation service, local app or connected cloud service
@@ -193,7 +183,7 @@ enum SourceSelection {
                 issues[title] = "Reconnect \(title) for your current AI in Knowledge Sources, or turn this source off."
             }
         }
-        for connector in ConnectorRegistry.kbEnabledConnectors() where !connector.canAttempt(legacyCompleted: ProcessingPlan.initialCompletedAt() != nil) {
+        for connector in ConnectorRegistry.kbEnabledConnectors() where !connector.canAttempt {
             issues[connector.displayName] = "Reconnect this source in Knowledge Sources, or turn it off, then retry."
         }
         for pack in ConnectorRegistry.packs where ConnectorRegistry.isKBEnabled(pack.slug)
@@ -204,7 +194,7 @@ enum SourceSelection {
     }
 
     static var unavailableConnectorSlugs: Set<String> {
-        var slugs = Set(ConnectorRegistry.kbEnabledConnectors().filter { !$0.canAttempt(legacyCompleted: ProcessingPlan.initialCompletedAt() != nil) }.map(\.slug))
+        var slugs = Set(ConnectorRegistry.kbEnabledConnectors().filter { !$0.canAttempt }.map(\.slug))
         if isSelected("dbg.run.gmail") && !hostedSourceCanAttempt("gmail") { slugs.insert("gmail") }
         if isSelected("dbg.run.calendar") && !hostedSourceCanAttempt("calendar") { slugs.insert("google-calendar") }
         return slugs
@@ -214,7 +204,7 @@ enum SourceSelection {
         let packs = readyConnectors.compactMap { ConnectorRegistry.pack(for: $0) }
         let email = hostedSourceReady("gmail")
             || (!AppleMailSelection.accounts.isEmpty && ProtectedLocalSource.mail.isReadable)
-            || packs.contains { $0.slug == OutlookMailConnector.slug }
+            || packs.contains { ["gmail", OutlookMailConnector.slug].contains($0.slug) }
         let calendar = hostedSourceReady("calendar")
             || packs.contains { $0.providesCalendarContext }
             || AppleCalendarSource.isEnabled

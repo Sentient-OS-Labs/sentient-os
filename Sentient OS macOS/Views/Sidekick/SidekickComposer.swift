@@ -45,6 +45,9 @@ struct SidekickComposer: View {
                         .transition(SidekickStyle.entrance(reduced))
                 } else if let reference = conversation.replyReference {
                     HStack(spacing: 10) {
+                        if let card = reference.card {
+                            SidekickCardReplyPreview(card: card)
+                        } else {
                         RoundedRectangle(cornerRadius: 2).fill(SidekickStyle.accent).frame(width: 3)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Replying to a message").font(.system(size: 11, weight: .semibold)).foregroundStyle(SidekickStyle.accent)
@@ -53,6 +56,7 @@ struct SidekickComposer: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         Button { conversation.show(messageID: reference.messageID) } label: { Image(systemName: "arrow.up.right") }
                             .help("Show original message")
+                        }
                         Button { withAnimation(SidekickStyle.motion(reduced)) { conversation.replyReference = nil } } label: { Image(systemName: "xmark") }
                             .help("Remove reply").accessibilityLabel("Remove reply")
                     }
@@ -128,6 +132,13 @@ struct SidekickComposer: View {
                 }
             }
             .padding(17)
+            .background {
+                // Fill the gaps around the native field without intercepting text selection
+                // or the send, stop, and reply controls above this background.
+                Color.clear
+                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .onTapGesture { focusComposer() }
+            }
             .sidekickGlass(radius: 18, prominent: true)
             .shadow(color: .white.opacity(focused ? 0.035 : 0), radius: 22, y: 2)
             .shadow(color: .black.opacity(0.13), radius: 18, y: 12)
@@ -140,6 +151,19 @@ struct SidekickComposer: View {
         .animation(SidekickStyle.motion(reduced), value: recovery.content?.id)
         .animation(.easeInOut(duration: 0.35), value: focused)
         .defaultFocus($focused, isPresented && !answering && !notchHasKeyboard)
+        .task(id: isPresented) {
+            guard isPresented else { return }
+            // Home is retained under Settings and Knowledge. Reclaim focus after SwiftUI
+            // re-enables it and AppKit finishes assigning the window's initial key view.
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard !Task.isCancelled else { return }
+            focusComposer()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard let window = notification.object as? NSWindow,
+                  SentientOSApp.isHomeWindow(window), window.attachedSheet == nil else { return }
+            focusComposer()
+        }
         .onChange(of: notchHasKeyboard) { _, ownsKeyboard in
             if ownsKeyboard { focused = false; presentation.composerFocused = false }
         }
@@ -149,9 +173,14 @@ struct SidekickComposer: View {
         }
         .onChange(of: conversation.replyReference) { _, value in if value != nil && isPresented { focused = true } }
         .onChange(of: focusRequest) { _, _ in
-            if isPresented && !notchHasKeyboard && !coordinator.run.isClearingChat { focused = true }
+            focusComposer()
         }
         .onDisappear { presentation.composerFocused = false }
+    }
+
+    private func focusComposer() {
+        guard isPresented, !notchHasKeyboard, !coordinator.run.isClearingChat else { return }
+        focused = true
     }
 
     private func recoveryHeader(_ content: SidekickRecoveryContent) -> some View {

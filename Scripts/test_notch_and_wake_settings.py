@@ -23,7 +23,10 @@ nonisolated enum Fixture {
 nonisolated func Log(_ text: String) {}
 enum Analytics { static func signal(_ text: String, parameters: [String: String] = [:]) {} }
 enum CodexAuth { static var knowledgeBaseOnly = false }
-enum LoginItem { static var isEnabled = true }
+enum LoginItem {
+    static var isEnabled = true
+    static func refresh() async -> Bool { isEnabled }
+}
 enum AppState { static let onboardingKey = "fixture.onboarded" }
 enum WakeHelperConfig { static let maxAwakeSeconds = 7200 }
 enum CodexTrigger { case onboarding, analyzeNow, overnight }
@@ -273,29 +276,26 @@ TESTS = r'''
         d.set(false, forKey: OvernightScheduler.prodEnabledKey); scheduler.reevaluate()
         try await until { helper.effectiveWakes.isEmpty }
 
-        // The actual coordinator choice/defer methods honor the custom time, including
-        // pending first analysis for knowledge-base-only users with production toggle off.
+        // First analysis cannot be queued or woken by the nightly scheduler.
         processing.initialComplete = false
-        CodexAuth.knowledgeBaseOnly = true
+        CodexAuth.knowledgeBaseOnly = false
         d.set(first, forKey: OvernightScheduler.minutesKey)
         processing.choose(.overnight)
-        let chosen = Calendar.current.dateComponents([.hour, .minute], from: processing.record.due!)
-        check(chosen.hour! * 60 + chosen.minute! == first, "first-night choice uses configured clock time")
-        processing.record.notice = "Preserve the existing notice"
-        let oldDue = processing.record.due
-        d.set(second, forKey: OvernightScheduler.minutesKey)
-        scheduler.commit()
-        try await until { scheduler.nextWakeAt != nil }
-        let pending = Calendar.current.dateComponents([.hour, .minute], from: processing.record.due!)
-        check(pending.hour! * 60 + pending.minute! == second && processing.record.due != oldDue,
-              "commit updates persisted pending first-night due before scheduler reads it")
-        check(ProcessingPlan.read(d).due == processing.record.due, "rescheduled due is durable")
-        check(processing.record.notice == "Preserve the existing notice", "reschedule retains pending notice")
-        check(!d.bool(forKey: OvernightScheduler.prodEnabledKey) && scheduler.nextWakeAt == processing.record.due,
-              "pending first night re-arms without enabling production toggle")
-        processing.record.status = .idle; scheduler.reevaluate()
-        try await until { helper.effectiveWakes.isEmpty }
-        processing.initialComplete = true; CodexAuth.knowledgeBaseOnly = false
+        check(processing.record.status == .requested && processing.record.due == nil,
+              "legacy initial timing callers start now without scheduling a first-night wake")
+        let beforeInitialArms=helper.armed.count
+        d.set(true,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
+        try await until {scheduler.statusLine == "Nightly updates start after your first analysis"}
+        check(scheduler.nextWakeAt == nil && helper.armed.count == beforeInitialArms,
+              "actual scheduler loop does not arm a wake during initial creation")
+        d.set(false,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
+        processing.record.status = .paused
+        d.set(true,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
+        try await until {scheduler.statusLine == "Analysis paused"}
+        check(helper.effectiveWakes.isEmpty,"actual scheduler loop leaves initial pause untouched")
+        d.set(false,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
+        processing.record.status = .idle
+        processing.initialComplete = true
 
         // Use production runScheduled: the new owner creates and awaits independent work.
         d.set(true, forKey: OvernightScheduler.prodEnabledKey)

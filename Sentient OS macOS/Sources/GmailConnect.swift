@@ -10,13 +10,11 @@
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
 //  trust their confirmation. Connection problems are handled by the actual processing read.
 //
-//  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
-//  buttons add them to the vault, same as every other source):
-//   • runInitial   — the last month as 4 WEEKLY `codex exec` calls, fired IN PARALLEL (one per
-//                    week). Weekly chunking keeps each context window bounded (a heavy inbox
-//                    measured at ~430 threads/week; one month in a single call would blow GPT-5.5's
-//                    400k input cap); running the four concurrently makes the initial read ~4× faster.
-//   • runIterative — everything since the saved high-water mark, in one call, then advance the mark.
+//  During first analysis, interrupted imports replay all windows within their original bounds.
+//  Reads save each validated window with durable coverage in CycleStore. Initial imports cover
+//  four weeks with at most two concurrent reads; retries resume only unfinished windows. Everyday
+//  reads use a fixed range since the last fully covered watermark. Saved notes can reach the
+//  knowledge base while another week remains retryable.
 //
 //  The weekly prompt is DELIBERATELY disciplined: a naive "summarize this week" cost 220k tokens for
 //  a mere count in testing (codex over-reads). It searches on metadata/snippets, caps at the newest
@@ -41,12 +39,19 @@ enum GmailConnect {
     }
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).
-    private static let threadCap = 300
-    private static let initialWeeks = 4
+    nonisolated private static let threadCap = 300
 
     enum GmailError: LocalizedError {
-        case dateMath
-        var errorDescription: String? { "Gmail date math failed." }
+        case incomplete(failed: Int, saved: Int)
+        var errorDescription: String? {
+            switch self {
+            case .incomplete(_, let saved):
+                if saved > 0 {
+                    return "Gmail saved \(saved) email summar\(saved == 1 ? "y" : "ies"). Retry analysis to finish the remaining reads."
+                }
+                return "Gmail could not finish reading your email. Retry analysis to continue."
+            }
+        }
     }
 
     /// Parsed weekly/iterative read result (from the structured codex reply).
@@ -56,142 +61,134 @@ enum GmailConnect {
         let threadCount: Int
     }
 
-    /// One initial-run weekly window: its display label, the exact codex prompt, and the date the
-    /// resulting CycleNote is stamped with (the window's last day).
-    private struct Window: Sendable {
-        let label: String
-        let prompt: String
-        let itemDate: Date
-    }
-
-    /// A finished window paired with its read (nil ⇒ nothing notable) — what each parallel task returns.
+    /// Each worker reports its own outcome so a failed week does not cancel successful siblings.
     private struct WindowResult: Sendable {
-        let window: Window
-        let result: ReadResult?
+        let index: Int
+        let result: Result<ReadResult?, Error>
     }
 
-    /// Structured progress for the dev processing UI. The initial run fires all windows in PARALLEL,
-    /// so events arrive in completion order, not week order: `completed` (windows finished so far,
-    /// 1...total) drives the bar; `keptSoFar` is how many produced a summary. `prompt` is the exact
-    /// Codex ask (shown in the processing view's PROMPT pane); `summary` is nil when nothing notable.
+    /// Counts include only summaries committed during this attempt. A resumed import schedules
+    /// only its unfinished windows, even when earlier summaries have already reached the vault.
     enum Progress: Sendable {
         case windowStart(total: Int, label: String, prompt: String)
         case windowDone(total: Int, label: String, summary: String?, threads: Int,
                         completed: Int, keptSoFar: Int)
     }
 
-    // MARK: - Initial read (last month → 4 weekly summaries)
-
-    /// Read four weekly windows concurrently, staging every summary before replacing notes
-    /// and checkpoint in one save. Failed or cancelled reads preserve the previous bucket.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
             try Task.checkCancellation()
-            await HostedConnectorSetup.processingStarted(slug: "gmail")
+            HostedConnectorSetup.processingStarted(slug: "gmail")
             return try await readInitial(onProgress: onProgress, replaceNotes: true)
         }
     }
 
     private static func readInitial(onProgress: @Sendable @escaping (Progress) -> Void, replaceNotes: Bool) async throws -> Int {
-        let origin = GoogleSourceRead.origin(bucket: bucketKey)
-        let runStart = Date()
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: runStart)
-        guard let tomorrow = cal.date(byAdding: .day, value: 1, to: today) else { throw GmailError.dateMath }
-
-        // Build all 4 weekly windows up front: [tomorrow − 7·(week+1), tomorrow − 7·week) —
-        // contiguous, no overlap. Their order is now cosmetic; the reads all run together.
-        var windows: [Window] = []
-        for week in 0..<initialWeeks {
-            guard let upper = cal.date(byAdding: .day, value: -7 * week, to: tomorrow),
-                  let lower = cal.date(byAdding: .day, value: -7 * (week + 1), to: tomorrow) else {
-                throw GmailError.dateMath
-            }
-            let weekLabel = "week of \(label(lower))"
-            let query = "after:\(qDate(lower)) before:\(qDate(upper))"
-            let itemDate = cal.date(byAdding: .day, value: -1, to: upper) ?? lower
-            windows.append(Window(label: weekLabel,
-                                  prompt: weeklyPrompt(query: query, label: weekLabel),
-                                  itemDate: itemDate))
-        }
-
-        // Announce every window starting — they all kick off now (parallel fan-out).
-        for w in windows { onProgress(.windowStart(total: initialWeeks, label: w.label, prompt: w.prompt)) }
-
-        // Fan out: one codex exec per window, all concurrent. Collect AS each finishes, then record +
-        // report serially here in the parent — so the counters and the progress box see no races.
-        var recorded = 0, completed = 0
-        var pending: [NoteDraft] = []
-        try await withThrowingTaskGroup(of: WindowResult.self) { group in
-            for w in windows {
-                group.addTask { WindowResult(window: w, result: try await read(prompt: w.prompt)) }
-            }
-            for try await done in group {
-                completed += 1
-                if let r = done.result {
-                    pending.append(draft(r, itemDate: done.window.itemDate, label: done.window.label))
-                    recorded += 1
-                    onProgress(.windowDone(total: initialWeeks, label: done.window.label,
-                                           summary: r.summary, threads: r.threadCount,
-                                           completed: completed, keptSoFar: recorded))
-                } else {
-                    onProgress(.windowDone(total: initialWeeks, label: done.window.label,
-                                           summary: nil, threads: 0,
-                                           completed: completed, keptSoFar: recorded))
-                }
-            }
-        }
-
-        // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
-        // is harmless — the cloud updater synthesizes — and beats a boundary gap).
-        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, origin: origin, replace: replaceNotes)
-        Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded (parallel); pointer → \(runStart)")
-        return recorded
+        let proposed = GmailReadState.initial(origin: GoogleSourceRead.origin(bucket: bucketKey),
+                                              through: Date(), replaceNotes: replaceNotes)
+        let state = try await CycleStore.shared.beginGmailRead(proposed)
+        return try await readWindows(state, onProgress: onProgress)
     }
 
-    // MARK: - Iterative read (since the high-water mark)
-
-    /// One summary covering everything since the saved mark, then advance the mark. Falls back to a
-    /// full initial read if Gmail has never been read on this Mac.
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
             try Task.checkCancellation()
-            await HostedConnectorSetup.processingStarted(slug: "gmail")
+            HostedConnectorSetup.processingStarted(slug: "gmail")
             return try await readIterative(onProgress: onProgress)
         }
     }
 
     private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
         let origin = GoogleSourceRead.origin(bucket: bucketKey)
+        if InitialAnalysisRecovery.replayCloudStages {
+            let pending = try await CycleStore.shared.gmailReadState()
+            let completed = try await CycleStore.shared.mcpCheckpoint(bucketKey)
+            // A whole completed stage is retained. An unfinished stage starts all its windows
+            // again; beginGmailRead retires its partial notes and preserves the original bounds.
+            if pending == nil, let completed, completed.origin == origin, completed.mark.order > 0 {
+                guard completed.mark.order <= Date().timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
+                return 0
+            }
+            return try await readInitial(onProgress: onProgress, replaceNotes: false)
+        }
+        // Resume coverage before consulting the global watermark, which deliberately does not
+        // advance over gaps. The stored bounds never move with the retry's date or time zone.
+        if let state = try await CycleStore.shared.gmailReadState(), state.origin == origin {
+            return try await readWindows(state, onProgress: onProgress)
+        }
         guard let checkpoint = try await CycleStore.shared.mcpCheckpoint(bucketKey),
               checkpoint.origin == origin else {
             return try await readInitial(onProgress: onProgress, replaceNotes: false)
         }
-        let mark = checkpoint.mark
-        let since = Date(timeIntervalSince1970: mark.order)
-        let runStart = Date()
-        guard mark.order <= runStart.timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
-        let sinceLabel = "since \(label(since))"
-        // Gmail's `after:` accepts an epoch-seconds boundary — precise, no day-rounding.
-        let query = "after:\(Int(since.timeIntervalSince1970))"
-        let prompt = weeklyPrompt(query: query, label: sinceLabel)
-        onProgress(.windowStart(total: 1, label: sinceLabel, prompt: prompt))
-        var recorded = 0
-        var pending: [NoteDraft] = []
-        if let r = try await read(prompt: prompt) {
-            pending.append(draft(r, itemDate: runStart, label: sinceLabel))
-            recorded = 1
-            onProgress(.windowDone(total: 1, label: sinceLabel,
-                                   summary: r.summary, threads: r.threadCount, completed: 1, keptSoFar: 1))
-        } else {
-            onProgress(.windowDone(total: 1, label: sinceLabel,
-                                   summary: nil, threads: 0, completed: 1, keptSoFar: 0))
+        let now = Date()
+        guard checkpoint.mark.order <= now.timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
+        // Gmail accepts whole seconds. Don't create a zero-length read when retried immediately.
+        guard floor(now.timeIntervalSince1970) > checkpoint.mark.order else { return 0 }
+        let proposed = GmailReadState.incremental(origin: origin,
+            since: Date(timeIntervalSince1970: checkpoint.mark.order), through: now)
+        let state = try await CycleStore.shared.beginGmailRead(proposed)
+        return try await readWindows(state, onProgress: onProgress)
+    }
+
+    private static func readWindows(_ state: GmailReadState,
+                                    onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        try Task.checkCancellation()
+        guard state.through <= Date() else { throw MCPSource.MCPError.clockMovedBackwards }
+        guard GoogleSourceRead.origin(bucket: bucketKey) == state.origin else { throw MCPSource.MCPError.connectionChanged }
+        let pending = state.pending
+        let total = pending.count
+        var saved = 0, completed = 0, failed = 0
+        try await withThrowingTaskGroup(of: WindowResult.self) { group in
+            var next = 0
+            func enqueue(_ index: Int) {
+                let window = state.windows[index]
+                let windowLabel = state.windows.count == 1 ? "since \(label(window.start))" : "week of \(label(window.start))"
+                let prompt = weeklyPrompt(query: window.query, label: windowLabel)
+                onProgress(.windowStart(total: total, label: windowLabel, prompt: prompt))
+                group.addTask {
+                    do {
+                        try Task.checkCancellation()
+                        return WindowResult(index: index, result: .success(try await read(prompt: prompt)))
+                    } catch { return WindowResult(index: index, result: .failure(error)) }
+                }
+            }
+            // Bound account pressure, including each worker's retry. Successful workers can
+            // finish and persist even when another window exhausts its read attempts.
+            while next < min(2, total) { enqueue(pending[next]); next += 1 }
+            for try await done in group {
+                try Task.checkCancellation()
+                guard GoogleSourceRead.origin(bucket: bucketKey) == state.origin else { throw MCPSource.MCPError.connectionChanged }
+                switch done.result {
+                case .success(let result):
+                    let window = state.windows[done.index]
+                    let windowLabel = state.windows.count == 1 ? "since \(label(window.start))" : "week of \(label(window.start))"
+                    let note = result.map { draft($0, itemDate: window.end, label: windowLabel,
+                                                  sourceID: state.sourceID(for: done.index)) }
+                    // The store checks cancellation again after actor admission. Publish progress
+                    // only after the note and completion receipt have both reached disk.
+                    if try await CycleStore.shared.commitGmailWindow(stateID: state.id, origin: state.origin,
+                                                                     index: done.index, note: note) {
+                        completed += 1
+                        if result != nil { saved += 1 }
+                        onProgress(.windowDone(total: total, label: windowLabel, summary: result?.summary,
+                                               threads: result?.threadCount ?? 0, completed: completed, keptSoFar: saved))
+                    }
+                case .failure(let error):
+                    if Diagnostics.isCancellation(error) || ConnectorReadFailure.isConnectionFailure(error)
+                        || (error as? ConnectorReadFailure.GmailFailure) == .accountLimit || CodexFailureReason.classify(error) == .usageLimit {
+                        throw error
+                    }
+                    failed += 1
+                    Diagnostics.report(.sourceReadFailed, phase: .read, reason: "gmail_window", error: error,
+                                       source: "gmail", counts: [.failed: 1])
+                }
+                if next < total { enqueue(pending[next]); next += 1 }
+            }
         }
-        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, origin: origin)
-        Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
-        return recorded
+        if failed > 0 { throw GmailError.incomplete(failed: failed, saved: saved) }
+        return saved
     }
 
     // MARK: - One read (a single codex exec over a date window)
@@ -205,22 +202,18 @@ enum GmailConnect {
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
         inv.mcpReadConnectors = ["gmail"]    // Claude engine: the unattended-read recipe
-        guard let result = try await GoogleSourceRead.read(inv, slug: "gmail", countKey: "thread_count", cap: threadCap) else { return nil }
+        guard let result = try await GoogleSourceRead.read(inv, slug: "gmail", countKey: "thread_count") else { return nil }
         return ReadResult(summary: result.text, hasActionItems: result.hasActionItems, threadCount: result.count)
     }
 
-    private static func draft(_ r: ReadResult, itemDate: Date, label: String) -> NoteDraft {
-        NoteDraft(kind: .gmail, sourceID: "gmail:\(Int(itemDate.timeIntervalSince1970))", folder: "Gmail",
+    private static func draft(_ r: ReadResult, itemDate: Date, label: String, sourceID: String) -> NoteDraft {
+        NoteDraft(kind: .gmail, sourceID: sourceID, folder: "Gmail",
             itemDate: itemDate, text: r.summary, title: "Email · \(label)", reminderFlagged: r.hasActionItems)
     }
 
     // MARK: - Date helpers
 
-    private static func qDate(_ d: Date) -> String {     // Gmail query date: yyyy/MM/dd
-        let f = DateFormatter(); f.dateFormat = "yyyy/MM/dd"; f.timeZone = .current
-        return f.string(from: d)
-    }
-    private static func label(_ d: Date) -> String {     // display: "Jun 8"
+    nonisolated private static func label(_ d: Date) -> String {     // display: "Jun 8"
         let f = DateFormatter(); f.dateFormat = "MMM d"; f.timeZone = .current
         return f.string(from: d)
     }
@@ -238,7 +231,7 @@ enum GmailConnect {
     "required":["thread_count","notable","has_action_items","summary","tool_failure"]}
     """
 
-    private static func weeklyPrompt(query: String, label: String) -> String {
+    nonisolated private static func weeklyPrompt(query: String, label: String) -> String {
         """
         You are the Gmail intelligence pass for Sentient OS, a privacy-first personal-AI app. \
         Summarize ONE window of the user's email (\(label)) into a single dense summary that feeds \

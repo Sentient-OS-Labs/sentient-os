@@ -72,6 +72,7 @@ actor VaultGenerator {
         static func scope(for backend: ModelBackend) -> String {
             switch backend {
             case .claude: "claude:v1"
+            case .sentient: "sentient:claude:v1"
             case .chatgpt, .custom: "\(backend.rawValue):\(CodexRuntime.sessionScope)"
             }
         }
@@ -158,6 +159,12 @@ actor VaultGenerator {
         let fm = FileManager.default
         let root = vaultRoot
         try WritingStyle.preserve(in: staging, from: root)
+        if ModelBackend.current == .sentient {
+            _ = try VaultValidation.validate(staging: staging, replacing: root)
+        }
+        if let expectedFingerprint, vaultFingerprint(root) != expectedFingerprint {
+            throw VaultCloud.CloudError.vaultChanged
+        }
         if fm.fileExists(atPath: root.path) {
             _ = try fm.replaceItemAt(root, withItemAt: staging)
         } else {
@@ -196,10 +203,15 @@ actor VaultGenerator {
         var invocation = invocation
         invocation.claudeModel = .opus     // the Claude engine's heavy leg: vault work earns Opus
         let backend = ModelBackend.current
+        if backend == .sentient {
+            invocation.hostedVaultRoot = staging.path
+            invocation.webSearch = false
+            invocation.includeUserConfig = false
+        }
         let sessionScope = ResumeToken.scope(for: backend)
         // A timeout never resumes half-written files. Keep the last completed boundary on
         // the same volume, restore it after the child has stopped, and replay only this slice.
-        let checkpoint = try sliceIndex.map { _ in try VaultSliceCheckpoint(staging: staging) }
+        let checkpoint = try (sliceIndex != nil || backend == .sentient) ? VaultSliceCheckpoint(staging: staging) : nil
         defer { checkpoint?.discard() }
         onProgress(.calling)
         let poller = Task.detached {
@@ -215,6 +227,12 @@ actor VaultGenerator {
                 try await FrontierRun.run(invocation, onLine: onLine)
             }
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
+            if backend == .sentient {
+                try checkpoint?.restore()
+                throw VaultError.usageLimit(message: message, resume: ResumeToken(sessionID: nil,
+                    stagingPath: staging.path, sliceIndex: sliceIndex ?? 0, sliceBudget: sliceBudget,
+                    sliceItemLimit: sliceItemLimit, sessionScope: sessionScope))
+            }
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
             Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
@@ -225,6 +243,12 @@ actor VaultGenerator {
             try checkpoint!.restore()
             throw VaultError.interrupted(resume: ResumeToken(sessionID: nil, stagingPath: staging.path,
                 sliceIndex: sliceIndex, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit, sessionScope: sessionScope))
+        } catch where backend == .sentient {
+            // A lease cutoff, STOP or provider error cannot leave half-written hosted output
+            // as a completed boundary. Preserve the last successful slice without its session.
+            try checkpoint?.restore()
+            throw VaultError.interrupted(resume: ResumeToken(sessionID: nil, stagingPath: staging.path,
+                sliceIndex: sliceIndex ?? 0, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit, sessionScope: sessionScope))
         }
     }
 
@@ -355,6 +379,11 @@ actor VaultGenerator {
 
         // Feed the remaining slices, one fresh codex session each.
         while next < slices.count {
+            if ModelBackend.current == .sentient, Task.isCancelled {
+                throw VaultError.interrupted(resume: ResumeToken(sessionID: nil, stagingPath: staging.path,
+                    sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    sessionScope: ResumeToken.scope(for: .sentient)))
+            }
             try Task.checkCancellation()                             // the user's STOP, between slices
             if slices.count > 1 { onProgress(.folding(part: next + 1, of: slices.count)) }
             let prompt: String
@@ -409,6 +438,11 @@ actor VaultGenerator {
         // Success → atomically swap staging into the real vault (the only moment the old vault is
         // touched); on any throw the vault is left intact (B11 swapStagingIntoVault).
         onProgress(.materializing(notes: written))
+        if ModelBackend.current == .sentient, Task.isCancelled {
+            throw VaultError.interrupted(resume: ResumeToken(sessionID: nil, stagingPath: staging.path,
+                sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                sessionScope: ResumeToken.scope(for: .sentient)))
+        }
         try Task.checkCancellation()
         CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
         do {

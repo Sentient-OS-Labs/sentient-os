@@ -56,7 +56,6 @@ nonisolated enum ConnectorClassificationDiagnostics {
         // A tool ID must come from a static reviewed list, never a provider-defined name.
         init(tool: String, slug: String, expected: ConnectorRegistry.ToolCategory, observed: ConnectorRegistry.ToolCategory) {
             let known = Set(ConnectorRegistry.pack(forSlug: slug)?.readTools ?? [])
-                .union(ConnectorClassifier.reviewedDestructiveTools(slug: slug))
                 .union(slug == "slack" ? Set(SlackConnector.categories(backend: .claude).keys) : [])
                 .union(Microsoft365Connector.contains(slug) ? Set(Microsoft365Connector.categories.keys) : [])
             self.tool = known.contains(tool) ? tool : "other"
@@ -148,9 +147,12 @@ nonisolated enum ConnectorClassificationDiagnostics {
         CrashReporting.diagnosticBreadcrumb("connector.classification.attempt", data: value.tags.merging(value.extra) { _, new in new })
         Log("classifier: \(value.tags["source"]!) attempt=\(attempt) stage=\(failure.stage.rawValue) kind=\(failure.kind.rawValue) reason=\(failure.reasonCode)")
         guard terminal else { return }
-        Diagnostics.current?.finish(outcome: failure.kind == .setupRequired ? "blocked" : "failed")
-        // An explicit setup/auth state is context, not a recurring defect. Missing evidence is still reported.
-        guard failure.kind != .setupRequired else { return }
+        // Pending/disabled/missing servers are expected readiness states. Preserve malformed
+        // inventories and missing tools after a connected snapshot as actionable failures.
+        let waiting = failure.reason == .inventoryNotReady
+            && [.pending, .disabled, .needsAuth, .serverMissing].contains(failure.nativeState)
+        Diagnostics.current?.finish(outcome: failure.kind == .setupRequired || waiting ? "blocked" : "failed")
+        guard failure.kind != .setupRequired, !waiting else { return }
         DiagnosticHistory.recordError(value)
         CrashReporting.captureEvent(value.event, tags: value.tags, extra: value.extra,
                                     fingerprint: value.fingerprint, cooldown: 900)

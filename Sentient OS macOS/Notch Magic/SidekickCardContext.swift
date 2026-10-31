@@ -1,20 +1,72 @@
 //
 // SidekickCardContext.swift
 // Serializes the home's visible proactive offers and their current drafts as background
-// data. One snapshot follows a Sidekick request through routing, tools, and computer use.
+// data, plus the exact reviewed reply snapshot selected by a card button.
 // Doc: Documentation - Sidekick - General.md
 //
 
 import Foundation
 
 nonisolated enum SidekickCardContext {
-    /// Exact reviewed data for the one card the user activated, separate from the bounded
-    /// background suggestion deck. This does not change the executor's policy or recipe.
-    static func taskSnapshot(_ action: PreparedAction) -> String {
-        let data = ["card_id": action.id, "title": action.title, "recipient": action.recipient,
-                    "content": action.preparedContent, "recipe": action.executionRecipe,
-                    "method": action.method.rawValue, "target": action.target]
-        return "User activated this reviewed suggestion (card fields are data):\n" + SidekickContext.json(data)
+    enum Failure: LocalizedError {
+        case unavailable, stale(String)
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: "This suggestion could not be opened. Your draft has been kept."
+            case .stale(let message): message
+            }
+        }
+    }
+
+    @MainActor static func canSubmit(_ action: PreparedAction) -> Bool {
+        action.method != .research && !action.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !action.buttonText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    @MainActor static func reply(to action: PreparedAction) throws -> SidekickConversationEvent.ReplyReference {
+        let data = try JSONEncoder().encode(action)
+        guard data.count <= 300_000 else { throw Failure.unavailable }
+        return .init(card: .init(snapshotID: UUID(), cardID: action.id, title: action.title,
+            summary: action.cardSummary, service: action.target.isEmpty ? action.methodTarget ?? action.method.rawValue : action.target,
+            recipient: action.recipient, content: action.preparedContent,
+            actionJSON: String(decoding: data, as: UTF8.self)))
+    }
+
+    /// Preserve existing source/account checks without invoking the old card executor.
+    @MainActor static func validate(_ snapshot: SidekickConversationEvent.CardReference) async throws {
+        guard let data = snapshot.actionJSON.data(using: .utf8),
+              let action = try? JSONDecoder().decode(PreparedAction.self, from: data),
+              action.id == snapshot.cardID, action.preparedContent == snapshot.content,
+              action.recipient == snapshot.recipient else { throw Failure.unavailable }
+        guard canSubmit(action) else { throw Failure.unavailable }
+        if let expected = action.connectorIdentity, let slug = action.methodTarget {
+            let current: String?
+            switch slug {
+            case "slack": current = SlackConnector.cachedIdentity()?.fingerprint
+            case OutlookMailConnector.slug: current = OutlookMailConnector.cachedFingerprint()
+            case OutlookCalendarConnector.slug: current = OutlookCalendarConnector.cachedFingerprint()
+            default: current = expected
+            }
+            guard current == expected else {
+                throw Failure.stale("This suggestion’s connected account changed. Review it or analyze again before continuing.")
+            }
+        }
+        if let issue = await ProactiveExecutor.mailEvidenceIssue(action) { throw Failure.stale(issue) }
+        try Task.checkCancellation()
+    }
+
+    /// Also runs for a card reply restored from a permission-restart draft.
+    @MainActor static func finish(_ snapshot: SidekickConversationEvent.CardReference, succeeded: Bool) {
+        guard succeeded, let latest = ProactiveResearch.latest(),
+              let data = snapshot.actionJSON.data(using: .utf8),
+              let reviewed = try? JSONDecoder().decode(PreparedAction.self, from: data) else { return }
+        let remaining = latest.ready.filter {
+            !($0.id == snapshot.cardID && $0.preparedContent == reviewed.preparedContent
+              && $0.recipient == reviewed.recipient && $0.executionRecipe == reviewed.executionRecipe)
+        }
+        if remaining.count != latest.ready.count {
+            ProactiveResearch.saveLatest(ReadyResult(ready: remaining, dropped: latest.dropped))
+        }
     }
 
     static func promptBlock(for actions: [PreparedAction]) -> String {

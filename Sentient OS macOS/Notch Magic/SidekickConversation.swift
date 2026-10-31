@@ -73,7 +73,14 @@ final class SidekickConversation {
                 counts: [.recoveredTasks: recovered.count])
         }
         let generation = try store.generation
-        let referenced = try reply.map { reference -> Record in
+        let referenced = try reply.flatMap { reference -> Record? in
+            if let card = reference.card {
+                guard reference.messageID == card.referenceID, reference.selectedText == nil,
+                      !card.title.isEmpty, !card.actionJSON.isEmpty else {
+                    throw SidekickConversationRun.Failure.invalidReference
+                }
+                return nil
+            }
             guard let record = try store.record(id: reference.messageID),
                   reference.selectedText.map({ !$0.isEmpty && record.event.text.contains($0) }) ?? true else {
                 throw SidekickConversationRun.Failure.invalidReference
@@ -99,7 +106,7 @@ final class SidekickConversation {
                                          backend: ModelBackend.current.rawValue, source: source)
         active = run
         refresh()
-        return (run, context.prompt)
+        return (run, context.prompt + (reply?.card.map { "\n\n" + $0.promptContext } ?? ""))
     }
 
     @discardableResult

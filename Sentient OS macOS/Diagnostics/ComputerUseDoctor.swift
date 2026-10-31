@@ -10,8 +10,21 @@ import UniformTypeIdentifiers
     private(set) var report: ComputerUseCheckReport?
     private(set) var isRunning = false
     private(set) var controls: ComputerUseTestControls?
+    private var ownsCheckSurface = false
     var uploadMessage: String?
     var uploading = false
+    var explanation: String {
+        if let report, [.needsAttention, .interrupted].contains(report.outcome),
+           report.steps.contains(where: { $0.check == .accessibility && $0.status != .passed }) {
+            let copies = NSWorkspace.shared.runningApplications.filter {
+                !$0.isTerminated && $0.bundleURL?.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+            }
+            if copies.count > 1 {
+                return "More than one copy of Sentient is running. The helper may be reading the other copy’s window. Close the extra copy, then run this check again."
+            }
+        }
+        return report?.explanation ?? "Test the tools Sidekick uses across your computer."
+    }
     @ObservationIgnored private var work: Task<ComputerUseCheckReport, Never>?
     @ObservationIgnored private var window: NSWindow?
     #if DEBUG
@@ -27,10 +40,15 @@ import UniformTypeIdentifiers
     }
 
     func start() {
+        guard !NativePermissionCheck.shared.isTearingDown else { return }
         guard !isRunning else { show(); return }
         begin(source: .settings, backend: ModelBackend.current, call: nil)
     }
     func show() {
+        // A queued check has no window ownership yet. Repeated Start/View clicks must not
+        // displace the ordinary proof window it is waiting for, including old report views.
+        guard !NativePermissionCheck.shared.isTearingDown,
+              (!isRunning || ownsCheckSurface), !NativePermissionCheckWindow.isPresenting else { return }
         if window == nil {
             let host = NSHostingController(rootView: ComputerUseDoctorView(doctor: self).preferredColorScheme(.dark))
             let panel = NSWindow(contentViewController: host)
@@ -58,6 +76,7 @@ import UniformTypeIdentifiers
     /// restart the helper while the parent agent owns it. A dead session can recover on a read.
     func checkFromAgent(authorization: ComputerUseDiagnosticAuthorization, backend: ModelBackend,
                         call: @escaping ComputerUseCheckProbe.Call) async throws -> Data {
+        guard !NativePermissionCheck.shared.isTearingDown else { throw CancellationError() }
         guard !isRunning else {
             var busy = makeReport(source: .agent, backend: backend); busy.outcome = .busy; busy.finishedAt = Date()
             return try busy.encoded()
@@ -74,7 +93,6 @@ import UniformTypeIdentifiers
         uploadMessage = nil
         controls = ComputerUseTestControls()
         isRunning = true
-        show()
         work = Task { [self] in
             await run(source: source, agentCall: call)
             controls = nil; isRunning = false
@@ -106,14 +124,39 @@ import UniformTypeIdentifiers
     }
 
     private func run(source: ComputerUseCheckReport.Source, agentCall: ComputerUseCheckProbe.Call?) async {
+        if source == .agent {
+            await runCheck(source: source, agentCall: agentCall, proofAttempt: nil)
+            return
+        }
+        do {
+            // Register ownership before waiting for another probe. The ordinary gate can join
+            // this work, but it must not open a competing window or cancel this Settings check.
+            try await NativePermissionCheck.shared.withSettingsProof { attempt in
+                await self.runCheck(source: source, agentCall: nil, proofAttempt: attempt)
+            }
+        } catch {
+            if error is CancellationError || Task.isCancelled { report?.outcome = .cancelled }
+            else {
+                recordInfrastructureError(error, at: .runtime)
+                report?.outcome = (error as? OpenAIComputerUse.RuntimeError) == .helperRunning ? .busy : .needsAttention
+            }
+        }
+    }
+
+    private func runCheck(source: ComputerUseCheckReport.Source, agentCall: ComputerUseCheckProbe.Call?,
+                          proofAttempt: UUID?) async {
         let runtime = OpenAIComputerUseRuntime.shared
         let reservation = source == .settings ? runtime.reserveDiagnostic() : nil
         if source == .settings, reservation == nil { report?.outcome = .busy; return }
+        ownsCheckSurface = true
+        defer { ownsCheckSurface = false }
         var runtimeLease: CodexRuntime.FileLock?
         defer { runtimeLease?.unlock(); if let reservation { runtime.endDiagnostic(reservation) } }
         var session: OpenAIComputerUseSession?
         var stage = ComputerUseCheckReport.Check.runtime
         do {
+            try Task.checkCancellation()
+            show()
             report?.update(stage, .running)
             if source == .settings {
                 guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
@@ -132,6 +175,7 @@ import UniformTypeIdentifiers
                 if case CodexRuntime.Failure.invalidPackage = error { invalidPackage = true } else { invalidPackage = false }
                 guard source == .settings, invalidHelper || invalidPackage else { throw error }
                 report?.repairAttempted = true; report?.update(.repair, .running)
+                if let proofAttempt { try await NativePermissionCheck.shared.retireProofForRepair(attempt: proofAttempt) }
                 try await runtime.prepareForReinstall(configuration: configuration)
                 let setup = ComputerUseSetup.instance(for: .openAI)
                 guard await setup.ensureInstalled(force: true) else {
@@ -147,7 +191,7 @@ import UniformTypeIdentifiers
             configuration = try configuration.afterRuntimeLease()
             report?.update(stage, .passed)
             stage = .permissions; report?.update(stage, .running)
-            _ = try await runtime.start(configuration: configuration, stoppingConflictingHelpers: source == .settings)
+            var helper = try await runtime.start(configuration: configuration, stoppingConflictingHelpers: source == .settings)
             let automation = await Permissions.nativeAutomationState(ask: false)
             let screen = Permissions.hasScreenRecording()
             let ax = Permissions.tccState(service: "kTCCServiceAccessibility", clientBundleID: OpenAIComputerUse.bundleID)
@@ -178,13 +222,28 @@ import UniformTypeIdentifiers
                     else {
                         let opened = try await OpenAIComputerUseSession.open(configuration)
                         session = opened
+                        // Opening the first live client can replace an idle helper. Bind the
+                        // forthcoming proof to the process this connection now keeps alive.
+                        helper = try await runtime.start(configuration: configuration)
                         call = { tool, data in try await opened.call(tool, arguments: data, timeout: 12) }
                     }
                     #if DEBUG
                     if !testProbeFailures.isEmpty { throw testProbeFailures.removeFirst() }
                     #endif
-                    try await ComputerUseCheckProbe.run(target: target, call: call, update: update)
-                    await session?.close(); session = nil
+                    let evidence = try await ComputerUseCheckProbe.run(target: target, call: call, update: update)
+                    try Task.checkCancellation()
+                    if let proofAttempt, let session {
+                        let current = try await runtime.start(configuration: configuration)
+                        guard !helper.isTerminated, current.processIdentifier == helper.processIdentifier else {
+                            throw OpenAIComputerUse.RuntimeError.backendUnavailable
+                        }
+                        try await NativePermissionCheck.shared.adoptSettingsProof(attempt: proofAttempt,
+                            evidence: evidence, configuration: configuration, helper: helper, session: session)
+                        // The readiness owner now keeps this tested helper connection alive.
+                        // Agent diagnostics use their broker's closure and never transfer it.
+                        self.report?.permissions["readiness"] = "verified"
+                    } else { await session?.close() }
+                    session = nil
                     let repaired = report?.repairAttempted == true
                     report?.repairVerified = repaired
                     report?.outcome = repaired ? .repaired : .passed
@@ -194,15 +253,19 @@ import UniformTypeIdentifiers
                     await session?.close(); session = nil
                     if error is CancellationError || Task.isCancelled { throw CancellationError() }
                     let failure = error as? NativeComputerUseFailure
+                    if let failure {
+                        NativeComputerUseErrorLog.record(tool: "diagnostic_" + stage.rawValue, failure: failure)
+                    }
                     guard attempt == 0, source == .settings, let failure,
                           ComputerUseCheckReport.allowsConnectionRepair(failure) else { throw error }
                     // Only idle-runtime repair, once, followed by the complete real check.
                     report?.repairAttempted = true; report?.update(.repair, .running, failure: failure)
                     runtimeLease?.unlock(); runtimeLease = nil
+                    if let proofAttempt { try await NativePermissionCheck.shared.retireProofForRepair(attempt: proofAttempt) }
                     try await runtime.restart(configuration: configuration)
                     runtimeLease = try await CodexRuntime.sharedRuntimeLease()
                     configuration = try configuration.afterRuntimeLease()
-                    _ = try await runtime.start(configuration: configuration, stoppingConflictingHelpers: true)
+                    helper = try await runtime.start(configuration: configuration, stoppingConflictingHelpers: true)
                     try await Task.sleep(for: .milliseconds(500))
                     controls.reset()
                 }
@@ -211,6 +274,9 @@ import UniformTypeIdentifiers
             await session?.close()
             if error is CancellationError || Task.isCancelled { report?.outcome = .cancelled; return }
             if let failure = error as? NativeComputerUseFailure {
+                if let proofAttempt {
+                    try? NativePermissionCheck.shared.recordSettingsFailure(attempt: proofAttempt, failure: failure)
+                }
                 if report?.steps.last?.status == .running { report?.update(stage, .needsAttention, failure: failure) }
                 report?.outcome = ComputerUseCheckReport.outcome(for: failure)
             } else {
@@ -280,21 +346,21 @@ import UniformTypeIdentifiers
     var expectedText: String { "Hello from Sentient" }
     override init() {
         super.init()
-        let title = NSTextField(labelWithString: "A little space to check things.")
+        let title = NSTextField(labelWithString: marker)
         title.setAccessibilityLabel(marker)
         title.font = .systemFont(ofSize: 11); title.textColor = .secondaryLabelColor
         title.frame = NSRect(x: 0, y: 75, width: 450, height: 18)
-        button = NSButton(title: "Try a click", target: self, action: #selector(clicked))
+        button = NSButton(title: buttonLabel, target: self, action: #selector(clicked))
         button.setAccessibilityLabel(buttonLabel)
         button.bezelStyle = .rounded
         button.frame = NSRect(x: 0, y: 35, width: 220, height: 32)
         field.frame = NSRect(x: 235, y: 39, width: 225, height: 25)
-        field.placeholderString = "Test text appears here"
+        field.placeholderString = fieldLabel
         field.setAccessibilityLabel(fieldLabel)
         view.addSubview(title); view.addSubview(button); view.addSubview(field)
     }
     @objc private func clicked() { clicks += 1; button.title = "Click checked" }
-    func reset() { clicks = 0; field.stringValue = ""; button.title = "Try a click" }
+    func reset() { clicks = 0; field.stringValue = ""; button.title = buttonLabel }
     func target(window: NSWindow) -> ComputerUseCheckProbe.Target {
         .init(app: Bundle.main.bundleURL.path, marker: marker, buttonLabel: buttonLabel,
               fieldLabel: fieldLabel, expectedText: expectedText,

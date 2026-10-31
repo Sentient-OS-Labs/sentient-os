@@ -55,6 +55,7 @@ final class UserDefaults {
 @MainActor enum LoginItem {
     static var checks = 0
     static var isEnabled: Bool { checks += 1; return false }
+    static func refresh() async -> Bool { checks += 1; return false }
 }
 enum Permissions { enum AutomationState { case granted, notAsked, denied, unavailable } }
 enum NativePermissionReadiness {
@@ -62,7 +63,17 @@ enum NativePermissionReadiness {
     struct Snapshot { var accessibility: State = .unknown; var screenRecording: State = .unknown }
 }
 @MainActor enum CodexAuth { static var knowledgeBaseOnly = false }
-enum ModelBackend { case chatgpt, claude, custom; static var current = Self.chatgpt }
+enum ModelBackend { case chatgpt, claude, custom, sentient; static var current = Self.chatgpt }
+@MainActor enum HostedInference { static var isConfigured = true }
+@MainActor final class SentientSetup {
+    static let shared = SentientSetup()
+    static let unavailableMessage = "Hosted inference is unavailable."
+    var ready = true
+    var preparing = false
+    var checking = false
+    var status: String?
+    func refresh() async {}
+}
 @MainActor enum ComputerUseBackend {
     case openAI, cua
     static var current = Self.openAI
@@ -73,8 +84,19 @@ enum ModelBackend { case chatgpt, claude, custom; static var current = Self.chat
     static func loginStatus() async -> Bool { true }
 }
 @MainActor enum ClaudeCLI {
+    static var loginChecks = 0
+    static var loginResult = true
+    static var requireVerificationDuringCheck = false
     static func locateBinary() -> String? { "/synthetic/claude" }
-    static func loginStatus() async -> Bool { true }
+    static func loginStatus() async -> Bool {
+        loginChecks += 1
+        if requireVerificationDuringCheck { ClaudeAuth.requiresVerification = true }
+        return loginResult
+    }
+}
+@MainActor enum ClaudeAuth {
+    static var revision = UUID()
+    static var requiresVerification = false
 }
 @MainActor final class CodexSetup { static let shared = CodexSetup(); var outdated = false }
 @MainActor final class ComputerUseSetup {
@@ -99,10 +121,17 @@ enum ModelBackend { case chatgpt, claude, custom; static var current = Self.chat
 '''
 
 CHECKS = r'''
+import Foundation
 @main struct HealthRequirementsTest {
     @MainActor static func main() async {
         func check(_ condition: Bool, _ label: String) { precondition(condition, label); print("PASS " + label) }
         func reset() {
+            ModelBackend.current = .chatgpt
+            HostedInference.isConfigured = true
+            SentientSetup.shared.ready = true; SentientSetup.shared.status = nil
+            ClaudeCLI.loginChecks = 0
+            ClaudeCLI.loginResult = true; ClaudeCLI.requireVerificationDuringCheck = false
+            ClaudeAuth.revision = UUID(); ClaudeAuth.requiresVerification = false
             UserDefaults.standard.values = [:]
             UserDefaults.standard.plan = .init()
             SourceSelection.selectedProtectedSources = []
@@ -122,6 +151,46 @@ CHECKS = r'''
         let fresh = await HealthCaution.probe()
         check(fresh == nil && ProtectedLocalSource.reads.isEmpty && WakeHelperClient.shared.checks == 0 && LoginItem.checks == 0,
               "fresh Home never checks unchosen protected sources or overnight capabilities")
+        ModelBackend.current = .sentient
+        HostedInference.isConfigured = false
+        let unavailableHosted = await HealthCaution.probe()
+        check(unavailableHosted?.message == SentientSetup.unavailableMessage,
+              "hosted configuration failure is explicit and never asks for a subscription login")
+        HostedInference.isConfigured = true
+        check(await HealthCaution.probe() == nil && ClaudeCLI.loginChecks == 0,
+              "healthy hosted inference does not check a Claude subscription")
+        SentientSetup.shared.ready = false; SentientSetup.shared.status = "Try connecting again."
+        check(await HealthCaution.probe()?.message == "Try connecting again.",
+              "hosted connection failure preserves its actionable explanation")
+        reset(); ModelBackend.current = .claude
+        check(await HealthCaution.probe() == nil && ClaudeCLI.loginChecks == 1,
+              "verified Claude login is healthy and checked once")
+        check(await HealthCaution.probe() == nil && ClaudeCLI.loginChecks == 1,
+              "unchanged Claude authentication reuses the healthy status cache")
+        ClaudeAuth.requiresVerification = true
+        if case .claudeSignedOut = await HealthCaution.probe() {
+            check(ClaudeCLI.loginChecks == 1,
+                  "Claude repair requirement overrides cached healthy login without another status call")
+        } else { check(false, "Claude repair requirement must prevent healthy status") }
+        ModelBackend.current = .sentient
+        check(await HealthCaution.probe() == nil && ClaudeCLI.loginChecks == 1,
+              "Claude repair requirement never blocks healthy hosted inference")
+        ModelBackend.current = .claude
+        ClaudeAuth.requiresVerification = false; ClaudeAuth.revision = UUID()
+        check(await HealthCaution.probe() == nil && ClaudeCLI.loginChecks == 2,
+              "new authentication revision refreshes Claude health after repair")
+        ClaudeAuth.revision = UUID(); ClaudeCLI.loginResult = false
+        if case .claudeSignedOut = await HealthCaution.probe() {
+            check(ClaudeCLI.loginChecks == 3,
+                  "a new signed-out authentication revision cannot reuse a healthy cache")
+        } else { check(false, "changed signed-out authentication must prevent healthy status") }
+        ClaudeCLI.loginResult = true
+        ClaudeAuth.revision = UUID(); ClaudeCLI.requireVerificationDuringCheck = true
+        if case .claudeSignedOut = await HealthCaution.probe() {
+            check(ClaudeCLI.loginChecks == 4,
+                  "authentication rejection during a successful status call still requires repair")
+        } else { check(false, "concurrent authentication rejection must prevent healthy status") }
+        reset()
         SourceSelection.selectedProtectedSources = [.notes]
         check(await HealthCaution.probe() == nil && ProtectedLocalSource.reads.isEmpty,
               "unfinished source selection does not create a permission regression")

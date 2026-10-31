@@ -29,11 +29,11 @@ struct PersonalSetupView: View {
                 }
                 OnboardingReadyView(onStart: { timing in
                     guard appState.finishPersonalSetup(timing) else {
-                        problem = "Choose three available sources and wait for any current analysis to finish, then try again."
+                        problem = "Choose three sources, finish overnight wake and launch-at-login setup, and wait for any current analysis to finish."
                         return
                     }
                     dismissWindow(id: Self.windowID)
-                    if timing == .now { openWindow(id: ProcessingWindowView.windowID) }
+                    openWindow(id: ProcessingWindowView.windowID)
                 }, isProcessing: appState.processing.isBusy)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)

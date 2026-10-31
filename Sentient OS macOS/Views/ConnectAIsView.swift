@@ -2,8 +2,8 @@
 //  ConnectAIsView.swift
 //  Sentient OS macOS
 //
-//  The "Connect your AIs" window — the guided setup, opened by the glow CTAs in Settings →
-//  Your AIs and Knowledge's "Use with your AIs" popover. Owns the whole story:
+//  The shared "Connect your AIs" flow, embedded in Settings → Knowledge Sharing and
+//  opened as a window by Knowledge's "Use with your AIs" popover. Owns the whole story:
 //   · sharing OFF → the guide itself opens first (a 1-second crisp peek, inert), then blurs
 //     under a transparent veil carrying the consent ask: "Connect your AIs?", the trust pillars
 //     (encrypted storage, open-source server, sharing controls), a glowing "Yes, use the cloud MCP"
@@ -29,6 +29,10 @@ import AVFoundation
 
 struct ConnectAIsView: View {
     static let windowID = "connect-ais"
+    enum Presentation { case window, settings }
+    var presentation: Presentation = .window
+
+    private var embedded: Bool { presentation == .settings }
 
     private enum AITab: String, CaseIterable, Identifiable {
         case claude = "Claude"
@@ -51,6 +55,23 @@ struct ConnectAIsView: View {
     @State private var copiedPrompt = false
 
     var body: some View {
+        Group {
+            if embedded { settingsContent }
+            else { windowContent }
+        }
+        .task { await refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            Task { await refresh(animateEntrance: false) }
+        }
+        .alert("Stop sharing your knowledge base?", isPresented: $confirmOff) {
+            Button("Keep Sharing", role: .cancel) {}
+            Button("Stop & Delete Cloud Copy", role: .destructive) { disconnect() }
+        } message: {
+            Text(PrivacyCopy.sharingOff)
+        }
+    }
+
+    private var windowContent: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             VStack(spacing: 0) {
@@ -68,13 +89,54 @@ struct ConnectAIsView: View {
             if loaded && enabled { sharingPill.padding(16) }
         }
         .frame(minWidth: 1100, minHeight: 880)
-        .task { await refresh() }
-        .alert("Stop sharing your knowledge base?", isPresented: $confirmOff) {
-            Button("Keep Sharing", role: .cancel) {}
-            Button("Stop & Delete Cloud Copy", role: .destructive) { disconnect() }
-        } message: {
-            Text(PrivacyCopy.sharingOff)
+    }
+
+    /// The same blurred guide behind consent, sized and scrollable within Settings.
+    private var settingsContent: some View {
+        GeometryReader { geometry in
+            ZStack {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if !loaded {
+                            ProgressView("Loading sharing…")
+                        } else {
+                            if enabled {
+                                HStack {
+                                    Spacer()
+                                    sharingPill
+                                }
+                                .padding(.bottom, 24)
+                            }
+                            header
+                            guide
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: geometry.size.height)
+                }
+                .blur(radius: veiled ? 34 : 0)
+                .saturation(veiled ? 0.7 : 1)
+                .allowsHitTesting(enabled)
+                .accessibilityHidden(!enabled)
+
+                if veiled {
+                    Color.black.opacity(0.82)
+                    ScrollView {
+                        SharingConsentLayout(viewportHeight: geometry.size.height) {
+                            consentContent
+                            LocalKnowledgeLocation()
+                        }
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .clipped()
         }
+        .background(Theme.bg)
     }
 
     // MARK: - Header (unchanged voice: orb glyph, display line, the pitch)
@@ -89,6 +151,7 @@ struct ConnectAIsView: View {
                 .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
                 .multilineTextAlignment(.center).lineSpacing(3.5)
                 .frame(maxWidth: 420)
+            if embedded && enabled { LocalKnowledgeLocation() }
         }
     }
 
@@ -99,31 +162,38 @@ struct ConnectAIsView: View {
 
     private var connectVeil: some View {
         ZStack {
-            // Deep enough that the inks (tuned for OLED black) sit right; the blurred guide
-            // survives as a faint glow, not a bright wall the grays melt into.
             Color.black.opacity(0.82).ignoresSafeArea()
-            VStack(spacing: 0) {
-                OrbMark(size: 38)
-                Text("Connect your AIs?")
-                    .display(25)
-                    .foregroundStyle(Theme.Ink.statusInk)
-                    .padding(.top, 20)
-                Text("Your knowledge base lives on this Mac. Want to offer it to ChatGPT, Claude, and the other AIs you choose?")
-                    .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
-                    .multilineTextAlignment(.center).lineSpacing(3.5)
-                    .frame(maxWidth: 440)
-                    .padding(.top, 20)
-                VStack(alignment: .leading, spacing: 10) {
-                    veilPillar("lock.fill", PrivacyCopy.sharingEncryption)
-                    veilPillar("chevron.left.forwardslash.chevron.right", PrivacyCopy.sharingOpenSource)
-                    veilPillar("key.fill", PrivacyCopy.sharingControl)
-                }
-                .frame(width: 440)
-                .padding(.top, 28)
-                GlowButton(title: busy ? "Connecting…" : "Yes, use the cloud MCP",
-                           systemImage: "link", glowIntensity: 0.5) { connect() }
-                    .frame(width: 280)
-                    .padding(.top, 36)
+            consentContent.padding(.horizontal, 40)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var consentContent: some View {
+        VStack(spacing: 0) {
+            OrbMark(size: 38)
+            Text("Connect your AIs?")
+                .display(25)
+                .foregroundStyle(Theme.Ink.statusInk)
+                .padding(.top, 20)
+            Text(embedded
+                 ? "Want to offer your knowledge to ChatGPT, Claude, and the other AIs you choose?"
+                 : "Your knowledge base lives on this Mac. Want to offer it to ChatGPT, Claude, and the other AIs you choose?")
+                .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
+                .multilineTextAlignment(.center).lineSpacing(3.5)
+                .frame(maxWidth: 440)
+                .padding(.top, 20)
+            VStack(alignment: .leading, spacing: 10) {
+                veilPillar("lock.fill", PrivacyCopy.sharingEncryption)
+                veilPillar("chevron.left.forwardslash.chevron.right", PrivacyCopy.sharingOpenSource)
+                veilPillar("key.fill", PrivacyCopy.sharingControl)
+            }
+            .frame(width: 440)
+            .padding(.top, 28)
+            GlowButton(title: busy ? "Connecting…" : "Yes, use the cloud MCP",
+                       systemImage: "link", glowIntensity: 0.5) { connect() }
+                .frame(width: 280)
+                .padding(.top, 36)
+            if !embedded {
                 Button {
                     dismiss()
                 } label: {
@@ -136,21 +206,18 @@ struct ConnectAIsView: View {
                 .buttonStyle(PressScaleStyle())
                 .disabled(busy)
                 .padding(.top, 16)
-                if let errorLine {
-                    Text(errorLine)
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 380)
-                        .padding(.top, 14)
-                }
             }
-            .padding(.horizontal, 40)
+            if let errorLine {
+                Text(errorLine)
+                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
+                    .padding(.top, 14)
+            }
         }
-        .contentShape(Rectangle())   // swallow clicks so the blurred guide stays inert
     }
 
-    /// One trust pillar on the veil (the same shape as Settings → Give AIs Knowledge's pillars,
-    /// so the story reads identically wherever the user meets it).
+    /// The same sharing explanation in the standalone window and Settings.
     private func veilPillar(_ icon: String, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 9) {
             Image(systemName: icon)
@@ -259,19 +326,30 @@ struct ConnectAIsView: View {
 
     /// ChatGPT / Claude: the guide's video steps side by side, a take-me-there link above each.
     private func videoRow(_ g: GuideSpec) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            ForEach(Array(g.steps.enumerated()), id: \.offset) { i, s in
-                VStack(alignment: .leading, spacing: 12) {
-                    StepLink(title: s.linkLabel, urlString: s.linkURL)
-                    videoStep(i + 1, s.title, video: "\(g.videoPrefix)-\(i + 1)",
-                              aspect: g.videoAspect, caption: s.caption) {
-                        stepControl(s.control)
-                    }
+        Group {
+            if embedded {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 270, maximum: 330), spacing: 14)],
+                          alignment: .center, spacing: 20) {
+                    videoSteps(g)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 14) { videoSteps(g) }
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .transition(.opacity)
+    }
+
+    private func videoSteps(_ g: GuideSpec) -> some View {
+        ForEach(Array(g.steps.enumerated()), id: \.offset) { i, s in
+            VStack(alignment: .leading, spacing: 12) {
+                StepLink(title: s.linkLabel, urlString: s.linkURL)
+                videoStep(i + 1, s.title, video: "\(g.videoPrefix)-\(i + 1)",
+                          aspect: g.videoAspect, caption: s.caption) {
+                    stepControl(s.control)
                 }
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .transition(.opacity)
     }
 
     @ViewBuilder private func stepControl(_ c: GuideStep.Control) -> some View {
@@ -348,7 +426,8 @@ struct ConnectAIsView: View {
             Spacer(minLength: 0)
         }
         .padding(16)
-        .frame(width: 330, alignment: .leading)
+        .frame(width: embedded ? nil : 330, alignment: .leading)
+        .frame(maxWidth: embedded ? 330 : nil, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -411,17 +490,22 @@ struct ConnectAIsView: View {
 
     // MARK: - MirrorClient plumbing (the SAME path Settings + the popover drive)
 
-    @MainActor private func refresh() async {
+    @MainActor private func refresh(animateEntrance: Bool = true) async {
+        guard !busy else { return }
         enabled = await MirrorClient.shared.isEnabled
         shareURL = await MirrorClient.shared.shareURL
         loaded = true
+        if embedded || !animateEntrance {
+            veiled = !enabled
+            return
+        }
         // Sharing off: EVERY open gets the ritual — land crisp for a second, then draw the veil.
         // The window's state survives close/reopen, so the veil is reset by hand (instantly,
         // no animation) before the peek; otherwise a second open would start already veiled.
         if !enabled {
             veiled = false
             try? await Task.sleep(for: .seconds(1))
-            guard !enabled else { return }
+            guard !Task.isCancelled, !enabled else { return }
             withAnimation(.easeInOut(duration: 0.7)) { veiled = true }
         }
     }
@@ -454,6 +538,36 @@ struct ConnectAIsView: View {
             withAnimation(.easeOut(duration: 0.4)) { enabled = false; veiled = true }
             busy = false
         }
+    }
+}
+
+/// Keeps the location note halfway between the consent button and the pane's bottom.
+/// On short windows the content grows instead of compressing the copy or overlapping controls.
+private struct SharingConsentLayout: Layout {
+    var viewportHeight: CGFloat
+    private let topInset: CGFloat = 28
+    private let minimumGap: CGFloat = 24
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let natural = ProposedViewSize(width: proposal.width, height: nil)
+        let consent = subviews[0].sizeThatFits(natural)
+        let location = subviews[1].sizeThatFits(natural)
+        return CGSize(width: proposal.width ?? max(consent.width, location.width),
+                      height: max(viewportHeight, topInset + consent.height + location.height + 2 * minimumGap))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let natural = ProposedViewSize(width: bounds.width, height: nil)
+        let consent = subviews[0].sizeThatFits(natural)
+        let location = subviews[1].sizeThatFits(natural)
+        let consentTop = max(topInset, min((bounds.height - consent.height) / 2,
+            bounds.height - consent.height - location.height - 2 * minimumGap))
+        let consentBottom = consentTop + consent.height
+        let gap = (bounds.height - consentBottom - location.height) / 2
+        subviews[0].place(at: CGPoint(x: bounds.midX, y: bounds.minY + consentTop),
+                          anchor: .top, proposal: natural)
+        subviews[1].place(at: CGPoint(x: bounds.midX, y: bounds.minY + consentBottom + gap),
+                          anchor: .top, proposal: natural)
     }
 }
 

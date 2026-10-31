@@ -7,7 +7,7 @@
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → verifies linked-account/read-tool metadata, then saves the selection.
+//    Done       → saves the user's selection immediately; actual reads establish connection health.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -41,9 +41,6 @@ struct CloudConnectSheet: View {
     @AppStorage(ModelBackend.key) private var backendRaw = ""
 
     @State private var openedConnectorPage = false
-    @State private var checkingConnection = false
-    @State private var connectionProblem: String?
-    @State private var verification: Task<Void, Never>?
 
     init(_ service: Service) {
         self.service = service
@@ -55,6 +52,14 @@ struct CloudConnectSheet: View {
     }
 
     var body: some View {
+        if backend == .sentient {
+            HostedConnectorConnectSheet(service: service.slug)
+        } else {
+            subscriptionBody
+        }
+    }
+
+    private var subscriptionBody: some View {
         VStack(spacing: 0) {
             ConnectorLogo(asset: service.logoAsset)
 
@@ -72,30 +77,25 @@ struct CloudConnectSheet: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
 
-            if selected && (backend == .custom || CodexAuth.connectorsLocked) {
+            if selected && (!backend.hasSubscriptionConnectors || CodexAuth.connectorsLocked) {
                 Text("This selected source is unavailable with your current AI. You can stop reading it here or choose a supported connection.")
                     .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).padding(.top, 14)
             }
             connectButton.padding(.top, 26)
-                .disabled(backend == .custom || CodexAuth.connectorsLocked)
+                .disabled(!backend.hasSubscriptionConnectors || CodexAuth.connectorsLocked)
             if selected {
                 stopLink.padding(.top, 18)
             }
             if openedConnectorPage {
                 doneButton.padding(.top, 14)
             }
-            if let connectionProblem {
-                Text(connectionProblem).font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
-            }
         }
         .padding(.horizontal, 36).padding(.top, 40).padding(.bottom, 24)
         .frame(width: 400)
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
-        .onChange(of: backendRaw) { verification?.cancel(); dismiss() }
-        .onDisappear { verification?.cancel() }
+        .onChange(of: backendRaw) { dismiss() }
     }
 
     // MARK: - The two buttons (+ the ✕)
@@ -106,8 +106,7 @@ struct CloudConnectSheet: View {
     }
 
     private func openConnectorPage() {
-        guard !checkingConnection else { return }
-        guard ModelBackend.current == backend, backend != .custom else { dismiss(); return }
+        guard ModelBackend.current == backend, backend.hasSubscriptionConnectors else { dismiss(); return }
         if NSWorkspace.shared.open(service.connectorURL) {
             openedConnectorPage = true
             HostedConnectorSetup.settingsOpened(slug: service.slug, backend: backend)
@@ -115,9 +114,7 @@ struct CloudConnectSheet: View {
     }
 
     private var doneButton: some View {
-        ConnectorActionButton(title: checkingConnection ? "Checking connection…" : "Done", kind: .done,
-                              isLoading: checkingConnection, action: done)
-            .disabled(checkingConnection)
+        ConnectorActionButton(title: "Done", kind: .done, action: done)
     }
 
     private var closeButton: some View {
@@ -132,31 +129,21 @@ struct CloudConnectSheet: View {
             .foregroundStyle(Theme.Ink.deepMuted)
     }
 
-    // MARK: - Done: verify native linked-account metadata before selecting
+    // MARK: - Done: trust the user's declaration without waiting for provider discovery
 
     private func stopReading() {
         guard ModelBackend.current == backend else { dismiss(); return }
-        verification?.cancel()
         HostedConnectorSetup.stopReading(slug: service.slug, backend: backend)
         dismiss()
     }
 
     private func done() {
-        guard !checkingConnection else { return }
-        checkingConnection = true; connectionProblem = nil
+        guard backend.hasSubscriptionConnectors else { dismiss(); return }
         let firstConnection = !connected
-        verification = Task { @MainActor in
-            let ready = await HostedConnectorSetup.verifyAndConfirm(slug: service.slug, backend: backend,
-                reconnected: openedConnectorPage)
-            guard !Task.isCancelled else { return }
-            checkingConnection = false; verification = nil
-            guard ready else {
-                connectionProblem = "This connection is not verified yet. Finish signing in to \(service.title), then try Done again. No source was added."
-                return
-            }
-            if firstConnection { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
-            dismiss()
-        }
+        guard HostedConnectorSetup.confirm(slug: service.slug, backend: backend,
+            reconnected: openedConnectorPage) else { dismiss(); return }
+        if firstConnection { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
+        dismiss()
     }
 
 }

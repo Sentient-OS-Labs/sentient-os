@@ -148,7 +148,7 @@ final class ComputerUseSetup {
     func ensureInstalled(force: Bool = false) async -> Bool {
         if backend == .openAI, await !CodexSetup.shared.ensureComputerUseCLI() {
             failure = OpenAIComputerUse.RuntimeError.cliUnavailable
-            status = "Computer use needs Codex CLI. Prepare it in Permissions & Health."
+            status = "Computer use needs Codex CLI. Prepare it in Permissions & Help."
             return false
         }
         if !force, !isInstalling, backend.isInstalled {

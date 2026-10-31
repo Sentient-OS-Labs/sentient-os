@@ -12,17 +12,20 @@ nonisolated enum DirectMCPIdentity {
     struct Identity: Sendable { let fingerprint: String; let label: String }
     static func parse(_ data: Data?) -> Identity? {
         guard let data, let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              result["isError"] as? Bool != true, result["is_error"] as? Bool != true else { return nil }
-        var candidates: [[String: Any]] = []
-        if let value = (result["structuredContent"] ?? result["structured_content"]) as? [String: Any] { candidates.append(value) }
-        if let blocks = result["content"] as? [[String: Any]] {
-            for block in blocks {
-                if let text = block["text"] as? String, let bytes = text.data(using: .utf8),
-                   let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] { candidates.append(value) }
-            }
+              data.count <= 128_000, DirectMCPResult.errorState(result) == false,
+              DirectMCPResult.hasValidStructuredContent(result) else { return nil }
+        if let content = result["content"] {
+            guard let blocks = content as? [[String: Any]], blocks.count <= 32,
+                  blocks.allSatisfy({ block in
+                      guard let type = block["type"] as? String else { return false }
+                      return type == "text" ? block["text"] is String
+                          : ["image", "audio", "resource", "resource_link"].contains(type)
+                  }) else { return nil }
         }
+        let candidates = DirectMCPResult.objects(result)
+        guard candidates.allSatisfy({ $0["error"] == nil }) else { return nil }
+        var identities: [Identity] = []
         for candidate in candidates {
-            guard candidate["error"] == nil else { continue }
             // Notion's fetch(id: "self") wraps native workspace/user fields in `self`.
             let account = candidate["self"] as? [String: Any] ?? candidate
             let user = account["user"] as? [String: Any]
@@ -38,8 +41,11 @@ nonisolated enum DirectMCPIdentity {
             let key = userID + "\u{0}" + workspaceID
             let fingerprint = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
             let name = workspaceName.flatMap { $0.count < 120 && !$0.contains(where: { $0.isNewline }) ? $0 : nil }
-            return Identity(fingerprint: fingerprint, label: name.map { email + " · " + $0 } ?? email)
+            identities.append(Identity(fingerprint: fingerprint, label: name.map { email + " · " + $0 } ?? email))
         }
-        return nil
+        // A second distinct native identity is an account conflict, never an invitation
+        // to pick the first text block. Equivalent structured/text mirrors remain valid.
+        guard Set(identities.map(\.fingerprint)).count == 1 else { return nil }
+        return identities.first
     }
 }

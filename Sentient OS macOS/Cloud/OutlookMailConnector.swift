@@ -52,16 +52,17 @@ nonisolated enum OutlookMailConnector {
     """
 
     static func reads(_ backend: ModelBackend) -> [String] {
-        switch backend { case .claude: claudeReads; case .chatgpt: codexReads; case .custom: [] }
+        switch backend { case .claude: claudeReads; case .chatgpt: codexReads; case .custom, .sentient: [] }
     }
     static func profileTool(_ backend: ModelBackend) -> String { backend == .claude ? "get_me" : "get_profile" }
     static func knowledgeTools(_ backend: ModelBackend) -> [String] {
-        backend == .claude ? ["outlook_email_search", "read_resource"] : ["list_messages", "fetch_message"]
+        guard backend.hasSubscriptionConnectors else { return [] }
+        return backend == .claude ? ["outlook_email_search", "read_resource"] : ["list_messages", "fetch_message"]
     }
     static func actionTools(_ backend: ModelBackend, operation: Operation) -> [String] {
         let writes: [String]
         switch (backend, operation) {
-        case (_, .read), (.custom, _): writes = []
+        case (_, .read), (.custom, _), (.sentient, _): writes = []
         case (.claude, .draft): writes = ["outlook_create_draft", "outlook_create_reply_draft", "outlook_create_reply_all_draft"]
         case (.chatgpt, .draft): writes = ["draft_email", "create_reply_draft", "create_forward_draft"]
         case (.claude, .send): writes = ["outlook_send_mail"]
@@ -92,7 +93,7 @@ nonisolated enum OutlookMailConnector {
         case .claude: prefixes = [claudePrefix]
         case .chatgpt: prefixes = ["microsoft_outlook_email.", "mcp__codex_apps__microsoft_outlook_email__", "mcp__codex_apps__microsoft_outlook_email_",
                                    "mcp__codex_apps__microsoft_outlook_email."]
-        case .custom: return nil
+        case .custom, .sentient: return nil
         }
         guard let prefix = prefixes.first(where: name.hasPrefix) else { return nil }
         return String(name.dropFirst(prefix.count))
@@ -180,7 +181,7 @@ nonisolated enum OutlookMailConnector {
     }
     @MainActor static func readIdentity(onReceipt: MCPSource.ReceiptObserver? = nil) async throws -> Identity {
         let backend = ModelBackend.current
-        guard backend != .custom else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+        guard backend.hasSubscriptionConnectors else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
         let tool = profileTool(backend)
         let prompt = """
         Verify the authenticated Outlook mailbox by calling \(tool) exactly once with no arguments.
@@ -194,9 +195,12 @@ nonisolated enum OutlookMailConnector {
             do {
                 try Task.checkCancellation()
                 var inv = MCPSource.readInvocation(slug: slug, prompt: prompt)
-                inv.mcpReadToolNames = [tool]; inv.effort = .low; inv.timeout = 90
-                inv.claudeModel = .sonnet
-                let result = try await FrontierRun.run(inv)
+                inv.mcpReadToolNames = [tool]; inv.effort = .medium; inv.timeout = 90
+                inv.claudeModel = .haiku
+                let request = inv
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 MCPSource.meter.withLock { totals in
                     var total = totals[slug] ?? (0, 0)

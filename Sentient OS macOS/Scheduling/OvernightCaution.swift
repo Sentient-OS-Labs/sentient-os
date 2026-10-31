@@ -41,6 +41,15 @@ enum OvernightCaution {
         /// engine truthfully).
         var message: String {
             let claude = ModelBackend.current == .claude
+            if ModelBackend.current == .sentient {
+                switch self {
+                case .loggedOut: return "Sentient couldn't restore hosted access last night. Check the connection in Settings."
+                case .usageLimit: return "We reached Sentient's included hosted allowance last night. Your summaries are saved for the next run."
+                case .inputTooLarge: return "Last night's batch was too large for hosted inference. Your summaries are saved."
+                case .connectorAuth: return "A connected account needs attention. Reconnect it in Sentient Settings."
+                default: break
+                }
+            }
             switch self {
             case .loggedOut:  return claude
                 ? "I couldn't work last night. Claude Code was signed out; sign back in and I'll catch up tonight."
@@ -72,6 +81,9 @@ enum OvernightCaution {
         /// name, else the kind's generic message (engine-aware at render time, like the kinds).
         var message: String {
             if kind == .connectorAuth, let detail, !detail.isEmpty {
+                if ModelBackend.current == .sentient {
+                    return "I couldn't read your \(detail) last night. Reconnect it in Sentient Settings."
+                }
                 let place = ModelBackend.current == .claude ? "claude.ai" : "chatgpt.com"
                 return "I couldn't read your \(detail) last night. Sign in to it again on \(place) and I'll catch up tonight."
             }
@@ -99,6 +111,7 @@ enum OvernightCaution {
         // A full disk is certain and local (the knowledge-base staging copy is written on the Mac);
         // it must never be misread as an internet or login problem, so it goes first.
         if DiskSpace.isDiskFull(error) { return .diskFull }
+        if let hosted = error as? HostedInference.Failure, hosted.isUsageLimit { return .usageLimit }
         // Typed errors first — certain, no probing needed. The cycle's stage wrappers each re-wrap
         // the spine's usage limit in their own enum (create/update/judge/research), so match them
         // all: a stringly wrap here once left the amber banner blind to a vault-leg usage limit.
@@ -124,6 +137,7 @@ enum OvernightCaution {
         // back in" would be wrong advice. (An endpoint-specific caution kind can come later;
         // unclassifiable stays honest silence.)
         if ModelBackend.current == .claude {
+            if error is ClaudeAuth.LoginRequired || ClaudeAuth.requiresVerification { return .loggedOut }
             if case CodexCLI.CLIError.notAvailable(.notWorking(let detail)) = error,
                detail.localizedCaseInsensitiveContains("not logged in") {
                 return .loggedOut

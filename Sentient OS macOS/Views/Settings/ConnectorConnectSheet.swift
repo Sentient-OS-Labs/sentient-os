@@ -1,6 +1,6 @@
 //
 // ConnectorConnectSheet.swift
-// Hosted connection popups verify native linked-account metadata before saving selection. Direct accounts retain their
+// Hosted connection popups save the user's explicit selection immediately. Direct accounts retain their
 // browser OAuth, account IDs, knowledge toggle and cancellation lifecycle.
 // Doc: Documentation - Settings.md
 //
@@ -20,8 +20,10 @@ struct ConnectorConnectSheet: View {
     @State private var connectionPhase: DirectMCPConnectPhase?
     @State private var newConnectionID: UUID?
     @State private var connectionCompleted = false
+    @State private var repairingHostedKnowledge = false
+    @State private var repairSelection: Bool?
+    @State private var repairRevision: String?
     @State private var disconnecting = false
-    @State private var verifyingHosted = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
     @AppStorage private var hostedSelected: Bool
@@ -48,6 +50,9 @@ struct ConnectorConnectSheet: View {
             let id = DirectMCPStore.connection(id: newConnectionID)?.detected.id
             return connectors.first { $0.id == id }
         }
+        // A catalog setup or explicit repair creates the account the user chooses. Never bind
+        // it to the first existing hosted/direct account merely because the provider matches.
+        if repairingHostedKnowledge || source.isDirectSetup { return nil }
         if let boundConnectorID { return connectors.first { $0.id == boundConnectorID } }
         return connectors.first { ConnectorRegistry.pack(for: $0)?.slug == source.serviceSlug }
     }
@@ -58,12 +63,13 @@ struct ConnectorConnectSheet: View {
     }
 
     private var usesDirect: Bool {
-        (connector ?? source.connector).map { $0.origin == .direct } ?? (source.directProvider != nil)
+        if repairingHostedKnowledge || source.isDirectSetup { return true }
+        return (connector ?? source.connector).map { $0.origin == .direct } ?? (source.directProvider != nil)
     }
 
     private var selectionSlug: String { connector?.slug ?? source.serviceSlug }
     private var connecting: Bool { connectionPhase != nil }
-    private var busy: Bool { connecting || disconnecting || verifyingHosted }
+    private var busy: Bool { connecting || disconnecting }
     private var connectTitle: String {
         switch connectionPhase {
         case .openingBrowser: "Opening sign-in…"
@@ -75,7 +81,12 @@ struct ConnectorConnectSheet: View {
     }
     private var name: String { ConnectorRegistry.pack(forSlug: source.serviceSlug)?.displayName ?? source.displayName }
     private var reader: String { hostedBackend == .claude ? "Claude" : "ChatGPT" }
-    private var hostedCanRead: Bool { ConnectorRegistry.kbEligible(source.serviceSlug, backend: hostedBackend) }
+    private var needsDirectKnowledgeConnection: Bool {
+        ConnectorRegistry.requiresDirectKnowledgeConnection(source.serviceSlug, backend: hostedBackend)
+    }
+    private var hostedCanRead: Bool {
+        ConnectorRegistry.kbEligible(source.serviceSlug, backend: hostedBackend) && !needsDirectKnowledgeConnection
+    }
     private var hostedConnected: Bool {
         if hostedCanRead { return hostedSelected }
         // Task-only apps have no reading preference. Keep their saved declaration without
@@ -100,6 +111,13 @@ struct ConnectorConnectSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 14)
 
+                if repairingHostedKnowledge {
+                    Text("Knowledge analysis will use the account you choose here. Your \(reader) connection is kept separately for tasks.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 14)
+                }
+
                 if let direct {
                     VStack(spacing: 4) {
                         Text(direct.label).foregroundStyle(Theme.Ink.bright)
@@ -112,7 +130,7 @@ struct ConnectorConnectSheet: View {
                 }
 
                 if ConnectorRegistry.kbEligible(selectionSlug) {
-                    if context == .settings || direct != nil {
+                    if direct != nil {
                         ConnectorKnowledgeControl(slug: selectionSlug)
                             .disabled(busy)
                             .padding(.top, 20)
@@ -164,14 +182,33 @@ struct ConnectorConnectSheet: View {
 
     private var hostedControls: some View {
         VStack(spacing: 0) {
-            if hostedSelected && !hostedCanRead {
+            if needsDirectKnowledgeConnection {
+                Text("Knowledge analysis needs a connection to Sentient. Your \(reader) connection is kept separately for tasks.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 14)
+                ConnectorActionButton(title: "Connect to Sentient", action: repairHostedKnowledge)
+                    .padding(.top, 20).disabled(busy)
+                if hostedSelected {
+                    Text("Your reading choice is saved until you connect or stop reading.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.faint)
+                        .multilineTextAlignment(.center).padding(.top, 10)
+                    Button("Stop reading \(name)", action: stopHostedReading)
+                        .buttonStyle(.plain).font(.system(size: 11))
+                        .foregroundStyle(Theme.Ink.deepMuted).padding(.top, 14)
+                }
+            } else if hostedSelected && !hostedCanRead {
                 Text("This selected source is unavailable with your current AI. Choose a supported connection or stop reading it here.")
                     .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).padding(.top, 14)
                 Button("Stop reading \(name)", action: stopHostedReading)
                     .buttonStyle(.plain).font(.system(size: 11)).padding(.top, 14)
             }
-            if !hostedConnected {
+            if !hostedBackend.hasSubscriptionConnectors {
+                Text("This connection is supplied by a ChatGPT or Claude subscription. Choose a supported direct connection to use this service with Sentient.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).padding(.top, 14)
+            } else if !hostedConnected {
                 Text(hostedInstructions)
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
@@ -188,7 +225,7 @@ struct ConnectorConnectSheet: View {
             ConnectorActionButton(title: hostedConnected ? "Open connector settings" : "Connect \(name)",
                                   action: connect)
                 .padding(.top, 26)
-                .disabled(hostedBackend == .custom || (hostedSelected && !hostedCanRead))
+                .disabled(!hostedBackend.hasSubscriptionConnectors)
 
             if hostedConnected {
                 if hostedCanRead {
@@ -196,19 +233,14 @@ struct ConnectorConnectSheet: View {
                         .buttonStyle(.plain).font(.system(size: 11))
                         .foregroundStyle(Theme.Ink.deepMuted)
                         .padding(.top, 18)
-                } else if !hostedSelected {
+                } else if !hostedSelected && !needsDirectKnowledgeConnection {
                     taskOnlyNotice
                         .padding(.top, 18)
                 }
             }
             if openedConnectorPage {
-                ConnectorActionButton(title: verifyingHosted ? "Checking connection…" : "Done", kind: .done,
-                    isLoading: verifyingHosted, action: done)
+                ConnectorActionButton(title: "Done", kind: .done, action: done)
                     .padding(.top, 14).disabled(busy)
-            }
-            if let message {
-                Text(message).font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
         }
     }
@@ -295,12 +327,7 @@ struct ConnectorConnectSheet: View {
                 guard !Task.isCancelled else { return }
                 connectionCompleted = true
                 if let connection = DirectMCPStore.connection(id: id) {
-                    // Carry the catalog choice onto this account's stable source key.
-                    let defaults = UserDefaults.standard
-                    if let enabled = defaults.object(forKey: ConnectorRegistry.kbKey(source.serviceSlug)) as? Bool {
-                        ConnectorRegistry.setKBEnabled(connection.slug, enabled)
-                        defaults.removeObject(forKey: ConnectorRegistry.kbKey(source.serviceSlug))
-                    }
+                    finishKnowledgeRepair(with: connection.slug)
                     boundConnectorID = connection.detected.id
                     connectors.removeAll { $0.id == connection.detected.id }
                     connectors.append(connection.detected)
@@ -315,8 +342,32 @@ struct ConnectorConnectSheet: View {
         }
     }
 
+    /// This explicit action authorizes using the account selected in the new OAuth flow.
+    /// Merely adding an account elsewhere never transfers an existing hosted selection.
+    private func repairHostedKnowledge() {
+        guard !busy, !usesDirect, source.directProvider != nil else { return }
+        repairSelection = hostedSelected
+        repairRevision = ConnectorRegistry.advanceKnowledgeSelectionRevision(source.serviceSlug)
+        repairingHostedKnowledge = true
+        boundConnectorID = nil
+        connect()
+    }
+
+    private func finishKnowledgeRepair(with slug: String) {
+        guard repairingHostedKnowledge, let selected = repairSelection,
+              selected == hostedSelected,
+              repairRevision == ConnectorRegistry.knowledgeSelectionRevision(source.serviceSlug),
+              (UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(slug)) as? Bool) != false else { return }
+        // The OAuth account has just been saved. A later Stop in another window wins over
+        // this old request; cancellation/failure never reaches these preference writes.
+        ConnectorRegistry.setKBEnabled(slug, true)
+        ConnectorRegistry.setKBEnabled(source.serviceSlug, false)
+        repairSelection = nil
+        repairRevision = nil
+    }
+
     private func openConnectorPage() {
-        guard ModelBackend.current == hostedBackend, hostedBackend != .custom else { dismiss(); return }
+        guard ModelBackend.current == hostedBackend, hostedBackend.hasSubscriptionConnectors else { dismiss(); return }
         if NSWorkspace.shared.open(ConnectorLinks.page(for: source.serviceSlug, backend: hostedBackend)) {
             openedConnectorPage = true
             HostedConnectorSetup.settingsOpened(slug: source.serviceSlug, backend: hostedBackend)
@@ -349,24 +400,17 @@ struct ConnectorConnectSheet: View {
     private func done() {
         guard !busy else { return }
         if !usesDirect {
-            verifyingHosted = true; message = nil
-            operation = Task { @MainActor in
-                let ready = await HostedConnectorSetup.verifyAndConfirm(slug: source.serviceSlug, backend: hostedBackend,
-                    reconnected: openedConnectorPage)
-                guard !Task.isCancelled else { return }
-                verifyingHosted = false; operation = nil
-                guard ready else {
-                    message = "This connection is not verified yet. Finish signing in, then try Done again. No source was added."
-                    return
-                }
-                connectors = ConnectorRegistry.detectedForCurrentBackend()
-                dismiss()
-            }
+            guard hostedBackend.hasSubscriptionConnectors else { dismiss(); return }
+            guard HostedConnectorSetup.confirm(slug: source.serviceSlug, backend: hostedBackend,
+                reconnected: openedConnectorPage) else { dismiss(); return }
+            connectors = ConnectorRegistry.detectedForCurrentBackend(includeUnavailableDirect: true)
+            dismiss()
             return
         }
-        if ConnectorRegistry.kbEligible(selectionSlug),
-           UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(selectionSlug)) == nil {
-            ConnectorRegistry.setKBEnabled(selectionSlug, true)
+        // The displayed knowledge toggle is authoritative. Explicit repair can enable its
+        // newly chosen account, but Done never turns a visible off/default-off value on.
+        if repairingHostedKnowledge, connectionCompleted, let direct {
+            finishKnowledgeRepair(with: direct.slug)
         }
         dismiss()
     }

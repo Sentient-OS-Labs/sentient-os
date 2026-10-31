@@ -86,13 +86,16 @@ private struct DoubleTapPermissionGateView: View {
     let gate: DoubleTapPermissionGate
 
     var body: some View {
-        PermissionSetupView(title: "Set up Double Tap", continueTitle: continueTitle,
-                            canContinue: gate.allGranted, onContinue: gate.finishSetup) {
-            SettingsProse("Allow Sentient OS to read the conversation on your screen and paste a draft for you to review.")
+        PermissionSetupView(title: "Set up Double Tap", continueTitle: "Done",
+                            canContinue: gate.allGranted, onContinue: gate.finishSetup,
+                            compact: true, edgeGlow: true) {
             SentientAppPermissionRows(accessibility: gate.accessibility, screen: gate.screen,
-                accessibilityTitle: "Accessibility (paste your draft)",
-                accessibilityTip: "Lets Double Tap find the reply field and paste your draft. You review and send it.")
-            SettingsProse("When setup is complete, focus your reply field and double tap again.")
+                accessibilityTitle: "Accessibility",
+                accessibilityTip: "Lets Double Tap find the reply field and paste your draft. You review and send it.",
+                compact: true)
+            if gate.allGranted {
+                SettingsProse("Focus your reply field, then double tap again.")
+            }
         }
         .task {
             while !Task.isCancelled {
@@ -105,9 +108,6 @@ private struct DoubleTapPermissionGateView: View {
         }
     }
 
-    private var continueTitle: String {
-        gate.allGranted ? "Done" : "Grant permissions to continue"
-    }
 }
 
 #Preview("Double Tap setup") {

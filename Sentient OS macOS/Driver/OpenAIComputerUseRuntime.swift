@@ -26,10 +26,14 @@ final class OpenAIComputerUseRuntime {
     private var restarting = false
     private var diagnosticLease: UUID?
 
+    var canReserveDiagnostic: Bool {
+        activeTasks.isEmpty && diagnosticLease == nil && !restarting
+    }
+
     /// A user-requested repair owns the idle runtime. Ordinary tasks wait cancellably;
     /// repairs never tear down a helper underneath an existing agent.
     func reserveDiagnostic() -> UUID? {
-        guard activeTasks.isEmpty, diagnosticLease == nil, !restarting else { return nil }
+        guard canReserveDiagnostic else { return nil }
         let id = UUID(); diagnosticLease = id; return id
     }
     func endDiagnostic(_ id: UUID) { if diagnosticLease == id { diagnosticLease = nil } }
@@ -224,16 +228,42 @@ final class OpenAIComputerUseRuntime {
         } catch { endTask(id); throw error }
     }
 
+    /// Sample before the last client closes, which can normally terminate the helper.
+    /// A recovered session may own a replacement process rather than the initial handle.
+    func recordHelperBeforeCleanup(_ id: UUID) {
+        guard taskHelpers.removeValue(forKey: id) != nil else { return }
+        let expected = activeConfiguration?.appURL.standardizedFileURL
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+            .contains { !$0.isTerminated && $0.bundleURL?.standardizedFileURL == expected }
+        AgentRunDiagnostics.current?.recordHelper(running: running, atStart: false)
+        CrashReporting.diagnosticBreadcrumb("computer_use.task_ended", data: ["helper_running": String(running)])
+    }
+
     func endTask(_ id: UUID) {
-        if let app = taskHelpers.removeValue(forKey: id) {
-            AgentRunDiagnostics.current?.recordHelper(running: !app.isTerminated, atStart: false)
-            CrashReporting.diagnosticBreadcrumb("computer_use.task_ended", data: ["helper_running": String(!app.isTerminated)])
-        }
+        recordHelperBeforeCleanup(id)
         activeTasks.remove(id)
         if activeTasks.isEmpty { activeConfiguration = nil }
     }
 
     func invalidate() { checked = nil }
+
+    /// A permission relaunch must also replace the old helper process. Never stop a foreign
+    /// installation or a helper serving another task, and never force-quit a refusing helper.
+    func prepareForPermissionRestart(configuration selected: OpenAIComputerUse.Configuration) async throws {
+        guard activeTasks.isEmpty, starting == nil, checking == nil, !restarting, diagnosticLease == nil else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        try Task.checkCancellation()
+        guard let lease = try CodexRuntime.executionLease(for: CodexRuntime.executable.path, exclusive: true) else {
+            throw OpenAIComputerUse.RuntimeError.helperRunning
+        }
+        defer { lease.unlock() }
+        _ = try selected.afterRuntimeLease()
+        restarting = true
+        defer { restarting = false }
+        try await OpenAIComputerUse.stopOwnedHelper(allowForce: false)
+        launched = nil; checked = nil
+    }
 
     /// An invalid helper cannot pass restart()'s signature check. Before replacing it,
     /// take the same exclusive file lock used by the installer, then stop ONLY our bundle.

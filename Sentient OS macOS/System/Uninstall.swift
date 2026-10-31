@@ -71,6 +71,16 @@ enum Uninstall {
             appState?.isUninstalling = false
             return false
         }
+        await ComputerUseGate.shared.beginTeardown()
+        await NativePermissionCheck.shared.beginTeardown()
+        defer {
+            // The success sheet stays alive until Quit. Keep all permission producers closed
+            // after removal; only a failed/cancelled uninstall returns to the working app.
+            if !completedTeardown {
+                NativePermissionCheck.shared.endTeardown()
+                ComputerUseGate.shared.endTeardown()
+            }
+        }
         let processing = appState?.processing ?? ProcessingCoordinator.shared
         progress(.stopping)
         await processing.suspend()
@@ -94,8 +104,8 @@ enum Uninstall {
             return false
         }
         await conversation.drainBackgroundWork()
-        await NativePermissionCheck.shared.close()
         await ComputerUseDoctor.shared.clear()
+        await NativePermissionCheck.shared.close()
 
         // Quiet the scheduler FIRST so nothing re-arms a wake while the daemon comes down. The
         // flags are snapshotted so a cancellation restores them untouched.
@@ -155,11 +165,14 @@ enum Uninstall {
             appState?.isUninstalling = false
             return false
         }
-        do { try await DirectMCPConnections.shared.removeAll() }
+        do {
+            try await HostedConnectorClient.shared.disconnectAll()
+            try await DirectMCPConnections.shared.removeAll()
+        }
         catch {
             Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "connector_credentials", error: error)
-            Log("Uninstall: direct-connection Keychain cleanup needs retry")
-            lastFailure = "Uninstall paused because saved app connections couldn't be removed from Keychain. Unlock your Mac and retry to finish removing Sentient."
+            Log("Uninstall: connection cleanup needs retry")
+            lastFailure = "Uninstall paused because saved app connections could not be fully removed. Check your connection, unlock your Mac and retry."
             appState?.isUninstalling = false
             return false
         }

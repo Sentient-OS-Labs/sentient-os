@@ -70,8 +70,8 @@ nonisolated enum SidekickActivityLab {
                                     environment.merge(config.environment) { _, value in value }
                                 } else {
                                     let limited = CodexAuth.isLimited()
-                                    model = (limited ? CodexCLI.Model.gpt56terra : .gpt6sol).rawValue
-                                    effort = limited ? "medium" : "low"
+                                    model = (limited ? CodexCLI.Model.gpt6luna : .gpt6sol).rawValue
+                                    effort = "low"
                                 }
                                 report.details["selected_model"] = model
                                 report.details["selected_effort"] = effort

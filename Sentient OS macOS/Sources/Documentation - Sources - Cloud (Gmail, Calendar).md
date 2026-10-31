@@ -90,7 +90,7 @@ run start; a little overlap next run beats a boundary gap.
 - `runIterative`: events with a start time in `[mark, now)`.
 - **`fetchProactiveContext()`** is separate and deliberately uncurated: the last 7 days plus the next 24 hours, every event, as a compact chronological text block (`{connected, events_text}`). `ProactiveCycle` fetches it once and injects it into both the judge and the research prompts, so the judge can reason about time-sensitivity while staying tool-free.
 
-Models: the luna tier for every read (`gpt-6-luna` on codex, `haiku` on claude; medium effort, low
+Models: the luna tier for every read (`gpt-6-luna` on codex, `claude-haiku-5-5` on claude; medium effort, low
 for the connect probe), read-only sandbox, web search off for calendar. Sending an email or creating
 an event runs on the flagship tier in the executor.
 
@@ -124,3 +124,5 @@ source or run resets that card, so an earlier summary cannot imply success for a
 ## Related docs
 
 `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md` (the claude.ai connectors and the read allow rules), `Proactive/Documentation - Proactive Intelligence.md` (the calendar context and the write channels), `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md` (why the chips lock).
+
+Claude ingestion uniformly uses Haiku 5.5/medium, including specialized writing-style and calendar-context reads. Granola and other connectors no longer default to Sonnet.

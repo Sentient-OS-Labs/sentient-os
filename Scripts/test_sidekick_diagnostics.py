@@ -35,6 +35,8 @@ import Synchronization
 nonisolated enum BuildIdentity { static let identifier = "00000000-0000-4000-8000-000000000001" }
 
 nonisolated enum Fixture {
+    static let suite = "ai.sentient.sidekick-diagnostics-test." + UUID().uuidString
+    static let budget = DiagnosticEventBudget(defaults: UserDefaults(suiteName: suite)!)
     struct Event: Sendable {
         let name: String
         let tags: [String: String]
@@ -51,6 +53,7 @@ nonisolated enum Fixture {
         var crashStarted = true
         var analyticsEnabled = true
         var analyticsStarted = true
+        var identity = UUID().uuidString
     }
     static let state = Mutex(State())
     static func clearSinks() {
@@ -59,6 +62,7 @@ nonisolated enum Fixture {
             state.analytics.removeAll(); state.durations.removeAll()
             state.crashEnabled = true; state.crashStarted = true
             state.analyticsEnabled = true; state.analyticsStarted = true
+            state.identity = UUID().uuidString
         }
     }
 }
@@ -105,6 +109,11 @@ nonisolated enum SentrySDK {
 }
 nonisolated enum CrashReporting {
     enum DiagLevel { case info, warning, error, fatal }
+    enum Role: String, Sendable { case app }
+    struct State: Sendable { var role = Role.app }
+    static let state = Mutex(State())
+    static var installID: String { Fixture.state.withLock { $0.identity } }
+    static let reportingRelease = "fixture+1"
     static var diagnosticsEnabled: Bool { Fixture.state.withLock { $0.crashEnabled } }
     static var started: Bool { Fixture.state.withLock { $0.crashStarted } }
     static var correlationFields: [String: String] { [:] }
@@ -131,7 +140,7 @@ nonisolated enum TelemetryDeck {
 '''
 SUPPORT = SUPPORT.replace("__REAL_REPEAT_KEY__", declaration(shared, "static func repeatKey("))
 SUPPORT = SUPPORT.replace("__REAL_REPEAT_CLAIM__", declaration(shared, "static func claim(event:"))
-SUPPORT = SUPPORT.replace("__REAL_CAPTURE_EVENT__", declaration(crash, "nonisolated static func captureEvent("))
+SUPPORT = SUPPORT.replace("__REAL_CAPTURE_EVENT__", declaration(crash, "nonisolated static func captureEvent(").replace("DiagnosticEventBudget.shared", "Fixture.budget"))
 SUPPORT = SUPPORT.replace("__REAL_BREADCRUMB__", declaration(crash, "nonisolated static func diagnosticBreadcrumb("))
 SUPPORT = SUPPORT.replace("__REAL_ANALYTICS_SIGNAL__", declaration(analytics, "static func signal("))
 
@@ -147,6 +156,10 @@ import Foundation
     static func drainAnalytics() async throws { try await Task.sleep(for: .milliseconds(20)) }
     static func reset() { Fixture.clearSinks(); Diagnostics.resetRepeats() }
     static func main() async throws {
+        defer {
+            Fixture.budget.flush()
+            UserDefaults(suiteName: Fixture.suite)!.removePersistentDomain(forName: Fixture.suite)
+        }
         typealias D = SidekickDiagnostics
         let task = UUID(), attempt = UUID()
         let payload = D.payload(.context, outcome: .completed, taskID: task, attemptID: attempt,
@@ -248,6 +261,22 @@ import Foundation
         }
         try await drainAnalytics()
         check(Fixture.state.withLock { $0.sentry.count == 1 && $0.local.count == 32 }, "concurrent duplicate callbacks cannot bypass shared limiter")
+        reset()
+        for _ in 0..<100 {
+            CrashReporting.captureEvent("fixture.info", level: .info, includeInformational: true)
+        }
+        check(Fixture.state.withLock { $0.sentry.isEmpty && $0.breadcrumbs.count == 100 }, "informational events use breadcrumbs only")
+        for _ in 0..<20 {
+            Diagnostics.resetRepeats() // simulate cooldown expiry while retaining the durable daily budget
+            CrashReporting.captureEvent("fixture.failure", cooldown: 0)
+        }
+        check(Fixture.state.withLock { $0.sentry.count == 5 }, "daily cap applies even when an owner requests cooldown zero")
+        CrashReporting.captureEvent("fixture.new_failure")
+        check(Fixture.state.withLock { $0.sentry.count == 6 }, "novel failure is retained after a repeated failure hits its cap")
+        reset()
+        CrashReporting.captureEvent("fixture.cooldown", cooldown: 0)
+        CrashReporting.captureEvent("fixture.cooldown", cooldown: 0)
+        check(Fixture.state.withLock { $0.sentry.count == 1 }, "owner cannot disable the minimum cooldown")
         print("Sidekick diagnostics: \(assertions) assertions passed")
     }
 }
@@ -262,7 +291,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-sidekick-diagnostics-") as dir
     binary = tmp / "diagnostics-tests"
     subprocess.run([
         "xcrun", "swiftc", "-swift-version", "6", "-parse-as-library",
-        str(DIAGNOSTICS / "SidekickDiagnostics.swift"), str(support), str(tests),
+        str(DIAGNOSTICS / "SidekickDiagnostics.swift"), str(DIAGNOSTICS / "DiagnosticEventBudget.swift"), str(support), str(tests),
         "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True, timeout=20)

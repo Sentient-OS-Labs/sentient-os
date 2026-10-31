@@ -23,8 +23,8 @@ struct ShortcutSetting: View {
     }
 
     var body: some View {
-        SettingsRow(title: "Shortcut key", subtitle: "Tap to open Sidekick. Double tap to draft a reply.") {
-            SettingsMenu(title: "Sidekick shortcut", value: key.label, selection: selection) {
+        SettingsRow(title: "Shared shortcut key", subtitle: "Used by both features. Tap for Sidekick; double tap to draft a reply.") {
+            SettingsMenu(title: "Shared shortcut key", value: key.label, selection: selection) {
                 Text("Right ⌘").tag(ShortcutKey.rightCommand.rawValue)
                 Text("Right ⌥").tag(ShortcutKey.rightOption.rawValue)
                 if key != .rightCommand && key != .rightOption {
@@ -51,7 +51,7 @@ private struct ShortcutRecorderSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Sidekick shortcut").display(24).foregroundStyle(.white)
+            Text("Shared shortcut key").display(24).foregroundStyle(.white)
             SettingsProse("The same key is used for Sidekick and Double Tap. Press and release Command, Option, or Control on either side of your keyboard.")
             Text(candidate?.label ?? "Press a key…")
                 .font(.system(size: 26, weight: .medium))

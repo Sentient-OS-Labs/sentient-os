@@ -17,7 +17,7 @@ not be used to make a product-wide claim that all inference goes through a ChatG
 |---|---|
 | `CodexCLI.swift` | The actor: binary discovery, install, login, validation, `run()` (structured JSONL runs) and `runAgentCommand()` (computer use), argument building, JSONL parsing, process plumbing, failure diagnostics. |
 | `AgentStatus.swift` | Parses the `STATUS: DONE` / `STATUS: COULD_NOT` sentinel every app-authored wrapper prompt demands, shared by the executor and Sidekick. |
-| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → Sol low / Astra low / Astra medium for computer-use runs on Codex; on the Claude engine the tier picks model + effort (see the ClaudeCLI doc). |
+| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter selects the plan-aware main-agent model and effort (see Model resolution below). |
 
 ## The two run paths
 
@@ -68,7 +68,7 @@ this.
 | Field | Default | Meaning |
 |---|---|---|
 | `prompt` | | over stdin |
-| `model` | `.gpt6sol` | Sol remains the structured default; `.gpt6astra` is the upper computer-use tier, `.gpt6luna` the light tier, and `.gpt56terra` the limited-plan fallback |
+| `model` | `.gpt6sol` | Sol remains the paid structured default; Luna handles light reads and every Free/Go background run, regardless of the requested tier |
 | `effort` | `.high` | reasoning effort; the connector reads use `.medium`; nothing uses `.xhigh` |
 | `sandbox` | `.readOnly` | Seatbelt profile: `read-only` or `workspace-write` (writes confined to `cwd` + `addDirs`) |
 | `cwd`, `addDirs` | | the agent's working root and extra writable roots |
@@ -97,20 +97,21 @@ existing callers. Never replace a server-scoped recipe with a global approval as
 
 ## Model resolution: `backendTuned`
 
-Both run paths resolve the model string and the effort string through one function right before
-spawning:
+Structured runs resolve the model and effort through `backendTuned` immediately before spawning.
+Computer use selects its plan-aware speed tuple separately:
 
 - **Custom backend** (Settings → Frontier Model Choice): the user's endpoint model rides EVERY call and their single free-form reasoning level replaces the caller's effort. `run()` also injects the provider overrides, turns web search off, forces a hermetic run (`includeUserConfig = false`, since hosted-connector schemas would bloat every prompt), and turns `--output-schema` into a prompt instruction (naive endpoints ignore the schema); consumers then decode from `Envelope.jsonResult`.
-- **ChatGPT backend:** on a positive free/go plan read (`CodexAuth.isLimited()`), a Sol or Astra call downshifts to Terra at medium. Unknown plans retain the requested model, asserted Plus preserves the existing override, and Luna is untouched. Re-read per run.
+- **ChatGPT backend:** on a positive Free/Go plan read (`CodexAuth.isLimited()`), every requested background model resolves to GPT-6 Luna, preserving the caller's effort (high for knowledge/research, medium for ingestion, low for routing). Unknown plans retain the requested model and asserted Plus preserves the existing upgrade override. Re-read per run. The background availability ping also explicitly selects Luna/low on Free/Go.
 
-The computer-use slider reads `sidekick.speed` at each run: `faster` selects `gpt-6-sol`/low,
-`medium` selects `gpt-6-astra`/low, and `smarter` selects `gpt-6-astra`/medium. Stored values and the
-Faster default are unchanged. Custom model/reasoning settings override that tuple.
+The computer-use slider reads `sidekick.speed` at each run: paid ChatGPT uses `gpt-6.1-terra`/low,
+`gpt-6.1-sol`/low, and `gpt-6-astra`/low for Faster/Medium/Smarter. Free/Go uses `gpt-6-luna` at
+low/medium/high. Faster remains the default. Custom model/reasoning settings override that tuple.
 
-MCP-only tasks retain their caller policy: routed Sidekick uses structured Sol/medium, connector
-cards use Sol/high, and the router uses Luna/low. A connector failure that falls back to computer use
-gets the current slider tuple on that fallback leg. Knowledge, research, and ingestion keep their own
-model choices. Requested model IDs do not imply measured latency or account availability.
+User-submitted Sidekick tasks go directly to `runAgentCommand` and use the speed-slider model.
+There is no preliminary model router or separate connector-only Sidekick execution. The same agent
+chooses connector, web, and computer tools. Proactive card actions also submit to the same main agent with their reviewed card
+context, and use its speed-slider model. Knowledge, research, and ingestion keep their own model choices. Requested model
+IDs do not imply measured latency or account availability.
 
 ## Discovery, install, login, validation
 
@@ -121,7 +122,7 @@ model choices. Requested model IDs do not imply measured latency or account avai
 
 ## Arguments (`arguments(for:)`) and resume
 
-`exec [resume <sid>] -c service_tier="fast" --json --skip-git-repo-check -m <model> -c model_reasoning_effort=… [--ignore-user-config]`,
+`exec [resume <sid>] --json --skip-git-repo-check -m <model> -c model_reasoning_effort=… [--ignore-user-config]`,
 then either the bypass flag (+ `--cd`), or `-c approval_policy="never"` + `-s <sandbox>` + `--cd` +
 `--add-dir`s, then the config overrides, `-c tools.web_search=true`, `--output-schema`, and `-` (stdin).
 
@@ -171,3 +172,5 @@ success. The legacy opening `COULD NOT` form is still recognized as failure.
 ## Related docs
 
 `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md` (the sibling engine and the dispatch), `Cloud/Documentation - Cloud - Codex Setup.md`, `Driver/Documentation - Driver (cua-driver).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Proactive/Documentation - Proactive Intelligence.md`, `Notch Magic/Documentation - Sidekick - General.md`.
+
+Paid ChatGPT Sidekick uses `service_tier="fast"` at every speed setting. Free/Go Sidekick and background/probe/resume calls do not request fast service.

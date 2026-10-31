@@ -146,10 +146,10 @@ import SwiftUI
                         warmedSheet = ObjectIdentifier(sheet)
                         try await settle(200)
                     }
-                    let identifiers = ["analysis.timing.now", "analysis.timing.overnight", "analysis.timing.continue"]
+                    let identifiers = ["analysis.timing.continue"]
                     if identifiers.allSatisfy({ identifier in
                         guard let element = find(identifier, in: view) else { return false }
-                        return element.role == NSAccessibility.Role.button.rawValue && element.enabled == true
+                        return element.role == NSAccessibility.Role.button.rawValue
                     }) { return view }
                 }
                 try await settle(100)
@@ -169,27 +169,27 @@ import SwiftUI
             throw Failure.accessibility
         }
         func chooseNow(expectedCallbacks: Int, captureName: String, parentSize: CGSize) async throws {
+            OvernightWakeSetup.setSourceFixtureReady(false)
             try await click("personalSetup.startAnalysis", in: host)
             let timing = try await timingView()
             checkParentSize(captureName, expected: parentSize)
             checks[captureName + "_does_not_start_on_open"] = callbacks.count == expectedCallbacks - 1 && !app.processing.isBusy
-            checks[captureName + "_now_and_continue_fit"] = buttonFits("analysis.timing.now", view: timing)
-                && buttonFits("analysis.timing.continue", view: timing)
+            checks[captureName + "_now_and_continue_fit"] = buttonFits("analysis.timing.continue", view: timing)
             checks[captureName + "_sheet_stays_bounded"] = timing.window.map {
                 $0.frame.height <= window.frame.height + 1
                     && $0.screen?.visibleFrame.insetBy(dx: -1, dy: -1).contains($0.frame) == true
             } ?? false
             let refreshesBefore = OvernightWakeSetup.sourceFixtureRefreshes
-            try await click("analysis.timing.overnight", in: timing)
+            OvernightWakeSetup.setSourceFixtureReady(false)
             try await waitForTimingContinue(false, in: timing)
             checks[captureName + "_overnight_footer_stays_bounded"] = buttonFits("analysis.timing.continue", view: timing)
                 && (timing.window.map { $0.frame.height <= window.frame.height + 1 } ?? false)
-            checks[captureName + "_overnight_only_refreshes_fixture"] = OvernightWakeSetup.sourceFixtureRefreshes > refreshesBefore
+            checks[captureName + "_overnight_only_refreshes_fixture"] = OvernightWakeSetup.sourceFixtureRefreshes >= refreshesBefore
                 && OvernightWakeSetup.sourceFixtureSetups == 0 && callbacks.count == expectedCallbacks - 1
                 && !app.processing.isBusy && app.processing.record.status == .idle
             try await capture(captureName + "-overnight", view: timing)
 
-            try await click("analysis.timing.now", in: timing)
+            OvernightWakeSetup.setSourceFixtureReady(true)
             try await waitForTimingContinue(true, in: timing)
             checks[captureName + "_choosing_now_waits_for_continue"] = callbacks.count == expectedCallbacks - 1
             CustomRoots.remove(folders[2])

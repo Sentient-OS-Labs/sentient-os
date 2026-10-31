@@ -22,7 +22,8 @@ FILES = [
 ] + [ROOT / "Sentient OS macOS/Diagnostics/ComputerUseDiagnosticConsent.swift",
      ROOT / "Sentient OS macOS/Cloud/AgentStatus.swift",
      ROOT / "Sentient OS macOS/System/CustomInstructions.swift",
-     ROOT / "Sentient OS macOS/Diagnostics/SidekickDiagnostics.swift"]
+     ROOT / "Sentient OS macOS/Diagnostics/SidekickDiagnostics.swift",
+     ROOT / "Scripts/Fixtures/HostedInferenceStub.swift"]
 
 STUBS = r'''
 import Foundation

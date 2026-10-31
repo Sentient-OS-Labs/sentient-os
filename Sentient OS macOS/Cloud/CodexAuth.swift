@@ -54,7 +54,7 @@ enum CodexAuth {
     /// (knowledge-base-only mode), or a custom frontier model (hosted connectors ride
     /// subscription-account auth — ChatGPT's or Claude's — and don't exist on a custom endpoint).
     static var connectorLockedTip: String {
-        ModelBackend.current == .custom
+        !ModelBackend.connectorsAvailable
             ? "Available with a ChatGPT or Claude subscription"
             : "Only supported on ChatGPT Plus"
     }
@@ -62,7 +62,7 @@ enum CodexAuth {
     /// Should the Gmail/Calendar chips render locked? Either lock reason (free/go plan, or a
     /// custom frontier model) — the one predicate every chip surface uses.
     static var connectorsLocked: Bool {
-        knowledgeBaseOnly || !ModelBackend.connectorsAvailable
+        knowledgeBaseOnly || (!ModelBackend.connectorsAvailable && ModelBackend.current != .sentient)
     }
 
     // MARK: Persisted state

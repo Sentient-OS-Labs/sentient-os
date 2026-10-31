@@ -9,7 +9,7 @@ import Foundation
 import CoreFoundation
 
 enum GranolaSource {
-    static let defaultClaudeModel: ClaudeCLI.Model = .sonnet
+    static let defaultClaudeModel: ClaudeCLI.Model = .haiku
     static let candidateCap = 20
     static let inventoryCap = 500
     static let noteByteCap = 24_000
@@ -47,6 +47,60 @@ enum GranolaSource {
         let count: Int
     }
 
+    /// Closed stage names identify the failing native boundary without retaining provider data.
+    private enum NativeStage: String {
+        case policy, open, account, ownedListing = "owned_listing", sharedListing = "shared_listing"
+        case merge, content, accountRecheck = "account_recheck"
+
+        var reason: StaticString {
+            switch self {
+            case .policy: "granola_policy"
+            case .open: "granola_open"
+            case .account: "granola_account"
+            case .ownedListing: "granola_owned_listing"
+            case .sharedListing: "granola_shared_listing"
+            case .merge: "granola_merge"
+            case .content: "granola_content"
+            case .accountRecheck: "granola_account_recheck"
+            }
+        }
+        var phase: Diagnostics.Phase {
+            switch self {
+            case .policy, .merge: .validate
+            case .open: .connect
+            case .account, .accountRecheck: .identity
+            case .ownedListing, .sharedListing, .content: .read
+            }
+        }
+    }
+
+    private static func native<T>(_ stage: NativeStage, _ body: () async throws -> T) async throws -> T {
+        CrashReporting.diagnosticBreadcrumb("granola.native_read", data: ["stage": stage.rawValue])
+        do { return try await body() }
+        catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            let reason: String
+            if let failure = error as? GranolaResponse.Failure { reason = failure.rawValue }
+            else {
+                reason = switch error {
+                case DirectMCPError.invalidResponse: "invalid_response"
+                case DirectMCPError.tooLarge: "response_limit"
+                case DirectMCPError.reconnectRequired: "sign_in"
+                case DirectMCPError.connectionChanged: "account_changed"
+                case DirectMCPError.policyUnavailable: "read_policy"
+                case DirectMCPError.http: "http"
+                case DirectMCPError.network: "network"
+                default: "native_error"
+                }
+            }
+            CrashReporting.diagnosticBreadcrumb("granola.native_read_failed",
+                data: ["stage": stage.rawValue, "reason": reason])
+            Diagnostics.report(.sourceReadFailed, phase: stage.phase, reason: stage.reason,
+                               error: error, source: "granola", terminal: true)
+            throw error
+        }
+    }
+
     static func isGranola(_ slug: String) -> Bool {
         DirectMCPStore.connection(slug)?.providerSlug == "granola"
     }
@@ -63,7 +117,7 @@ enum GranolaSource {
     private static func performRead(connection: DirectMCPConnection, prompt: String, mode: MCPSource.ReadMode,
                                     window: MCPSource.Window, claudeModel: ClaudeCLI.Model?,
                                     onReceipt: MCPSource.ReceiptObserver?) async throws -> MCPSource.ReadOutcome {
-        let verified = try await DirectMCPConnections.verify(connection)
+        let verified = try await native(.policy) { try await DirectMCPConnections.verify(connection) }
         if let reason = readinessFailure(verified) {
             CrashReporting.captureEvent("connector.knowledge_unavailable", tags: ["source": "granola", "reason": reason],
                 fingerprint: ["connector", "knowledge_unavailable", "granola", reason])
@@ -72,7 +126,7 @@ enum GranolaSource {
         guard let expectedIdentity = verified.accountFingerprint, let batchSize = contentBatchSize(verified.tools) else {
             throw DirectMCPError.policyUnavailable
         }
-        let session = try await DirectMCPSession.open(verified)
+        let session = try await native(.open) { try await DirectMCPSession.open(verified) }
         defer { Task { await session.close() } }
         var calls: [String: Int] = [:], sequence = 100
         var reportedCalls = false
@@ -91,13 +145,19 @@ enum GranolaSource {
             #endif
             return result
         }
-        let account = try await account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity)
+        let account = try await native(.account) {
+            try await account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity)
+        }
         // Separate queries establish note ownership without equating a participant with the author.
-        let own = try await discovery(call("list_meetings", listArguments(window: window, owned: true)),
+        let own = try await native(.ownedListing) {
+            try await discovery(call("list_meetings", listArguments(window: window, owned: true)),
                                 window: window, owned: true)
-        let shared = try await discovery(call("list_meetings", listArguments(window: window, owned: false)),
-                                   window: window, owned: false)
-        let discovered = try merge(own.candidates, shared.candidates)
+        }
+        let shared = try await native(.sharedListing) {
+            try await discovery(call("list_meetings", listArguments(window: window, owned: false)),
+                                window: window, owned: false)
+        }
+        let discovered = try await native(.merge) { try merge(own.candidates, shared.candidates) }
         #if DEBUG
         let all = try scopedForTrial(discovered, mode: mode)
         #else
@@ -110,13 +170,17 @@ enum GranolaSource {
         calls = [:]
         let selected = try await select(candidates, cap: cap, slug: connection.slug,
                                         claudeModel: claudeModel, onReceipt: onReceipt)
-        let notes = try await collectMeetings(selected, batchSize: batchSize, account: account, window: window) { batch in
-            try await call("get_meetings", ["meeting_ids": batch.map(\.id)])
+        let notes = try await native(.content) {
+            try await collectMeetings(selected, batchSize: batchSize, account: account, window: window) { batch in
+                try await call("get_meetings", ["meeting_ids": batch.map(\.id)])
+            }
         }
-        guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
-            throw DirectMCPError.connectionChanged
+        try await native(.accountRecheck) {
+            guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
+                throw DirectMCPError.connectionChanged
+            }
+            try DirectMCPSession.check(verified)
         }
-        try DirectMCPSession.check(verified)
         if notes.isEmpty {
             // Refusing unread candidates avoids turning metadata-only selection into a quiet read.
             guard all.isEmpty else { throw MCPSource.MCPError.toolFailure(slug: connection.slug) }
@@ -129,16 +193,20 @@ enum GranolaSource {
         var lastError: Error = DirectMCPError.invalidResponse
         for attempt in 1...2 {
             var envelope: CodexCLI.Envelope?
-            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous answer failed validation. Check the supplied item count, source markers on every paragraph/action, third person, privacy, and the word budget. Lead with the substantive fact, not the act of recording notes. Use the structured-output formatter with all five properties at its root, not a wrapper, JSON string or schema. Return only valid JSON grounded in the same evidence.")
+            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous answer could not be decoded. Use the structured-output formatter with all five properties at its root, with their correct types and a consistent notable result. Report an explicit tool_failure if the read failed. Return valid JSON grounded in the supplied notes.")
             do {
-                let result = try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
-                    slug: connection.slug, claudeModel: claudeModel)
+                let result = try await Diagnostics.withOperation("mcp_read_attempt", propagatesFailure: false) {
+                    try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
+                        slug: connection.slug, claudeModel: claudeModel)
+                }
                 envelope = result
                 let outcome = try parseSummary(result, meetings: notes, mode: mode, slug: connection.slug)
-                guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
-                    throw DirectMCPError.connectionChanged
+                try await native(.accountRecheck) {
+                    guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
+                        throw DirectMCPError.connectionChanged
+                    }
+                    try DirectMCPSession.check(verified)
                 }
-                try DirectMCPSession.check(verified)
                 onReceipt?(result, outcome, attempt, attemptPrompt, "content", calls)
                 reportedCalls = true
                 return outcome
@@ -256,38 +324,41 @@ enum GranolaSource {
     static func discovery(_ result: [String: Any], window: MCPSource.Window, owned: Bool) throws -> Discovery {
         let response = try GranolaResponse.decode(result)
         let object = response.object
-        guard let rows = object["meetings"] as? [[String: Any]], let count = integer(object["count"]),
-              count == rows.count, count <= inventoryCap,
-              Set(rows.compactMap { identifier($0) }).count == count else { throw DirectMCPError.invalidResponse }
+        guard let rows = object["meetings"] as? [[String: Any]] else { throw GranolaResponse.Failure.listingShape }
+        guard let count = integer(object["count"]), count == rows.count, count <= inventoryCap else {
+            throw GranolaResponse.Failure.listingCount
+        }
+        guard Set(rows.compactMap { identifier($0) }).count == count else { throw GranolaResponse.Failure.listingIdentity }
         if response.format == .json {
             // Retain strict validation of exact coverage claims in the legacy JSON form.
-            guard let total = integer(object["total_in_range"]), total == count,
-                  let range = object["date_range"] as? [String: Any],
+            guard let total = integer(object["total_in_range"]), total == count else { throw GranolaResponse.Failure.listingTotal }
+            guard let range = object["date_range"] as? [String: Any],
                   let from = (range["from"] as? String).flatMap(date), let to = (range["to"] as? String).flatMap(date),
                   abs(from.timeIntervalSince(window.lower)) < 0.00001,
-                  abs(to.timeIntervalSince(window.upper)) < 0.00001 else { throw DirectMCPError.invalidResponse }
+                  abs(to.timeIntervalSince(window.upper)) < 0.00001 else { throw GranolaResponse.Failure.listingRange }
         }
         // XML supplies a returned sample, not an exact range echo or exhaustive total.
         var candidates: [Candidate] = []
         for row in rows {
             if response.format == .xml {
                 guard row["captured_by_me"] as? Bool == owned,
-                      owned || row["listed_as_participant"] as? Bool == true else { throw DirectMCPError.invalidResponse }
+                      owned || row["listed_as_participant"] as? Bool == true else { throw GranolaResponse.Failure.listingOwnership }
             }
-            guard let id = identifier(row), let title = row["title"] as? String, title.utf8.count <= 2_000,
-                  let timestamp = row["created_at"] as? String ?? row["date"] as? String,
-                  let instant = date(timestamp) else { throw DirectMCPError.invalidResponse }
+            guard let id = identifier(row) else { throw GranolaResponse.Failure.listingIdentity }
+            guard let title = row["title"] as? String, title.utf8.count <= 2_000 else { throw GranolaResponse.Failure.listingMetadata }
+            guard let timestamp = row["created_at"] as? String ?? row["date"] as? String,
+                  let instant = date(timestamp) else { throw GranolaResponse.Failure.listingDate }
             if instant >= window.lower && instant < window.upper {
                 candidates.append(.init(id: id, title: title, date: MCPSource.timestamp(instant), capturedByUser: owned))
             }
         }
-        guard Set(candidates.map(\.id)).count == candidates.count else { throw DirectMCPError.invalidResponse }
+        guard Set(candidates.map(\.id)).count == candidates.count else { throw GranolaResponse.Failure.listingIdentity }
         return Discovery(candidates: candidates, count: count)
     }
 
     static func merge(_ own: [Candidate], _ shared: [Candidate]) throws -> [Candidate] {
         let all = own + shared
-        guard Set(all.map(\.id)).count == all.count else { throw DirectMCPError.invalidResponse }
+        guard Set(all.map(\.id)).count == all.count else { throw GranolaResponse.Failure.listingOverlap }
         let timed = try all.map { candidate -> (Candidate, Date) in
             guard let instant = date(candidate.date) else { throw DirectMCPError.invalidResponse }
             return (candidate, instant)
@@ -385,14 +456,8 @@ enum GranolaSource {
 
     static func parseSummary(_ envelope: CodexCLI.Envelope, meetings: [Meeting], mode: MCPSource.ReadMode,
                              slug: String) throws -> MCPSource.ReadOutcome {
-        guard let bytes = envelope.jsonResult.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              integer(object["item_count"]) == meetings.count, object["tool_failure"] as? String == "" else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "item_count")
-        }
         let outcome = try MCPSource.parse(envelope.result, slug: slug)
-        guard let result = outcome.result else { return outcome }
-        try validateSummary(result.summary, meetings: meetings, mode: mode, slug: slug)
+        guard let result = outcome.result else { return .quiet(itemCount: meetings.count) }
         var summary = result.summary
         for (index, note) in meetings.enumerated() {
             let day = String(note.date.prefix(10))
@@ -401,33 +466,7 @@ enum GranolaSource {
         }
         // MCPSource.parse already screened the prose. Validated UUID source references are
         // identifiers, and must not be misread as payment-card numbers by a second prose scan.
-        return .notable(.init(summary: summary, hasActionItems: result.hasActionItems, itemCount: result.itemCount))
-    }
-
-    static func validateSummary(_ summary: String, meetings: [Meeting], mode: MCPSource.ReadMode, slug: String) throws {
-        guard summary.range(of: #"^The user (?:recorded|noted|captured) that\b"#, options: .regularExpression) == nil else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "note_taking_lead")
-        }
-        let markerPattern = try NSRegularExpression(pattern: #"\[M(\d+)\]"#)
-        let matches = markerPattern.matches(in: summary, range: NSRange(summary.startIndex..., in: summary))
-        let indexes = matches.compactMap { match in Range(match.range(at: 1), in: summary).flatMap { Int(summary[$0]) } }
-        let exactMarkers = matches.compactMap { Range($0.range, in: summary).map { String(summary[$0]) } }
-        let permitted = Set(meetings.indices.map { "[M\($0 + 1)]" })
-        let remaining = permitted.reduce(summary) { $0.replacingOccurrences(of: $1, with: "") }
-        guard !indexes.isEmpty, exactMarkers.allSatisfy(permitted.contains),
-              !remaining.contains("[M"),
-              summary.utf8.count <= 4_000,
-              summary.split(whereSeparator: \.isWhitespace).count <= (mode == .initial ? 200 : 150),
-              summary.range(of: #"https?://|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#, options: [.regularExpression, .caseInsensitive]) == nil else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "summary_evidence")
-        }
-        for line in summary.split(separator: "\n") {
-            let clean = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if clean.trimmingCharacters(in: CharacterSet(charactersIn: "#* ")).uppercased() == "ACTION ITEMS" { continue }
-            guard markerPattern.firstMatch(in: clean, range: NSRange(clean.startIndex..., in: clean)) != nil else {
-                throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "source_reference")
-            }
-        }
+        return .notable(.init(summary: summary, hasActionItems: result.hasActionItems, itemCount: meetings.count))
     }
 
     static func identifier(_ object: [String: Any]) -> String? {

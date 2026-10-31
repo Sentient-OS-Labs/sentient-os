@@ -14,9 +14,6 @@ struct OnboardingView: View {
     @AppStorage("onboarding.step") private var step = 0
 
     @State private var isPresentingInviteGift = false
-    #if DEBUG
-    @State private var introFilm: FilmDriver?
-    #endif
 
     /// Keep setup visible; the analysis owner separately holds system sleep while it works.
     @State private var awake = DisplayAwake()
@@ -29,12 +26,7 @@ struct OnboardingView: View {
             case 0:
                 // Step 1 is the website's film in a webview — it plays to the morning-home
                 // rest and blooms its own Continue (OnboardingFilmView owns the choreography).
-                #if DEBUG
-                OnboardingFilmView(onContinue: advance, onWebIntroChange: { introFilm = $0 })
-                    .transition(.opacity)
-                #else
                 OnboardingFilmView(onContinue: advance).transition(.opacity)
-                #endif
             default:
                 OnboardingFrontierModelView(onContinue: onFinished).transition(.opacity)
             }
@@ -66,17 +58,14 @@ struct OnboardingView: View {
                 .ignoresSafeArea()
                 .transition(.opacity)
         }
-        // Developer shortcut: enter Home without submitting an analysis plan.
+        // Developer shortcuts: skip the intro lessons or enter Home directly.
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
             if step >= 0 {
                 HStack(spacing: 10) {
-                    if step == 0, let introFilm {
-                        OnboardingDevButton(
-                            title: introFilm.introSpedUp ? "INTRO ANIMATIONS: 50×" : "SPEED UP INTRO ANIMATIONS",
-                            icon: "forward.fill", action: introFilm.speedUpIntro)
-                            .disabled(introFilm.introSpedUp)
-                            .help("Play the remaining web intro at 50× speed.")
+                    if step == 0 {
+                        OnboardingDevButton(title: "SKIP INTRO", icon: "forward.end", action: skipIntro)
+                            .help("Skip the intro and lessons to choose your frontier model.")
                     }
                     OnboardingDevButton(title: "SKIP TO HOME", icon: "forward.end") {
                         withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
@@ -96,6 +85,25 @@ struct OnboardingView: View {
             }
         }
     }
+
+    #if DEBUG
+    private func skipIntro() {
+        // Match normal intro completion without completing onboarding or choosing a model.
+        // Removing the film also cancels its tasks and tears down both native demos.
+        UserDefaults.standard.set(true, forKey: CommandCoordinator.notchDemoPlayedKey)
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            let coordinator = appState.commandCoordinator
+            if coordinator.onboardingDemoArmed,
+               coordinator.phase == .typing || coordinator.phase == .opening {
+                coordinator.cancelCurrent()
+            }
+            coordinator.disarmOnboardingNotchDemo()
+            step = 1
+        }
+    }
+    #endif
 
     private func advance() {
         withAnimation(.easeInOut(duration: 0.25)) { step += 1 }

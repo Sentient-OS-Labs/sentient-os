@@ -272,12 +272,11 @@ final class ProcessingCoordinator {
         let owner = ProcessingCoordinator(defaults: defaults)
         owner.choose(.overnight)
         let scheduled = ProcessingPlan.read(defaults)
-        check(scheduled.status == .scheduled && scheduled.trigger == .overnight && scheduled.due != nil,
-              "actual timing choice persists overnight intent before Home opens")
-        let due = Calendar.current.dateComponents([.hour, .minute], from: scheduled.due!)
-        check(due.hour == 21 && due.minute == 47, "overnight choice respects configured analysis time")
-        check(owner.requestOverride == nil && owner.carried.done == 0 && owner.state == .scheduled,
-              "new timing choice clears previous request/progress and exposes scheduled state")
+        check(scheduled.status == .requested && scheduled.trigger == .onboarding && scheduled.due == nil,
+              "legacy initial timing choice starts now instead of scheduling first analysis")
+        check(OvernightScheduler.configuredMinutes == 21*60+47,"initial analysis preserves future nightly time")
+        check(owner.requestOverride == nil && owner.carried.done == 0 && owner.state == .idle,
+              "initial start clears previous request/progress without creating a scheduled state")
         check(ProcessingPlan.initialCompletedAt(defaults) == nil, "scheduling first night does not unlock Double Tap")
         let reloaded = UserDefaults(suiteName: name)!
         check(ProcessingPlan.read(reloaded) == scheduled, "chosen timing survives a new defaults handle")

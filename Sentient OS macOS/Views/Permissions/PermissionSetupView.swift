@@ -10,6 +10,8 @@ struct PermissionSetupView<Content: View>: View {
     let continueTitle: String
     let canContinue: Bool
     let onContinue: () -> Void
+    var compact = false
+    var edgeGlow = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -23,21 +25,54 @@ struct PermissionSetupView<Content: View>: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
-                .padding(.top, 18)
+                .padding(.top, compact ? 14 : 18)
 
             VStack(alignment: .leading, spacing: 26) { content }
-                .padding(.top, 30)
+                .padding(.top, compact ? 24 : 30)
 
             OnboardingNextButton(title: continueTitle, enabled: canContinue, action: onContinue)
                 .frame(maxWidth: .infinity)
-                .padding(.top, 32)
+                .padding(.top, compact ? 24 : 32)
         }
-        .padding(.horizontal, 44)
-        .padding(.top, 34)
+        .padding(.horizontal, compact ? 32 : 44)
+        .padding(.top, compact ? 26 : 34)
         .padding(.bottom, 24)
-        .frame(width: 560)
-        .background(Color.black)
+        .frame(width: compact ? 480 : 560)
+        .background {
+            if edgeGlow { PermissionWindowAtmosphere() }
+            else { Color.black }
+        }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Setup focuses on remaining steps; Debug keeps every row available for inspection.
+nonisolated enum PermissionSetupPresentation {
+    static func showsGrant(_ granted: Bool, compact: Bool) -> Bool {
+        #if DEBUG
+        return true
+        #else
+        return !compact || !granted
+        #endif
+    }
+}
+
+struct PermissionSetupGroup<Content: View>: View {
+    let label: String
+    let compact: Bool
+    var showsHeading = true
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if compact {
+            VStack(alignment: .leading, spacing: 9) {
+                if showsHeading {
+                    MonoCaps(label, size: 8.5, tracking: 2.0, color: Theme.Ink.label, weight: .semibold)
+                }
+                content
+            }
+        }
+        else { SettingsGroup(label: label) { content } }
     }
 }
 
@@ -48,28 +83,37 @@ struct SentientAppPermissionRows: View {
     let screen: Bool
     var accessibilityTitle = "Accessibility (act in your apps)"
     var accessibilityTip = "Lets Sentient read windows and act inside your apps in the background."
+    var compact = false
+    var onPermissionChange: (() -> Void)?
 
     var body: some View {
-        SettingsGroup(label: "Sentient Permissions") {
-            VStack(alignment: .leading, spacing: 2) {
-                if let accessibility {
-                    StatusLine(title: accessibilityTitle,
-                               health: accessibility ? .ok : .bad,
-                               note: accessibility ? "granted" : "not granted",
-                               tip: accessibilityTip,
-                               fixTitle: "Allow…") {
-                        guard !accessibility else { return }
-                        PermissionGuide.shared.guide(.accessibility, dragging: Bundle.main.bundleURL)
+        if PermissionSetupPresentation.showsGrant(screen, compact: compact)
+            || accessibility.map({ PermissionSetupPresentation.showsGrant($0, compact: compact) }) == true {
+            PermissionSetupGroup(label: "Sentient Permissions", compact: compact) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let accessibility, PermissionSetupPresentation.showsGrant(accessibility, compact: compact) {
+                        StatusLine(title: accessibilityTitle,
+                                   health: accessibility ? .ok : .bad,
+                                   note: accessibility ? "granted" : (compact ? "" : "not granted"),
+                                   tip: accessibilityTip,
+                                   fixTitle: compact ? "Grant" : "Allow…") {
+                            guard !accessibility else { return }
+                            onPermissionChange?()
+                            PermissionGuide.shared.guide(.accessibility, dragging: Bundle.main.bundleURL)
+                        }
                     }
-                }
-                StatusLine(title: "Screen Recording (see the screen)",
-                           health: screen ? .ok : .bad,
-                           note: screen ? "granted" : "not granted",
-                           tip: PrivacyCopy.screenCapture,
-                           fixTitle: "Allow…") {
-                    guard !screen else { return }
-                    // Sentient may not be in Tahoe's list yet. The guide carries its app bundle.
-                    PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
+                    if PermissionSetupPresentation.showsGrant(screen, compact: compact) {
+                        StatusLine(title: compact ? "Screen Recording" : "Screen Recording (see the screen)",
+                                   health: screen ? .ok : .bad,
+                                   note: screen ? "granted" : (compact ? "" : "not granted"),
+                                   tip: PrivacyCopy.screenCapture,
+                                   fixTitle: compact ? "Grant" : "Allow…") {
+                            guard !screen else { return }
+                            onPermissionChange?()
+                            // Sentient may not be in Tahoe's list yet. The guide carries its app bundle.
+                            PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
+                        }
+                    }
                 }
             }
         }

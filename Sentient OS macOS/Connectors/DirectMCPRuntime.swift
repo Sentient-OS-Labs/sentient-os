@@ -54,7 +54,7 @@ nonisolated enum DirectMCPRuntime {
                 let verified = try await DirectMCPConnections.verify(connection)
                 let names: [String]
                 switch mode {
-                case .read: names = Array((verified.provider?.reviewedReads ?? []).intersection(Set(verified.readNames))).sorted()
+                case .read: names = verified.readNames
                 case .action: names = verified.actionNames
                 }
                 let allowed = subset ?? names
@@ -111,7 +111,7 @@ nonisolated enum DirectMCPRuntime {
         cancellations.forEach { $0() }
     }
     static func hasSuccessfulCall(raw: String, backend: ModelBackend, attachment: Attachment) -> Bool {
-        if backend == .claude { return !MCPCallEvidence.claude(raw: raw).isDisjoint(with: Set(attachment.allAllowed)) }
+        if backend.hasClaudeRuntime { return !MCPCallEvidence.claude(raw: raw).isDisjoint(with: Set(attachment.allAllowed)) }
         return MCPCallEvidence.codex(raw: raw).contains {
             $0.server == attachment.connection.serverName && attachment.allowed.contains($0.tool)
         }

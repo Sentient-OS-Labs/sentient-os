@@ -60,8 +60,9 @@ final class ProcessingCoordinator {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        record = ProcessingPlan.recovered(ProcessingPlan.read(defaults))
-        initialComplete = ProcessingPlan.initialCompletedAt(defaults) != nil
+        let completed = ProcessingPlan.initialCompletedAt(defaults) != nil
+        initialComplete = completed
+        record = ProcessingPlan.recovered(ProcessingPlan.read(defaults), initialComplete: completed)
         ProcessingPlan.save(record, to: defaults)
         switch record.status {
         case .scheduled: state = .scheduled
@@ -123,19 +124,14 @@ final class ProcessingCoordinator {
         return formatter.string(from: date)
     }
 
-    /// Persist before the caller marks onboarding complete. Only explicit Run now opens progress.
+    /// Persist before the caller marks setup complete. The legacy timing argument is retained
+    /// for restored callers, but first analysis always starts now and can be paused explicitly.
     func choose(_ timing: Timing) {
         guard !isBusy else { return }
         requestOverride = nil
         carried = RunProgress()
-        if timing == .overnight {
-            record = .init(status: .scheduled, trigger: .overnight,
-                           due: OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes))
-            state = .scheduled
-        } else {
-            record = .init(status: .requested, trigger: .onboarding)
-            state = .idle
-        }
+        record = .init(status: .requested, trigger: .onboarding)
+        state = .idle
     }
 
     func startMonitoring() {
@@ -173,7 +169,7 @@ final class ProcessingCoordinator {
 
     /// The scheduler never queues a second analysis or overrides an explicit pause.
     func runScheduled() async {
-        guard !isBusy, !paused, !isSuspended, record.status != .requested else { return }
+        guard initialComplete, !isBusy, !paused, !isSuspended, record.status != .requested else { return }
         requestOverride = nil
         let request = ProcessingRequest.current()
         if let blocked = admission(request, scheduled: true) {
@@ -323,7 +319,7 @@ final class ProcessingCoordinator {
             if !helperHeld {
                 record = .init(status: .scheduled, trigger: .overnight,
                     due: OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes),
-                    notice: "Overnight wake needs attention. Open Settings, Permissions & Health.")
+                    notice: "Overnight wake needs attention. Open Settings, Permissions & Help.")
                 state = .scheduled
                 if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "wake_helper") }
                 return
@@ -343,7 +339,7 @@ final class ProcessingCoordinator {
         // A valid vault can be published before a later proactive stage fails or is paused.
         if request.fullCycle { knowledgeRevision += 1 }
         if Task.isCancelled || stopReason != nil {
-            finishStopped(result.progress)
+            finishStopped(result.deviceProgress ?? result.progress)
             if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .stopped, reason: "paused") }
             return
         }
@@ -402,23 +398,25 @@ final class ProcessingCoordinator {
 
     private func execute(_ request: ProcessingRequest, scheduled: Bool, id: UUID,
                          report: @escaping @Sendable (RunProgress) -> Void) async -> ProcessingRun.Result {
-        await ProcessingRun(request: request, scheduled: scheduled).execute(progress: report, phase: { [weak self] phase in
-            Task { @MainActor [weak self] in
-                guard let self, self.runID == id, self.stopReason == nil else { return }
-                self.lastProgressAt = Date(); self.thought = nil
-                switch phase {
-                case .knowledgeBase(let text): self.state = .preparing; self.prepStatus = text; self.prepSubtext = nil
-                case .deciding: self.state = .preparing; self.prepStatus = "Finding things worth doing…"
-                case .researching(let n): self.state = .preparing; self.prepStatus = "Preparing \(n) suggestions…"
-                case .done, .failed: break
+        await InitialAnalysisRecovery.$replayCloudStages.withValue(!initialComplete && request.fullCycle && request.readySelectionCount != nil) {
+            await ProcessingRun(request: request, scheduled: scheduled).execute(progress: report, phase: { [weak self] phase in
+                Task { @MainActor [weak self] in
+                    guard let self, self.runID == id, self.stopReason == nil else { return }
+                    self.lastProgressAt = Date(); self.thought = nil
+                    switch phase {
+                    case .knowledgeBase(let text): self.state = .preparing; self.prepStatus = text; self.prepSubtext = nil
+                    case .deciding: self.state = .preparing; self.prepStatus = "Finding things worth doing…"
+                    case .researching(let n): self.state = .preparing; self.prepStatus = "Preparing \(n) suggestions…"
+                    case .done, .failed: break
+                    }
                 }
-            }
-        }, onLine: { [weak self] line in
-            Task { @MainActor [weak self] in
-                guard let self, self.runID == id, self.stopReason == nil else { return }
-                self.lastProgressAt = Date(); self.thought = line
-            }
-        })
+            }, onLine: { [weak self] line in
+                Task { @MainActor [weak self] in
+                    guard let self, self.runID == id, self.stopReason == nil else { return }
+                    self.lastProgressAt = Date(); self.thought = line
+                }
+            })
+        }
     }
 
     private func stop(_ reason: Stop) {
@@ -428,7 +426,7 @@ final class ProcessingCoordinator {
         stopReason = reason
         state = .stopping
         // Persist the user's pause immediately, even if the app quits while work is draining.
-        record.status = reason == .user ? .paused : .requested
+        record.status = reason == .user || (reason == .cancelled && !initialComplete) ? .paused : .requested
         if reason == .stalled || reason == .ceiling {
             record.status = .failed
             record.notice = "Analysis stopped making progress. Waiting for it to finish stopping; completed work is saved."
@@ -462,7 +460,7 @@ final class ProcessingCoordinator {
         case .cancelled, nil:
             record.status = .paused; state = .paused
         }
-        if record.trigger == .overnight, stopReason != .user {
+        if initialComplete, record.trigger == .overnight, stopReason != .user {
             record.status = .scheduled
             record.due = OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes)
             if record.notice == nil { record.notice = "Overnight analysis paused. Your progress is saved for the next run." }

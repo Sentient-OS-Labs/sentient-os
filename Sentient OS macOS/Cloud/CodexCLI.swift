@@ -34,11 +34,11 @@ actor CodexCLI {
     // MARK: Types
 
     /// Reasoning-effort tier for CHATGPT-backend calls (codex `model_reasoning_effort`). All
-    /// four are accepted by codex. Per-call: Gmail connect-check = `.low`, Gmail processing =
-    /// `.high`, knowledge-base work (and everything else) = `.high`. Nothing runs `.xhigh`
+    /// four are accepted by codex. Per-call: routing and lightweight checks = `.low`, connector
+    /// ingestion = `.medium`, knowledge-base work = `.high`. Nothing runs `.xhigh`
     /// anymore — gpt-5.6-sol thinks far too long there (the initial vault build was downgraded
     /// to `.high`, 2026-07-10). A CUSTOM backend never uses this enum: the user's free-form
-    /// reasoning level (Frontier Model Choice — `none`, `xhigh`, `adaptive`, whatever their
+    /// reasoning level (AI Models & Accounts — `none`, `xhigh`, `adaptive`, whatever their
     /// model speaks) rides the wire as a raw string via backendTuned.
     enum Effort: String, Sendable {
         case low
@@ -48,41 +48,40 @@ actor CodexCLI {
     }
 
     /// The model id passed to `codex exec -m`. Computer-use tiers are defined in
-    /// ComputerUseSpeed; Sol handles background work, Terra the free/go fallback, Luna reads.
+    /// ComputerUseSpeed; Sol handles paid background work, Luna reads and every Free/Go run.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
-        case gpt61terra = "gpt-6.1-terra" // computer use: Faster
-        case gpt61sol = "gpt-6.1-sol"     // computer use: Medium
-        case gpt6astra = "gpt-6-astra"  // computer use: Smarter
+        case gpt61terra = "gpt-6.1-terra" // paid computer use: Faster
+        case gpt61sol = "gpt-6.1-sol"     // paid computer use: Medium
+        case gpt6astra = "gpt-6-astra"  // paid computer use: Smarter
         case gpt6sol = "gpt-6-sol"    // knowledge-base work + everything else (paid plans)
-        case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
-        case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing
+        case gpt56terra = "gpt-5.6-terra" // legacy requested tier; Free/Go now always resolves to Luna
+        case gpt6luna = "gpt-6-luna"  // light reads; every Free/Go run
     }
 
     /// Model resolution for structured runs and custom-provider computer use. ChatGPT computer
-    /// use sends the user's selected tier directly, without a plan-based substitution.
-    ///  - Custom backend (Settings → Frontier Model Choice): the user's endpoint model rides
+    /// use gets its plan-aware model and effort from ComputerUseSpeed instead.
+    ///  - Custom backend (Settings → AI Models & Accounts): the user's endpoint model rides
     ///    EVERY call — the tier enums collapse to one model, and the caller's effort is
     ///    replaced by the pane's ONE per-endpoint reasoning level (per-call effort tuning is
     ///    ChatGPT's alone; providers have hard reasoning quirks — Claude-class needs off,
     ///    Gemini rejects off — so the user's setting must win everywhere, Speed slider
     ///    included). The luna callers (Gmail/Calendar) never reach here in custom mode —
     ///    connectors are ChatGPT-only.
-    ///  - ChatGPT backend: free/go accounts lost access to gpt-5.6-sol (it stopped answering
-    ///    through `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan
-    ///    read, any sol/astra call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep
-    ///    the requested model (CodexAuth's fail-open policy), and the luna tier is untouched.
+    ///  - ChatGPT backend: Free/Go supports Luna only. On a positive limited-plan read, every
+    ///    requested tier resolves to Luna while preserving the caller's reasoning effort.
+    ///    Unknown plans keep the requested model (CodexAuth's fail-open policy).
     /// Living here at the spine means every caller — and any future one — is covered without
     /// per-call-site checks.
     private static func backendTuned(model: Model, effort: Effort) -> (modelID: String, effortArg: String) {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard model == .gpt6sol || model == .gpt6astra, CodexAuth.isLimited() else {
+        guard ModelBackend.current == .chatgpt, CodexAuth.isLimited() else {
             return (model.rawValue, effort.rawValue)
         }
-        return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
+        return (Model.gpt6luna.rawValue, effort.rawValue)
     }
 
     /// OS-level (Seatbelt) confinement of everything the agent does — stronger than a tool
@@ -101,6 +100,8 @@ actor CodexCLI {
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
         var webSearch = true                   // native web_search tool — available to EVERY call
+        var hostedVaultRoot: String? = nil     // explicit staged Markdown capability for Sentient-hosted knowledge edits
+        var hostedVaultReadRoot: String? = nil // confined knowledge reads during hosted connector research
         var includeUserConfig = true           // load Sentient's private config + MCP servers (e.g.
                                                // their Gmail MCP) for EVERY call. Set false for a
                                                // hermetic run (then we pass --ignore-user-config).
@@ -171,6 +172,7 @@ actor CodexCLI {
             copy.mcpReadConnectors = mcpReadConnectors.map(ConnectorRegistry.canonicalSlug)
             return copy
         }
+        var hostedConnectorMode = "read" // External mutations require a user-fired action invocation.
         var mcpExpectedIdentity: String? = nil
         var slackExpectedMessage: String? = nil
         /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
@@ -282,8 +284,8 @@ actor CodexCLI {
             // user-visible surfaces (the notch's failure line, the takeover) — so the engine is
             // named at render time from the live backend. staleClient stays codex-worded: only
             // the codex spine ever throws it.
-            let claude = ModelBackend.current == .claude
-            let engine = claude ? "Claude Code" : "Codex"
+            let claude = ModelBackend.hasClaudeRuntime
+            let engine = ModelBackend.current == .sentient ? "Sentient hosted inference" : (claude ? "Claude Code" : "Codex")
             let binary = claude ? "claude" : "codex"
             switch self {
             case .notAvailable(let a):            return "\(engine) unavailable: \(a)"
@@ -292,6 +294,7 @@ actor CodexCLI {
             case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
             case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
             case .usageLimit(let m, _):
+                if ModelBackend.current == .sentient { return "Sentient hosted inference has reached its usage allowance. Try again after it resets." }
                 if ModelBackend.current == .custom { return "Model usage limit: \(m.prefix(200))" }
                 return "You're out of your \(claude ? "Claude" : "Codex") subscription 5 hour usage, try again later."
             case .inputTooLarge(let c):           return claude
@@ -501,7 +504,7 @@ actor CodexCLI {
         return "custom|\(p.baseURL)|\(p.modelName)|\(runtime)"
     }
 
-    /// The Frontier Model Choice pane's "Test Connection" — one call that settles BOTH questions
+    /// The AI Models & Accounts pane's "Test Connection" — one call that settles BOTH questions
     /// for the saved custom endpoint (regardless of the active backend, since the pane tests
     /// before activating): does it answer, and can it SEE? A random 4-digit code is rendered to a
     /// PNG, attached with `-i`, and the model is asked to read it back. Vision is a hard
@@ -560,6 +563,10 @@ actor CodexCLI {
                 args += ["-i", made.url.path]      // a flag must follow, so the variadic ends here
                 prompt = "Read the 4 digits in the attached image. Reply with EXACTLY those 4 digits and nothing else."
             }
+        } else if ModelBackend.current == .chatgpt, CodexAuth.isLimited() {
+            // The background availability check must not inherit an unsupported CLI default.
+            args += ["-m", Model.gpt6luna.rawValue,
+                     "-c", "model_reasoning_effort=\"low\""]
         }
         args += ["--skip-git-repo-check", prompt]
         do {
@@ -620,16 +627,16 @@ actor CodexCLI {
             return try await runInner(invocation, modelID: modelID, effortArg: effortArg,
                                       onLine: onLine)
         } catch {
-            // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
-            // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
-            if !Task.isCancelled {
-                let ms = Int(Date().timeIntervalSince(t0) * 1000)
-                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=\(invocation.feature) in \(ms)ms")
-                emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
-                                 modelID: modelID, effort: effortArg,
-                                 resumed: invocation.resumeSessionID != nil,
-                                 durationMS: ms, timeoutS: Int(invocation.timeout), diag: invocation.diag)
-            }
+            // STOP and sibling-task cancellation must remain cancellation at every boundary,
+            // rather than surfacing the terminated child's exit as a setup/provider defect.
+            try Task.checkCancellation()
+            if Diagnostics.isCancellation(error) { throw error }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=\(invocation.feature) in \(ms)ms")
+            emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                             modelID: modelID, effort: effortArg,
+                             resumed: invocation.resumeSessionID != nil,
+                             durationMS: ms, timeoutS: Int(invocation.timeout), diag: invocation.diag)
             throw error
         }
     }
@@ -705,13 +712,14 @@ actor CodexCLI {
                                providerOverrides: [String] = [],
                                nativeConfiguration: OpenAIComputerUse.Configuration? = nil,
                                nativeConnection: LocalMCPServer.Connection? = nil) throws -> [String] {
-        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
+        var args = agentExecArguments() + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
         let nativeOverrides = try nativeConnection?.codexOverrides ?? (nativeConfiguration ?? .resolve()).codexOverrides
         for override in nativeOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
+        for override in HostedConnectorToolServer.connection?.codexOverrides ?? [] { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             // Research and app actions share one task; do not depend on CLI search defaults.
             args += ["-c", "web_search=\"live\""]
@@ -753,6 +761,11 @@ actor CodexCLI {
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         let backend = ModelBackend.current
+        let connectorRunID = UUID()
+        defer {
+            SlackToolPolicy.cleanup(runID: connectorRunID)
+            OutlookToolPolicy.cleanup(runID: connectorRunID)
+        }
         var nativeTask: UUID?
         var nativeServer: NativeComputerUseServer?
         var nativeLease: CodexRuntime.FileLock?
@@ -761,11 +774,13 @@ actor CodexCLI {
         let (modelID, effortArg): (String, String)
         switch backend {
         case .claude: (modelID, effortArg) = ClaudeCLI.agentTuned()
+        case .sentient: (modelID, effortArg) = (try HostedClaudeRuntime.model(), "low")
         case .chatgpt: (modelID, effortArg) = (model.rawValue, effort.rawValue)
         case .custom: (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
         }
         var bridge: ClaudeSubscriptionBridge?
         do {
+            if backend == .claude, ClaudeAuth.requiresVerification { throw ClaudeAuth.LoginRequired() }
             if prompt.utf8.count > Self.promptByteCap { throw CLIError.inputTooLarge(chars: prompt.utf8.count) }
             guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
                 try Task.checkCancellation()
@@ -782,15 +797,20 @@ actor CodexCLI {
             try Task.checkCancellation()
             var overrides = SidekickToolServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
-            if backend == .claude {
+            if backend.hasClaudeRuntime {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+                let connectors = try ClaudeComputerUseConnectors.current(runID: connectorRunID)
                 // Claude supplies readable progress; Codex's structured events still carry
                 // tool activity needed by Sidekick recovery.
                 onLine("codex")
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName }
+                    + (HostedConnectorToolServer.connection == nil ? [] : ["mcp__sentient_connectors"])
                     + (SidekickToolServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
-                    timeout: timeout, namespaces: namespaces, onProgress: onLine)
+                    timeout: timeout, namespaces: namespaces,
+                    hostedEnvironment: backend == .sentient ? try HostedClaudeRuntime.environment() : nil,
+                    connectors: connectors,
+                    onProgress: onLine)
                 bridge = relay
                 let configuration = try await relay.start()
                 overrides += configuration.overrides
@@ -805,7 +825,7 @@ actor CodexCLI {
             let out = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await ComputerUseStream.run(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
-                    extraEnv: environment, narrate: backend != .claude, onLine: onLine)
+                    extraEnv: environment, narrate: !backend.hasClaudeRuntime, onLine: onLine)
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
@@ -813,6 +833,7 @@ actor CodexCLI {
             }
             try Task.checkCancellation()
             if let error = await bridge?.failure { throw error }
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.recordHelperBeforeCleanup(nativeTask) }
             await bridge?.stop()
             await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
@@ -825,6 +846,7 @@ actor CodexCLI {
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return result
         } catch {
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.recordHelperBeforeCleanup(nativeTask) }
             await bridge?.stop()
             await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
@@ -912,12 +934,12 @@ actor CodexCLI {
                 extra["helper_build"] = String(CodexRuntime.release.helperBuild)
             }
         }
-        if ModelBackend.current != .claude { extra.merge(auth.extras) { cur, _ in cur } }
+        if !ModelBackend.hasClaudeRuntime { extra.merge(auth.extras) { cur, _ in cur } }
 
         var tags: [String: String] = [
             "feature": feature,
             "error": caseName,
-            "model": ModelBackend.current == .claude ? "claude_subscription" : (custom ? "custom" : modelID),
+            "model": ModelBackend.current == .sentient ? "sentient_hosted" : (ModelBackend.current == .claude ? "claude_subscription" : (custom ? "custom" : modelID)),
             "backend": ModelBackend.current.rawValue,
             "phase": phase,
             "availability": availability,
@@ -930,18 +952,24 @@ actor CodexCLI {
         if ModelBackend.current == .claude {
             tags["login_mode"] = "claude_subscription"
             tags["plan"] = ClaudeAuth.cachedPlan ?? "unknown"
+        } else if ModelBackend.current == .sentient {
+            tags["login_mode"] = "sentient_hosted"
         } else { tags.merge(auth.tags) { cur, _ in cur } }
         Diagnostics.current?.markReported(error)
         CrashReporting.captureEvent(event, level: level, tags: tags, extra: extra,
             fingerprint: ["codex", ModelBackend.current.rawValue, feature, caseName, reason.rawValue, trigger.rawValue])
     }
 
-    /// Fast mode applies to every Exec path, including probes and resumed sessions.
-    /// This is a per-run override; the user's Codex configuration is never changed.
-    private static func execArguments(resumeSessionID: String? = nil) -> [String] {
+    /// Only paid ChatGPT Sidekick requests fast service. Background work keeps normal service.
+    private static func agentExecArguments() -> [String] {
+        execArguments(fastMode: ModelBackend.current == .chatgpt && !CodexAuth.isLimited())
+    }
+
+    /// Per-run service selection; never change the user's Codex configuration.
+    private static func execArguments(resumeSessionID: String? = nil, fastMode: Bool = false) -> [String] {
         var args = ["exec"]
         if let resumeSessionID { args += ["resume", resumeSessionID] }
-        args += ["-c", #"service_tier="fast""#]
+        if fastMode { args += ["-c", #"service_tier="fast""#] }
         return args
     }
 
@@ -1317,8 +1345,9 @@ actor CodexCLI {
     /// the real per-user temp and caches paths); `codex login` needs the same so the browser launch
     /// works. The binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to
     /// themselves). Internal (not private): ClaudeCLI's login + agent runs need the same context.
-    static func richEnvironment(binDir: String) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+    static func richEnvironment(binDir: String, includeCustomProviderKey: Bool = true) -> [String: String] {
+        let inherited = ProcessInfo.processInfo.environment
+        var env = includeCustomProviderKey ? inherited : HostedClaudeRuntime.executorEnvironment(inherited)
         let home = env["HOME"] ?? NSHomeDirectory()
         let richPath = [binDir,
                         "\(home)/.local/bin",
@@ -1327,7 +1356,7 @@ actor CodexCLI {
                         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         // Same unconditional endpoint-key injection as the sanitized env (see execute()).
-        env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        if includeCustomProviderKey { env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue }
         env[ChildProcessDiagnostics.environmentKey] = ChildProcessDiagnostics.directory?.path
         if ChildProcessDiagnostics.directory != nil { env["TMPDIR"] = FileManager.default.temporaryDirectory.path }
         return env
@@ -1363,7 +1392,9 @@ actor CodexCLI {
             diagnostics?.observe(line)
             onStdoutLine?(line)
         }
-        return try await withTaskCancellationHandler {
+        let result: ExecResult
+        do {
+          result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try ChildProcessDiagnostics.$directory.withValue(childDirectory) { try execute(binary: binary, args: args, stdinText: stdinText,
@@ -1374,7 +1405,13 @@ actor CodexCLI {
                     catch { cont.resume(throwing: error) }
                 }
             }
-        } onCancel: { holder.terminate() }
+          } onCancel: { holder.terminate() }
+        } catch {
+            try Task.checkCancellation()
+            throw error
+        }
+        try Task.checkCancellation()
+        return result
     }
 
     /// Blocking runner (call off-main). GUI-spawned `Process` works with a SANITIZED env —
@@ -1557,7 +1594,10 @@ actor CodexCLI {
         let holder = ProcHolder()
         let interaction = SidekickInteraction.current
         let childDirectory = ChildProcessDiagnostics.directory
-        return try await withTaskCancellationHandler {
+        let hostedExecutor = ModelBackend.current == .sentient // capture before entering GCD
+        let result: ExecResult
+        do {
+          result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let lease: CodexRuntime.FileLock?
@@ -1574,7 +1614,8 @@ actor CodexCLI {
                 // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
                 // dir), and so does `codex login`'s browser launch — the bare env won't do.
                 var env = ChildProcessDiagnostics.$directory.withValue(childDirectory) {
-                    richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                    richEnvironment(binDir: (binary as NSString).deletingLastPathComponent,
+                                    includeCustomProviderKey: !hostedExecutor)
                 }
                 env.merge(extraEnv) { _, new in new }
                 proc.environment = CodexRuntime.environment(env, binary: binary)
@@ -1649,8 +1690,14 @@ actor CodexCLI {
                                                   stdout: outSink.text, stderr: errSink.text))
             }
         }
-        } onCancel: {
-            holder.terminate()    // STOP: kill codex → the run resumes with a non-zero exit
+          } onCancel: {
+            holder.terminate()
+          }
+        } catch {
+            try Task.checkCancellation()
+            throw error
         }
+        try Task.checkCancellation()
+        return result
     }
 }

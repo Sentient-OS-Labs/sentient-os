@@ -5,10 +5,11 @@
 //  The speed-vs-intelligence dial for EVERY computer-use run — Sidekick, the command bar, and a
 //  card's fire all ride the same runAgentCommand spine, so one knob governs them all. Each engine
 //  maps the tier to a model and effort: codexModelAndEffort / claudeModelAndEffort.
-//  Codex runs Terra 6.1 low → Sol 6.1 low → Astra 6 low. Read fresh at fire time, so the
-//  Settings slider is live with no restart. Default = .faster (low thinking — the shipped behavior
-//  before the slider existed).
+//  ChatGPT Free/Go runs Luna 6 at low → medium → high effort. Other ChatGPT plans run
+//  Terra 6.1 low → Sol 6.1 low → Astra 6 low. Read fresh at fire time, so plan changes and the
+//  Settings slider are live with no restart. Default = .faster (low thinking).
 //  Producer: ProactivePane's slider · Consumers: CodexCLI.runAgentCommand, ClaudeCLI.agentTuned.
+//  Doc: Documentation - Cloud - CodexCLI (the codex exec spine).md
 //
 
 import Foundation
@@ -24,9 +25,17 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
         ComputerUseSpeed(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .faster
     }
 
-    /// The Codex model and effort, ordered from fastest to most intelligent.
+    /// The plan-aware Codex model and effort, shared by execution and the Settings readout.
     var codexModelAndEffort: (model: CodexCLI.Model, effort: CodexCLI.Effort) {
-        switch self {
+        if ModelBackend.current == .chatgpt, CodexAuth.isLimited() {
+            let effort: CodexCLI.Effort = switch self {
+            case .faster: .low
+            case .medium: .medium
+            case .smarter: .high
+            }
+            return (.gpt6luna, effort)
+        }
+        return switch self {
         case .faster: (.gpt61terra, .low)
         case .medium: (.gpt61sol, .low)
         case .smarter: (.gpt6astra, .low)
@@ -56,6 +65,8 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
     /// user's own model is the one doing the thinking, so it gets the credit.
     var modelLine: String {
         switch ModelBackend.current {
+        case .sentient:
+            return "Sentient managed model"
         case .custom:
             // The slider doesn't drive custom models — the pane's reasoning level does, so the
             // readout under the (dimmed) slider tells the truth about what actually runs.
@@ -76,6 +87,7 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
             case .gpt61terra: "GPT-6.1 Terra"
             case .gpt61sol: "GPT-6.1 Sol"
             case .gpt6astra: "GPT-6 Astra"
+            case .gpt6luna: "GPT-6 Luna"
             default: model.rawValue
             }
             let thinking = effort == .medium ? "med" : effort.rawValue

@@ -80,9 +80,12 @@ operation races its reply/error against a 30-second timeout and resumes its call
 
 ## Setup, enablement, and migration
 
-`enableAfterSetup()` runs after an explicit overnight-analysis choice. Reaching Home or choosing
-Run now does not enable the production schedule. Overnight setup presents the wake helper and
-launch-at-login controls only for that choice; neither is silently installed. The one-time
+`enableAfterSetup()` runs after the user completes wake/login setup and explicitly starts first
+analysis. Both services are required at this setup boundary, but neither is silently registered.
+First analysis starts now and supports explicit pause/resume; it has no overnight timing choice.
+The scheduler does not arm a wake or start a run until initial knowledge is ready, and it never
+resumes an explicit pause. Interrupted or legacy-scheduled first analyses reopen paused.
+The one-time
 `scheduler.enabledAfterSetup` latch preserves existing explicit values of `scheduler.enabled` and
 respects the old `scheduler.autoEnableFired` latch. The obsolete auto-enable delay preference is
 removed; there is no 14-hour timer.

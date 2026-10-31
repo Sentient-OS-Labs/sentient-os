@@ -2,7 +2,8 @@
 // Signed-app integration lab, entered before diagnostics, AppState, or normal startup.
 // Real providers receive a fixed synthetic task and only app-owned fixture MCP capabilities.
 // Existing canonical provider authentication is used in place, never copied or printed.
-// SENTIENT_SELFTEST=sidekickbackend LAB_SIDEKICK_PROVIDER=chatgpt|claude|claude_bridge|codex_fixture
+// SENTIENT_SELFTEST=sidekickbackend LAB_SIDEKICK_PROVIDER=chatgpt|claude|claude_bridge|sentient_bridge|codex_fixture
+// sentient_bridge additionally requires LAB_HOSTED_RUN_FILE: private admitted run JSON for a loopback gateway only.
 // LAB_SIDEKICK_COMMAND=process_fixture runs only the local owned-child failure fixture.
 // LAB_SIDEKICK_COMMAND=activity validates real provider notch progress using synthetic native tools.
 // LAB_SIDEKICK_COMMAND=compaction uses the real default compactor on synthetic saved history.
@@ -12,7 +13,7 @@ import Foundation
 import Network
 
 nonisolated enum SidekickBackendLab {
-    private enum Provider: String { case chatgpt, claude, claude_bridge, codex_fixture }
+    private enum Provider: String { case chatgpt, claude, claude_bridge, sentient_bridge, codex_fixture }
     private enum Failure: String, Error {
         case invalidConfiguration, unavailableRuntime, protocolMismatch, processFailed
         case unconfirmedStatus, wrongQuestion, verificationFailed, cleanupFailed
@@ -182,7 +183,9 @@ nonisolated enum SidekickBackendLab {
         let memory = SidekickPersonalization(snapshot: snapshot, taskID: taskID,
             request: "Synthetic integration fixture", defaults: defaults, memoryURL: memoryURL, onChange: { _ in })
         defer { memory.finish(success: checks.passed) }
-        let backend: ModelBackend = [.chatgpt, .codex_fixture].contains(provider) ? .chatgpt : .claude
+        let hostedRun = provider == .sentient_bridge ? try await hostedFixtureRun() : nil
+        let usesBridge = [.claude_bridge, .sentient_bridge].contains(provider)
+        let backend: ModelBackend = provider == .sentient_bridge ? .sentient : ([.chatgpt, .codex_fixture].contains(provider) ? .chatgpt : .claude)
         try await ModelBackend.$runOverride.withValue(backend) {
             let interaction = SidekickInteraction(instructionsSnapshot: snapshot, personalization: memory,
                 conversationRun: run) { question in
@@ -192,20 +195,22 @@ nonisolated enum SidekickBackendLab {
                 checks.require("question_saved_before_answer", try store.record(id: "question:\(question.id)") != nil)
                 return SidekickAnswer(text: "fixture-blue", selectedAnswer: 0)
             }
-            let prompt = fixturePrompt(bridge: provider == .claude_bridge) + "\n\n" + interaction.promptInstructions
+            let prompt = fixturePrompt(bridge: usesBridge) + "\n\n" + interaction.promptInstructions
             checks.counts["execution_started_unix_ms"] = Int(Date().timeIntervalSince1970 * 1000)
-            let output = try await SidekickInteraction.$current.withValue(interaction) {
-                try await ResearchToolServer.$connection.withValue(nil) {
-                    try await DirectMCPRuntime.$current.withValue([]) {
-                        try await SidekickToolServer.withConnection {
-                            guard let connection = SidekickToolServer.connection else { throw Failure.invalidConfiguration }
-                            if provider == .claude_bridge {
-                                return try await bridgeRun(prompt: prompt, connection: connection, root: root, checks: checks)
+            let output = try await withHostedFixture(hostedRun, interaction: interaction) {
+                try await SidekickInteraction.$current.withValue(interaction) {
+                    try await ResearchToolServer.$connection.withValue(nil) {
+                        try await DirectMCPRuntime.$current.withValue([]) {
+                            try await SidekickToolServer.withConnection {
+                                guard let connection = SidekickToolServer.connection else { throw Failure.invalidConfiguration }
+                                if usesBridge {
+                                    return try await bridgeRun(prompt: prompt, connection: connection, root: root, checks: checks)
+                                }
+                                if provider == .codex_fixture {
+                                    return try await codexFixtureRun(prompt: prompt, connection: connection, root: root, checks: checks)
+                                }
+                                return try await directRun(provider, prompt: prompt, connection: connection, root: root, checks: checks)
                             }
-                            if provider == .codex_fixture {
-                                return try await codexFixtureRun(prompt: prompt, connection: connection, root: root, checks: checks)
-                            }
-                            return try await directRun(provider, prompt: prompt, connection: connection, root: root, checks: checks)
                         }
                     }
                 }
@@ -213,7 +218,7 @@ nonisolated enum SidekickBackendLab {
             checks.counts["execution_finished_unix_ms"] = Int(Date().timeIntervalSince1970 * 1000)
             recordProcessOutput(output, checks: checks)
             guard output.status == 0 else { throw Failure.processFailed }
-            let parsed = try parseOutput(output.stdout, claude: provider == .claude, allowNative: provider == .claude_bridge)
+            let parsed = try parseOutput(output.stdout, claude: provider == .claude, allowNative: usesBridge)
             checks.counts["provider_tool_calls"] = parsed.calls.values.reduce(0, +)
             checks.counts["provider_unexpected_tools"] = parsed.unexpected
             for (kind, count) in parsed.unexpectedKinds { checks.counts["unexpected_item_" + kind] = count }
@@ -257,6 +262,65 @@ nonisolated enum SidekickBackendLab {
             checks.require("history_reopens", try reopened.records(taskID: taskID, limit: 500).count == records.count)
             checks.require("completed_task_not_recovered", try reopened.recoverInterruptedTasks().isEmpty)
         }
+    }
+
+    private struct HostedFixture: Decodable {
+        let gateway_url: String, run_id: String, run_token: String, model: String
+        let server_time: String, lease_expires_at: String
+        let maximum_output_tokens: Int
+        let remaining_seconds: TimeInterval
+    }
+
+    /// Accepts only a pre-admitted, short-lived capability for an explicitly local test gateway.
+    /// This never enrolls an identity, reads Keychain, opens user apps or changes TCC/configuration.
+    private static func hostedFixtureRun() async throws -> HostedInference.Run {
+        guard let path = ProcessInfo.processInfo.environment["LAB_HOSTED_RUN_FILE"] else { throw Failure.invalidConfiguration }
+        let url = URL(fileURLWithPath: path)
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+              (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600,
+              let size = (attributes[.size] as? NSNumber)?.intValue, size <= 16_384,
+              (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == false else { throw Failure.invalidConfiguration }
+        let value = try JSONDecoder().decode(HostedFixture.self, from: Data(contentsOf: url))
+        guard let gateway = URL(string: value.gateway_url), gateway.scheme == "http",
+              ["127.0.0.1", "localhost", "::1", "[::1]"].contains(gateway.host ?? ""),
+              gateway.user == nil, gateway.password == nil, gateway.query == nil, gateway.fragment == nil,
+              UUID(uuidString: value.run_id) != nil, (24...8192).contains(value.run_token.utf8.count),
+              HostedClaudeRuntime.validModel(value.model), (1...65_536).contains(value.maximum_output_tokens),
+              value.remaining_seconds.isFinite, value.remaining_seconds > 0 else { throw Failure.invalidConfiguration }
+        let dateFormat = ISO8601DateFormatter()
+        dateFormat.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let wholeSeconds = ISO8601DateFormatter()
+        guard let serverTime = dateFormat.date(from: value.server_time) ?? wholeSeconds.date(from: value.server_time),
+              let expires = dateFormat.date(from: value.lease_expires_at) ?? wholeSeconds.date(from: value.lease_expires_at),
+              (-5...45).contains(Date().timeIntervalSince(serverTime)), expires > Date(),
+              expires.timeIntervalSince(serverTime) <= 45 else { throw Failure.invalidConfiguration }
+        let client = HostedInferenceClient(configuration: { nil }, credentials: .init(read: { nil }, write: { _ in throw Failure.invalidConfiguration }))
+        let run = HostedInference.Run(id: value.run_id, gatewayURL: gateway, token: value.run_token, model: value.model,
+            remainingSeconds: value.remaining_seconds, purpose: .sidekick, client: client,
+            deadline: ProcessInfo.processInfo.systemUptime + min(45, expires.timeIntervalSinceNow), maximumOutputTokens: value.maximum_output_tokens)
+        try await client.control(run, action: "heartbeat")
+        return run
+    }
+
+    @MainActor private static func withHostedFixture(_ run: HostedInference.Run?, interaction: SidekickInteraction,
+        operation: @escaping @MainActor @Sendable () async throws -> CodexCLI.ExecResult) async throws -> CodexCLI.ExecResult {
+        guard let run else { return try await operation() }
+        interaction.attachHostedRun(run)
+        defer { interaction.attachHostedRun(nil) }
+        do {
+            let output = try await HostedInference.$currentRun.withValue(run) {
+                try await withThrowingTaskGroup(of: CodexCLI.ExecResult.self) { group in
+                    group.addTask { try await operation() }
+                    group.addTask { try await run.monitor(); throw CancellationError() }
+                    defer { group.cancelAll() }
+                    guard let result = try await group.next() else { throw Failure.processFailed }
+                    return result
+                }
+            }
+            await run.finish(); return output
+        } catch { await run.finish(); throw error }
     }
 
     private static func fixturePrompt(bridge: Bool) -> String {
@@ -304,8 +368,8 @@ nonisolated enum SidekickBackendLab {
             // Match the existing ChatGPT-only branch of CodexCLI.backendTuned. The lab calls
             // the real argument builder/process runner directly to keep sessions ephemeral.
             let limited = CodexAuth.isLimited()
-            let model = limited ? CodexCLI.Model.gpt56terra : invocation.model
-            let effort = limited ? CodexCLI.Effort.medium : invocation.effort
+            let model = limited ? CodexCLI.Model.gpt6luna : invocation.model
+            let effort = invocation.effort
             checks.details["selected_model"] = model.rawValue
             checks.details["selected_effort"] = effort.rawValue
             checks.counts["production_plan_downshift"] = limited ? 1 : 0
@@ -327,7 +391,7 @@ nonisolated enum SidekickBackendLab {
                 "ENABLE_TOOL_SEARCH": "false", "MCP_CONNECTION_NONBLOCKING": "0",
                 "MCP_CONNECT_TIMEOUT_MS": "30000", "MCP_TOOL_TIMEOUT": "180000"
             ]) { _, new in new }
-        case .claude_bridge, .codex_fixture: throw Failure.invalidConfiguration
+        case .claude_bridge, .sentient_bridge, .codex_fixture: throw Failure.invalidConfiguration
         }
         guard FileManager.default.isExecutableFile(atPath: binary) else { throw Failure.unavailableRuntime }
         return try await CodexCLI.executeAsync(binary: binary, args: arguments, stdinText: prompt,
@@ -716,23 +780,31 @@ nonisolated enum SidekickBackendLab {
             throw Failure.unavailableRuntime
         }
         let fixture = NativeFixture()
-        checks.details["selected_model"] = ClaudeCLI.Model.sonnet.rawValue
+        let run = HostedInference.currentRun
+        let model = run?.model ?? ClaudeCLI.Model.sonnet.rawValue
+        let hostedEnvironment = try run.map {
+            try HostedClaudeRuntime.environment(gatewayURL: $0.gatewayURL, token: $0.token, model: $0.model,
+                profile: root.appendingPathComponent("hosted-profile"), maxOutputTokens: $0.maximumOutputTokens)
+        }
+        checks.details["selected_model"] = model
         checks.details["selected_effort"] = "low"
+        checks.require("hosted_run_present", ModelBackend.current != .sentient || run != nil)
         let native = LocalMCPServer(name: "sentient_native", tools: ["get_app_state"], timeout: timeout,
             maximumBody: 65_536) { data in try await fixture.response(data) }
-        let bridge = ClaudeSubscriptionBridge(binary: claude, model: ClaudeCLI.Model.sonnet.rawValue,
-            effort: "low", timeout: timeout, namespaces: ["mcp__sentient_native", "mcp__sentient_recovery"], onProgress: { _ in })
+        let bridge = ClaudeSubscriptionBridge(binary: claude, model: model,
+            effort: "low", timeout: timeout, namespaces: ["mcp__sentient_native", "mcp__sentient_recovery"],
+            hostedEnvironment: hostedEnvironment, onProgress: { _ in })
         do {
             let nativeConnection = try await native.start()
             let configuration = try await bridge.start()
             let overrides = configuration.overrides + connection.codexOverrides + disabledOverrides
             var args = try CodexCLI.agentArguments(prompt: prompt, imagePaths: [],
-                modelID: ClaudeCLI.Model.sonnet.rawValue, effortArg: "low", providerOverrides: overrides,
+                modelID: model, effortArg: "low", providerOverrides: overrides,
                 nativeConnection: nativeConnection)
             args.insert(contentsOf: ["--ephemeral", "--cd", root.path], at: args.count - 1)
             var environment = configuration.environment
             // Streaming uses the normal rich environment, but this fixture has no custom model.
-            environment[CustomProvider.apiKeyEnvName] = "fixture-no-custom-provider-key"
+            if run == nil { environment[CustomProvider.apiKeyEnvName] = "fixture-no-custom-provider-key" }
             let output = try await withTaskCancellationHandler {
                 try await ComputerUseStream.run(binary: CodexRuntime.executable.path, args: args,
                     timeout: timeout, extraEnv: environment, narrate: false, onLine: { _ in })

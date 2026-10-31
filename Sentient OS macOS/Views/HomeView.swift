@@ -29,6 +29,12 @@
 import SwiftUI
 import AppKit
 
+/// Lets RootView keep transient status cards clear of the full-width chat composer.
+struct HomeBottomDockHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct HomeView: View {
     var isPresented = true
 
@@ -171,8 +177,9 @@ struct HomeView: View {
                         if needsPersonalSetup {
                             personalWorkspace(in: geo.size, width: workspaceWidth)
                             HomePersonalSetupPanel(selectedFeature: selectedPersonalFeature,
-                                                   emphasizeSetup: appState.hasCompletedFirstSidekickTask && !inConversation
-                                                       && !appState.commandCoordinator.run.isRunning,
+                                                   emphasizeSetup: appState.hasCompletedFirstSidekickTask
+                                                       && !appState.commandCoordinator.run.isRunning
+                                                       && !appState.commandCoordinator.run.recovery.isPending,
                                                    active: isPresented && presentation.windowActive && !reducedMotion,
                                                    previewEnabled: !appState.commandCoordinator.run.isRunning && !appState.commandCoordinator.run.recovery.isPending,
                                                    onSelectFeature: selectPersonalFeature,
@@ -493,7 +500,7 @@ struct HomeView: View {
     // computer use regressed) renders red, because the product is broken RIGHT NOW; otherwise
     // the morning-after caution renders amber (last night's UNATTENDED run hit a knowable snag —
     // OvernightCaution recorded it at ProactiveCycle's choke point; the next fully successful
-    // cycle clears it on its own). Both roads lead to Settings → Permissions & Health. Live
+    // cycle clears it on its own). Both roads lead to Settings → Permissions & Help. Live
     // issues re-probe on foreground and melt away when fixed; ✕ mutes a live issue's kind for
     // the session (a lower rung may then surface), while the amber ✕ clears the record. Below
     // both: skipped-connector warnings from the last completed KB pass, then the green
@@ -577,7 +584,7 @@ struct HomeView: View {
     }
 
     /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in
-    /// Permissions & Health; a full disk in System Settings' Storage pane. Weather kinds (offline,
+    /// Permissions & Help; a full disk in System Settings' Storage pane. Weather kinds (offline,
     /// usage limit) have nothing to click.
     private func cautionAction(_ kind: OvernightCaution.Kind) -> (title: String, run: () -> Void)? {
         switch kind {
@@ -589,7 +596,7 @@ struct HomeView: View {
         }
     }
 
-    /// Land directly on Permissions & Health — every banner's fix lives there; never strand the
+    /// Land directly on Permissions & Help — every banner's fix lives there; never strand the
     /// user on the default pane.
     private func openHealthSettings() {
         HomeWindowOpening.open(.settings, settingsPane: .health)
@@ -741,7 +748,7 @@ struct HomeView: View {
                     previewTitleLines: availableHeight < 185 ? 1 : (availableHeight < 220 ? 2 : 3),
                     measured: { value in if cardSizes[item.element.id] != value { cardSizes[item.element.id] = value } },
                     fireDimmed: appState.commandCoordinator.run.isRunning
-                        && item.element.action.map { ProactiveExecutor.isFireable($0) } == true,
+                        && item.element.action.map { SidekickCardContext.canSubmit($0) } == true,
                     onOffer: { model.run(item.element.id) },
                     onDetail: { openLetter(item.element.b) },
                     onOpenEnvelope: {
@@ -1023,6 +1030,12 @@ struct HomeView: View {
         }
         .padding(.horizontal, 38).padding(.top, 8).padding(.bottom, 14)
         .frame(maxWidth: .infinity)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: HomeBottomDockHeightKey.self,
+                                       value: needsPersonalSetup ? 0 : geometry.size.height)
+            }
+        }
     }
 
     private var conversationPeek: some View {
@@ -1116,7 +1129,7 @@ struct HomeView: View {
                            liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
                            liveRecipient: model.entry(b.id)?.action?.recipient ?? "",
                            fireDimmed: appState.commandCoordinator.run.isRunning
-                               && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0) } == true,
+                               && model.entry(b.id)?.action.map { SidekickCardContext.canSubmit($0) } == true,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
                            onLiveEdit: { model.updateDraft(b.id, content: $0, recipient: $1) },
                            onOffer: {
@@ -1234,7 +1247,7 @@ final class ForYouModel {
 
     var entries: [Entry] = []
     /// The app-lifetime command coordinator (HomeView sets it on appear) — the notch and the
-    /// app-wide one-task lock. Every executable card adopts the shared conversation run;
+    /// app-wide one-task lock. Every executable card submits to the normal Sidekick run;
     /// its setup, progress, questions and result all belong to chat.
     weak var coordinator: CommandCoordinator?
     /// Bumped per appearance — in-flight Tasks from a previous visit check it and bail,
@@ -1302,7 +1315,7 @@ final class ForYouModel {
             entries = cards.map { Entry(b: $0, action: nil, phase: $0.kind == .welcome ? .sealed : .offer) }
         }
         for (i, e) in entries.enumerated() {
-            if coordinator?.run.externalCardID == e.id { update(e.id) { $0.phase = .working(0) } }
+            if coordinator?.run.activeCardID == e.id { update(e.id) { $0.phase = .working(0) } }
             Task {
                 try? await Task.sleep(for: .seconds(0.25 + Double(i) * 0.11))
                 guard self.visit == v else { return }
@@ -1326,12 +1339,12 @@ final class ForYouModel {
         update(e.id) { $0.phase = .offer }
     }
 
-    /// Fire the offer. A REAL card runs its action through the executor for real (live-streamed, with
+    /// Fire the offer. A REAL card submits its reviewed action to the main Sidekick agent (live-streamed, with
     /// STOP); a demo card plays the briefing's hard-coded `workLog` theater for visual feedback.
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
         if let action = e.action {
-            guard ProactiveExecutor.isFireable(action), coordinator?.run.isRunning != true else { return }
+            guard SidekickCardContext.canSubmit(action), coordinator?.run.isRunning != true else { return }
             // Include a live edit even if its debounced persistence has not fired yet.
             let reviewed = draftPreviews[id].map {
                 Self.replacing(action, content: $0.content, recipient: $0.recipient)
@@ -1358,82 +1371,32 @@ final class ForYouModel {
         }
     }
 
-    /// Persist the selected request and open chat before any setup or execution awaits.
-    /// The app-owned run keeps the exact reviewed artifact and executor policy; the card
-    /// is only a suggestion, never a second progress surface or owner of the running task.
-    private func runReal(_ id: String, _ action: PreparedAction, retryContext: String = "") {
-        let v = visit
-        guard ProactiveExecutor.isFireable(action), let coordinator,
-              coordinator.beginExternalRun(
-                  caption: action.title,
-                  request: SidekickCardContext.taskSnapshot(action),
-                  retryContext: retryContext,
-                  onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
-                  onStopRequest: { [weak self] in self?.stopRun(id) }) else { return }
-        let adoptedRun = coordinator.run
-        let generation = adoptedRun.runID
-        let interaction = adoptedRun.interaction
-        update(id) { $0.phase = .working(0); $0.liveLines = [] }
-        adoptedRun.conversation.requestNavigation()
+    /// Submit the reviewed card through the same main-agent path as a typed request.
+    private func runReal(_ id: String, _ action: PreparedAction) {
+        guard SidekickCardContext.canSubmit(action), let coordinator else { return }
+        let reply: SidekickConversationEvent.ReplyReference
+        do { reply = try SidekickCardContext.reply(to: action) }
+        catch { coordinator.showSubmissionFailure(error); return }
+        guard coordinator.submit("Do this for me.", mode: .computer, source: .proactiveCard,
+                                 reply: reply, onCompletion: { outcome in
+            if outcome == .success {
+                self.entries.removeAll { $0.id == id && $0.action?.preparedContent == action.preparedContent
+                    && $0.action?.recipient == action.recipient }
+                if self.entry(id) == nil { self.draftPreviews[id] = nil }
+            } else {
+                withAnimation { self.update(id) { $0.phase = .offer } }
+            }
+        }) else { return }
+        // Flush any live edit before the app-owned task starts; completion compares this snapshot.
+        applyEdit(id, content: action.preparedContent, recipient: action.recipient)
         InviteProgram.shared.record(.proactive)
-        let task = Task {
-            let progress: @Sendable (String) -> Void = { line in
-                Task { @MainActor in adoptedRun.externalPush(line, runID: generation) }
-            }
-            let outcome: ProactiveExecutor.Outcome
-            do {
-                // Validate before setup, then let the executor recheck immediately before acting.
-                if let issue = await ProactiveExecutor.mailEvidenceIssue(action) {
-                    outcome = .notFireable(issue)
-                } else {
-                    try Task.checkCancellation()
-                    try await ComputerUseGate.shared.waitUntilReady()
-                    try Task.checkCancellation()
-                    outcome = await SidekickInteraction.$current.withValue(interaction) {
-                        await ProactiveExecutor.shared.fire(action, progress: progress)
-                    }
-                }
-            } catch {
-                guard adoptedRun.runID == generation else { return }
-                let stopped = Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled
-                let message = (error as? LocalizedError)?.errorDescription ?? "Sidekick couldn’t finish setup. Try again."
-                if !stopped { Log("card setup failed — \(ErrorLabel(error))") }
-                adoptedRun.completeExternal(stopped ? .stopped : .failed,
-                    line: stopped ? "■ stopped" : "✗ \(message)", runID: generation)
-                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
-                return
-            }
-            guard adoptedRun.runID == generation else { return }
-            guard !Task.isCancelled else {
-                adoptedRun.completeExternal(.stopped, line: "■ stopped", runID: generation)
-                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
-                return
-            }
-            switch outcome {
-            case .fired(let answer):
-                self.removeFromLatest(id)
-                adoptedRun.completeExternal(.success, line: "✓ done", finalText: answer, runID: generation)
-                guard self.visit == v else { return }
-                // The answer lives in chat. Retire the consumed suggestion without a second
-                // completion presentation when the user reopens the proactive dock.
-                self.entries.removeAll { $0.id == id }
-                self.draftPreviews[id] = nil
-            case .notFireable(let message), .failed(let message):
-                adoptedRun.completeExternal(.failed, line: "✗ \(message)", runID: generation)
-                if self.visit == v { withAnimation { self.update(id) { $0.phase = .offer } } }
-            }
-        }
-        adoptedRun.ownExternalTask(task, cardID: id)
+        withAnimation { update(id) { $0.phase = .working(0) } }
+        coordinator.run.conversation.requestNavigation()
     }
 
-    /// STOP a live real-card run: cancel the codex process (CodexCLI honors it) and return to offer.
-    /// Reached from the card's STOP directly and, for an adopted run, from the notch/bar/hotkey via
-    /// `onStopRequest` — the guard makes a second arrival a no-op (one cancel is enough; the
-    /// adoption completes from the fire's unwind in runReal, never here).
+    /// Card and chat Stop controls cancel the same main-agent task.
     func stopRun(_ id: String) {
-        if let run = coordinator?.run, run.isExternal, run.externalCardID == id {
-            run.stop(); return
-        }
+        if let run = coordinator?.run, run.activeCardID == id { run.stop() }
     }
 
     /// Apply an edited draft + recipient to a card and persist them, so the fire sends exactly this
@@ -1455,13 +1418,6 @@ final class ForYouModel {
     func updateDraft(_ id: String, content: String, recipient: String) {
         guard entry(id)?.action != nil else { return }
         draftPreviews[id] = (content, recipient)
-    }
-
-    /// Drop a fired card from the persisted `latest` so a re-deal (next visit) won't show it again.
-    private func removeFromLatest(_ id: String) {
-        guard let result = ProactiveResearch.latest() else { return }
-        ProactiveResearch.saveLatest(ReadyResult(ready: result.ready.filter { $0.id != id },
-                                                 dropped: result.dropped))
     }
 
     /// A newly mounted Home observes the same app-owned task. Reconcile persisted results

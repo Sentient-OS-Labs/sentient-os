@@ -19,7 +19,7 @@ private struct SettingsHeadingStyleKey: EnvironmentKey {
     static let defaultValue = false
 }
 
-/// Permissions & Health uses tighter spacing throughout its shared form components.
+/// Permissions & Help uses tighter spacing throughout its shared form components.
 private struct SettingsCompactLayoutKey: EnvironmentKey {
     static let defaultValue = false
 }

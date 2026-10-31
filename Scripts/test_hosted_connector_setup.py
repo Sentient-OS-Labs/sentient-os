@@ -16,7 +16,8 @@ FIXTURE = r'''
 import Foundation
 
 nonisolated enum ModelBackend: String, Sendable {
-    case chatgpt, claude, custom
+    case chatgpt, claude, custom, sentient
+    var hasSubscriptionConnectors: Bool { self == .chatgpt || self == .claude }
     @TaskLocal static var runOverride: ModelBackend?
     nonisolated(unsafe) static var selected: ModelBackend = .claude
     static var current: ModelBackend { runOverride ?? selected }
@@ -34,23 +35,6 @@ nonisolated enum ModelBackend: String, Sendable {
 }
 @MainActor enum ConnectorCensus {
     static var declarations: [(String, ModelBackend, Bool)] = []
-    static var ready: Set<String> = []
-    static var holdVerifications = false
-    static var startedVerifications = 0
-    static var pendingVerifications: [Int: CheckedContinuation<Bool, Never>] = [:]
-    static func isReady(slug: String, backend: ModelBackend) -> Bool { ready.contains(slug) }
-    static func verifyConnection(slug: String, backend: ModelBackend) async -> Bool {
-        startedVerifications += 1
-        guard holdVerifications else { return ready.contains(slug) }
-        let id = startedVerifications
-        // Deliberately return late success even after cancellation. The real coordinator's
-        // consent revision must independently reject this stale network result.
-        return await withCheckedContinuation { pendingVerifications[id] = $0 }
-    }
-    static func finishVerification(_ id: Int, ready: Bool = true) {
-        pendingVerifications.removeValue(forKey: id)!.resume(returning: ready)
-    }
-    static func invalidateReadiness(slug: String, backend: ModelBackend) { ready.remove(slug) }
     static func confirmSelection(slug: String, reconnected: Bool) {
         declarations.append((slug, ModelBackend.current, reconnected))
     }
@@ -117,8 +101,6 @@ enum FixtureFailure: Error { case expected, assertion(String) }
         collectionOutcome = .saved; contactCompletions = 0
         calls = []; contacts = []; ConnectorCensus.declarations = []; UserDefaults.standard.values = [:]
         ModelBackend.selected = .claude
-        ConnectorCensus.ready = []
-        ConnectorCensus.holdVerifications = false; ConnectorCensus.startedVerifications = 0
     }
     static func pending(_ backend: ModelBackend = .claude, _ provider: MailAccount.Provider = .gmail) -> String? {
         UserDefaults.standard.string(forKey: "connectedEmail.pendingCollection.\(backend.rawValue).\(provider.rawValue)")
@@ -149,11 +131,9 @@ func ErrorLabel(_ error: Error) -> String { "fixture_error" }
 @main struct Main {
     @MainActor static func main() async throws {
         await Fixture.reset()
-        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "unverified declaration cannot select a source")
-        ConnectorCensus.ready = ["gmail", "google-calendar", "google-drive", "outlook-mail"]
-        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "verified source can save explicit selection")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "Done saves explicit selection without connection verification")
         try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail") && Fixture.pending() != nil,
-                          "verified Done saves source and deferred contact consent")
+                          "Done saves source and deferred contact consent")
         try Fixture.check(Fixture.calls.isEmpty && Fixture.contacts.isEmpty, "Done starts no model warmup or contact read")
         Fixture.contactBlocked = true
         HostedConnectorSetup.processingStarted(slug: "gmail")
@@ -169,18 +149,19 @@ func ErrorLabel(_ error: Error) -> String { "fixture_error" }
         HostedConnectorSetup.processingStarted(slug: "gmail")
         try await Fixture.wait { Fixture.pending() == nil }
         try Fixture.check(Fixture.contacts.count == 2, "next processing run completes deferred newer contact consent")
-        try Fixture.check(HostedConnectorSetup.confirm(slug: "google-drive") && UserDefaults.standard.bool(forKey: "mcp.google-drive.kb"), "verified explicit Done enables reviewed source")
-        try Fixture.check(HostedConnectorSetup.confirm(slug: "google-calendar") && UserDefaults.standard.bool(forKey: "dbg.calendar.connected"), "verified Calendar preserves production connected key")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "google-drive") && UserDefaults.standard.bool(forKey: "mcp.google-drive.kb"), "explicit Done enables reviewed source")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "google-calendar") && UserDefaults.standard.bool(forKey: "dbg.calendar.connected"), "Calendar declaration preserves production connected key")
         HostedConnectorSetup.settingsOpened(slug: "gmail")
-        try Fixture.check(!ConnectorCensus.ready.contains("gmail") && UserDefaults.standard.bool(forKey: "dbg.run.gmail"), "reconnect invalidates proof while preserving selected intent")
-        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "stale readiness cannot be reconfirmed without a native check")
-        ConnectorCensus.ready.insert("gmail")
+        try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail"), "opening settings preserves selected intent")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "reconnect does not wait for native metadata")
         ModelBackend.selected = .chatgpt
         try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail", backend: .claude), "wrong backend cannot save selection")
         ModelBackend.selected = .custom
         try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "custom backend cannot declare a hosted source")
+        ModelBackend.selected = .sentient
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "gmail"), "Sentient funding cannot declare a subscription connector")
         ModelBackend.selected = .claude
-        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "verified declaration remains available after returning to correct backend")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "declaration remains available after returning to correct backend")
         Fixture.contactBlocked = true
         HostedConnectorSetup.processingStarted(slug: "gmail")
         try await Fixture.wait { Fixture.contacts.count == 3 }
@@ -190,7 +171,6 @@ func ErrorLabel(_ error: Error) -> String { "fixture_error" }
         try Fixture.check(Fixture.pending() != nil && Fixture.contactCompletions == 3, "teardown cancels and drains contact work without losing pending consent")
         Fixture.contactBlocked = false
         await Fixture.reset()
-        ConnectorCensus.ready = ["gmail"]
         _ = HostedConnectorSetup.confirm(slug: "gmail")
         Fixture.contactBlocked = true
         HostedConnectorSetup.processingStarted(slug: "gmail")
@@ -202,57 +182,31 @@ func ErrorLabel(_ error: Error) -> String { "fixture_error" }
         for (slug, key) in [("gmail", "dbg.run.gmail"), ("google-calendar", "dbg.run.calendar"),
                             ("google-drive", "mcp.google-drive.kb"), ("outlook-mail", "mcp.outlook-mail.kb")] {
             await Fixture.reset()
-            ConnectorCensus.ready = [slug]
             try Fixture.check(HostedConnectorSetup.confirm(slug: slug), "fixture starts with selected " + slug)
-            ConnectorCensus.holdVerifications = true
-            let pending = Task { await HostedConnectorSetup.verifyAndConfirm(slug: slug) }
-            try await Fixture.wait { ConnectorCensus.pendingVerifications[1] != nil }
             HostedConnectorSetup.stopReading(slug: slug)
-            try Fixture.check(!UserDefaults.standard.bool(forKey: key), "Stop reading immediately opts out " + slug)
-            ConnectorCensus.finishVerification(1)
-            let accepted = await pending.value
-            try Fixture.check(!accepted && !UserDefaults.standard.bool(forKey: key)
-                              && ConnectorCensus.declarations.count == 1,
-                              "late verification from another window cannot reverse opt-out for " + slug)
+            await Task.yield()
+            try Fixture.check(!UserDefaults.standard.bool(forKey: key) && ConnectorCensus.declarations.count == 1,
+                              "Stop reading stays opted out with no delayed verification for " + slug)
             try Fixture.check(Fixture.pending() == nil && Fixture.pending(.claude, .outlook) == nil,
                               "opt-out retires pending contact consent for " + slug)
         }
         await Fixture.reset()
-        ConnectorCensus.ready = ["gmail", "google-drive"]
-        ConnectorCensus.holdVerifications = true
-        let old = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "gmail") }
-        try await Fixture.wait { ConnectorCensus.pendingVerifications[1] != nil }
-        HostedConnectorSetup.settingsOpened(slug: "gmail")
-        ConnectorCensus.ready.insert("gmail")
-        ConnectorCensus.finishVerification(1)
-        try Fixture.check(!(await old.value) && ConnectorCensus.declarations.isEmpty,
-                          "reconnect in another window invalidates older verification")
-        let first = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "gmail") }
-        try await Fixture.wait { ConnectorCensus.pendingVerifications[2] != nil }
-        let latest = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "gmail") }
-        try await Fixture.wait { ConnectorCensus.pendingVerifications[3] != nil }
-        let unrelated = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "google-drive") }
-        try await Fixture.wait { ConnectorCensus.pendingVerifications[4] != nil }
-        ConnectorCensus.finishVerification(2)
-        ConnectorCensus.finishVerification(3)
-        ConnectorCensus.finishVerification(4)
-        let firstAccepted = await first.value, latestAccepted = await latest.value, unrelatedAccepted = await unrelated.value
-        try Fixture.check(!firstAccepted && latestAccepted && unrelatedAccepted,
-                          "newest Done wins for its source without cancelling another source")
-        try Fixture.check(ConnectorCensus.declarations.count == 2,
-                          "concurrent sources each confirm exactly once")
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail") && HostedConnectorSetup.confirm(slug: "google-drive"),
+                          "independent source confirmations complete synchronously")
+        try Fixture.check(ConnectorCensus.declarations.count == 2, "each source confirms exactly once")
         HostedConnectorSetup.stopReading(slug: "gmail", backend: .chatgpt)
         try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail"),
                           "a stale provider sheet cannot revoke the current selection")
         await Fixture.reset()
-        ConnectorCensus.ready = ["outlook-mail"]; ConnectorCensus.holdVerifications = true
-        let alias = Task { await HostedConnectorSetup.verifyAndConfirm(slug: "outlook-email") }
-        try await Fixture.wait { ConnectorCensus.pendingVerifications[1] != nil }
+        try Fixture.check(HostedConnectorSetup.confirm(slug: "outlook-email")
+            && UserDefaults.standard.bool(forKey: "mcp.outlook-mail.kb"), "alias confirmation uses canonical source")
         HostedConnectorSetup.stopReading(slug: "outlook-mail")
-        ConnectorCensus.finishVerification(1)
-        try Fixture.check(!(await alias.value) && !UserDefaults.standard.bool(forKey: "mcp.outlook-mail.kb"),
-                          "aliases share the canonical source consent revision")
-        print("PASS: \(Fixture.passed) verified setup and deferred-contact checks")
+        try Fixture.check(!UserDefaults.standard.bool(forKey: "mcp.outlook-mail.kb") && Fixture.pending(.claude, .outlook) == nil,
+                          "canonical opt-out clears alias consent")
+        let priorDeclarations = ConnectorCensus.declarations.count
+        try Fixture.check(!HostedConnectorSetup.confirm(slug: "direct-fixture")
+            && ConnectorCensus.declarations.count == priorDeclarations, "direct OAuth never uses hosted confirmation")
+        print("PASS: \(Fixture.passed) immediate setup and deferred-contact checks")
     }
 }
 '''

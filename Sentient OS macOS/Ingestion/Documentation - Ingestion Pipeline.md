@@ -21,6 +21,30 @@ an entire validated snapshot with its coverage checkpoint because events can cha
 | `PipelineActivity.swift` | A tiny "is a run active?" counter (`IterativeRun` and `ProactiveCycle` bump it). Settings disables Reset and Uninstall while it is non-zero; the updater also refuses to relaunch during a run. |
 | `FactoryReset.swift` | The one full wipe shared by Settings → System → Reset and Dev Tools → Reset everything: cycle store, knowledge base folder, proactive traces, counters, cloud copy (best-effort), and the rewind to the start of onboarding. |
 
+## Initial analysis pause and resume
+
+First analysis starts immediately after the source and background-setup steps. Pause is persisted
+before cancellation drains, and a second run cannot start while the old task is still active. On
+relaunch, unfinished first-run requests (including old overnight plans) are paused until the user
+resumes. The scheduler never starts initial creation or overrides an explicit pause.
+
+`InitialAnalysisRecovery.replayCloudStages` is task-local to a production first-analysis run:
+
+- On-device adapters retain their existing atomic item/bookmark checkpoints.
+- An incomplete Gmail import discards its partial window receipts and summaries transactionally,
+  starts a new attempt ID, and replays all windows inside the original date bounds. Prior completed
+  notes and the global watermark are preserved. Late callbacks from the retired attempt are rejected.
+- Calendar and generic MCP readers already commit whole stages atomically; incomplete stages rerun,
+  and completed stages with matching account/connection identities are skipped during initial resume.
+- An unfinished knowledge build/merge discards its old model session and app-owned staging directory.
+  All retained input summaries are supplied again. Published knowledge is never removed.
+- Completed knowledge publication is remembered by input hashes and the live vault fingerprint,
+  including across later-stage failures. Large completed stages use a bounded whole-input digest.
+- Paused initial runs carry on-device counters only, so replayed cloud windows are not counted twice.
+
+Normal incremental updates and explicit developer reads keep their prior checkpoint behavior.
+Nightly updates wait until initial knowledge is ready. Factory Reset still owns checkpoint removal.
+
 ## Admission, partial work and the first analysis
 
 `ProcessingRequest.current()` snapshots `SourceSelection.current()` and ready hosted/direct sources.

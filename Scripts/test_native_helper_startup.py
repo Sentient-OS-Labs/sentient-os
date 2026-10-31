@@ -18,8 +18,9 @@ enum Diagnostics {
     static func report(_ kind: Kind, phase: Phase, error: Error) {}
 }
 final class AgentRunDiagnostics {
-    static var current: AgentRunDiagnostics?
-    func recordHelper(running: Bool, atStart: Bool) {}
+    static var current: AgentRunDiagnostics? = AgentRunDiagnostics()
+    var samples: [(running: Bool, atStart: Bool)] = []
+    func recordHelper(running: Bool, atStart: Bool) { samples.append((running, atStart)) }
 }
 enum Permissions {
     enum State { case granted }
@@ -98,6 +99,10 @@ enum OpenAIComputerUse {
         takeovers += 1
         for app in NSRunningApplication.apps where app.bundleURL != configuration.appURL { app.isTerminated = true }
     }
+    static func stopOwnedHelper(allowForce: Bool) async throws {
+        precondition(!allowForce)
+        for app in NSRunningApplication.apps where app.bundleURL == Configuration().appURL { _ = app.terminate() }
+    }
 }
 enum OpenAIComputerUseProbe { static func check(_ configuration: OpenAIComputerUse.Configuration) async throws {} }
 '''
@@ -162,9 +167,23 @@ extension OpenAIComputerUseRuntime {
         } catch OpenAIComputerUse.RuntimeError.launchFailed {}
         check(NSWorkspace.shared.launches == 3, "startup retry budget is bounded")
 
+        let observed = fresh()
+        let observedTask = try await observed.beginTask(configuration: configuration)
+        NSRunningApplication.apps[0].isTerminated = true
+        let recoveredHelper = NSRunningApplication(configuration.appURL)
+        NSRunningApplication.apps.append(recoveredHelper)
+        observed.recordHelperBeforeCleanup(observedTask)
+        check(AgentRunDiagnostics.current!.samples.last!.running, "End evidence samples the recovered helper, not the dead initial process")
+        let sampled = AgentRunDiagnostics.current!.samples.count
+        recoveredHelper.isTerminated = true // normal last-client cleanup
+        observed.endTask(observedTask)
+        check(AgentRunDiagnostics.current!.samples.count == sampled, "Cleanup cannot overwrite observed liveness as a false crash")
+
         let leased = fresh()
         let lease = try await leased.beginTask(configuration: configuration)
         do { try await leased.restart(configuration: configuration); fatalError("Active task was restarted") }
+        catch OpenAIComputerUse.RuntimeError.helperRunning {}
+        do { try await leased.prepareForPermissionRestart(configuration: configuration); fatalError("Permission restart stopped active work") }
         catch OpenAIComputerUse.RuntimeError.helperRunning {}
         check(!NSRunningApplication.apps[0].isTerminated, "repair preserves active Sentient task")
         check(leased.reserveDiagnostic() == nil, "a separate diagnostic cannot take over an active agent")
@@ -200,6 +219,17 @@ extension OpenAIComputerUseRuntime {
         CodexRuntime.exclusiveBusy = false
         try await repair.prepareForReinstall(configuration: configuration)
         check(repairOwn.isTerminated && !repairForeign.isTerminated, "reinstall teardown stops only the private helper")
+        let permissionRestart = fresh()
+        let permissionOwn = try await permissionRestart.start(configuration: configuration)
+        let permissionForeign = NSRunningApplication(URL(fileURLWithPath: "/permission-foreign.app"))
+        NSRunningApplication.apps.append(permissionForeign)
+        try await permissionRestart.prepareForPermissionRestart(configuration: configuration)
+        check(permissionOwn.isTerminated && !permissionForeign.isTerminated && OpenAIComputerUse.takeovers == 0,
+              "permission relaunch stops only the owned helper without taking over foreign sessions")
+        permissionForeign.isTerminated = true
+        let permissionFresh = try await permissionRestart.start(configuration: configuration)
+        check(permissionFresh.processIdentifier != permissionOwn.processIdentifier && !permissionFresh.isTerminated,
+              "post-restart startup creates a new helper process rather than reusing stale cached state")
         print("PASS: \(checks) native startup race, retry and ownership checks")
     }
 }

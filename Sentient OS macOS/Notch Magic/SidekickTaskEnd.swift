@@ -62,6 +62,9 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
                 return reason.map { Self(reason: $0, evidence: .errorText) } ?? typed(fallback)
             }
             if error is CancellationError { return typed(.cancelledUnknown) }
+            if let hosted = error as? HostedInference.Failure {
+                return typed(hosted.isUsageLimit ? .usageLimit : .backendUnavailable)
+            }
             if let native = error as? NativeComputerUseFailure {
                 switch native.kind {
                 case .capture: return typed(.screenCapture)
@@ -77,6 +80,7 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
             if error is SlackActionEvidence.Failure || error is OutlookActionEvidence.Failure
                 || error is OutlookCalendarActionEvidence.Failure { return .unconfirmed }
             if error is CodexRuntime.Failure { return typed(.backendUnavailable) }
+            if error is ClaudeAuth.LoginRequired { return typed(.loginRequired) }
             if let error = error as? MCPSource.MCPError {
                 switch error {
                 case .noReadSurface: return typed(.unavailableTool)

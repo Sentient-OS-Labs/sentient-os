@@ -9,8 +9,11 @@ Overnight, Sentient decides what in the user's life is worth doing,
 verifies it against the live world, prepares it (a draft, an event, a step-by-step plan, or a briefing),
 and leaves it on the home as a card the user fires with one click. Three parts, each its own prompt,
 lined up exactly on the permission boundary: parts 1 and 2 are read-only with respect to external services; part 3 is the
-action-execution step and runs only on the user's press. Plus the cycle that sequences everything and the
+action-execution step and runs only on the user's press through the normal Sidekick main agent. Plus the cycle that sequences everything and the
 one-time welcome gift letter.
+
+Planning and research share the same model and high reasoning effort: GPT-6 Sol on paid
+ChatGPT plans, GPT-6 Luna on Free/Go, and Claude Opus 5.5 on every Claude subscription plan.
 
 ## Files
 
@@ -19,7 +22,7 @@ one-time welcome gift letter.
 | `ProactiveCycle.swift` | The shared tail every full processing cycle runs (Analyze Now, onboarding's first analysis, the 3 AM run): knowledge base → mirror push → gift letter (once) → decide → research and prepare → wipe the summaries. Classifies failures. |
 | `Proactive.swift` | PART 1, the judge: a hermetic, summaries-only call that finds up to 8 candidate action items. |
 | `ProactiveResearch.swift` | PART 2, research and prepare: verifies each candidate against the live world and stages the ≤5 strongest as ready-to-fire `PreparedAction`s. Never fires. |
-| `ProactiveExecutor.swift` | PART 3, the executor: fires one `PreparedAction` on the user's press through its channel (gmail / calendar / computer). |
+| `ProactiveExecutor.swift` | Legacy explicit diagnostic executor and shared source-evidence checks. Live cards submit to the normal Sidekick agent. |
 | `GiftLetter.swift` | The welcome "letter from Sentient": one codex call over the finished knowledge base, generated once. |
 
 ## The cycle (`ProactiveCycle.run`)
@@ -78,7 +81,10 @@ cards (`maxReady`, enforced in the prompt and as a code backstop): scarcity is t
 high effort, read-only, `cwd` vault, web on, user config on (for the Gmail MCP), the strip preset,
 `--output-schema`, 1800 s. Persists to `proactive.latestReady`, which the home renders.
 
-## PART 3: the executor (`ProactiveExecutor.fire`)
+## Legacy diagnostic executor (`ProactiveExecutor.fire`)
+
+The following channel recipes remain for explicit diagnostic callers. Live card buttons use the
+main-agent reply handoff described below.
 
 Routes on `method`. The user-editable artifact rides in a `<<<CONTENT … CONTENT>>>` block and the
 routing (with the possibly edited recipient placed FIRST as the authoritative destination) in a
@@ -97,7 +103,7 @@ Task) records nothing.
 
 ## Where it surfaces
 
-- **The home** deals real cards from `ProactiveResearch.latest()` (`Views/HomeView.swift`, `ForYouModel`): editable drafts and the LLM-written action button. Clicking an executable action immediately records the reviewed request, adopts Sidekick's shared run and opens chat, before evidence or permission checks await. Progress, questions, Stop and the final response live in chat; reopening the proactive dock shows a compact **View in chat** link on the active card. Success removes the consumed card from the current and persisted decks; failure or cancellation keeps it available. The original executor, exact edited content/recipient, connector policy and evidence rechecks remain in force. `CommandRunModel.isRunning` is the app-wide one-task lock, and task ownership survives leaving Home. Research cards remain read-only; demo decks keep their synthetic theater.
+- **The home** deals real cards from `ProactiveResearch.latest()` (`Views/HomeView.swift`, `ForYouModel`): editable drafts and the LLM-written action button. Clicking an executable action immediately records the reviewed request, adopts Sidekick's shared run and opens chat, before evidence or permission checks await. Progress, questions, Stop and the final response live in chat; reopening the proactive dock shows a compact **View in chat** link on the active card. Success removes the consumed card from the current and persisted decks; failure or cancellation keeps it available. The exact edited content/recipient is frozen in a durable card reply. Source/account evidence is checked before and after permission setup; the normal main agent chooses the tools and uses its speed-slider model. `CommandRunModel.isRunning` is the app-wide one-task lock, and task ownership survives leaving Home. Research cards remain read-only; demo decks keep their synthetic theater.
 - **Dev Tools:** "proactive system" (part 1), "proactive RESEARCH + PREPARE" (part 2), the "PROACTIVE · EXECUTE" window (part 3 with real FIRE buttons), and "VIEW ACTION ITEMS".
 
 ## The gift letter (`GiftLetter.generate`)
@@ -122,3 +128,19 @@ it as the sealed envelope card (`Briefing(fromGiftMarkdown:)`), with a **Save to
 ## Related docs
 
 `Vault/Documentation - Knowledge Base (Vault).md`, `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md`, `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Documentation - Views - Home, Processing & Shared UI.md`, `Notch Magic/Documentation - Sidekick - General.md` (adopted runs), `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md`.
+
+## Card reply handoff
+
+Home card buttons call `CommandCoordinator.submit` with `source: .proactiveCard`, the visible
+request “Do this for me.”, and an immutable `ReplyReference.card` snapshot. They never call
+`ProactiveExecutor.fire` or adopt an external model task. `SidekickCardContext.canSubmit` gates
+executable suggestions; the old suggested method is context, not an execution route. The main
+agent uses the same tools, speed preference, permissions, history, Stop and recovery as typed input.
+
+The chat bubble shows a compact card preview. Clicking it reveals the exact reviewed recipient
+and draft, even after the suggestion leaves Home. The full serialized card reaches the agent
+as reply context, without dumping JSON into the visible request. Reply metadata also survives
+permission-restart drafts and keeps old message replies backward compatible. The app validates
+source evidence and bound account identity before and after setup, and retires only the matching
+reviewed suggestion after successful, durably recorded completion. Failed/stopped actions stay
+available. No task resumes automatically after a restart.

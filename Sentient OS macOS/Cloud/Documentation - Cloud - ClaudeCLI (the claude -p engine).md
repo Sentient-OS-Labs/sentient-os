@@ -70,6 +70,13 @@ the same signed app monitors its parent and stops Claude after an unexpected app
 plumbing escalates termination for a child that ignores SIGTERM. Temporary files are removed on exit.
 No Node runtime, router daemon, permanent provider entry, or user-configuration edit is needed.
 
+`ClaudeComputerUseConnectors` attaches subscription connectors directly to this same Claude
+session. It grants tools by connected-server namespace, with a server URL boundary, rather than
+classifying tools or comparing exact tool names. There are no classifier-derived destructive
+denies or exact-name action hooks on this main-agent path. Direct connections likewise use their
+live advertised tools. Background read recipes retain their separate read-only access contracts.
+The historical classifier and router are Debug lab fixtures only, never automatic setup tasks.
+
 The bridge preserves Claude's quota errors and final usage envelope. It streams Claude's authored
 narration while retaining only completion metadata rather than the repeated screenshot transcript.
 Computer/tool progress comes from `ComputerUseStream` for both Claude and ChatGPT; suppressing outer
@@ -79,12 +86,13 @@ formatter. Completion uses the shared explicit final-message outcome or legacy f
 
 ## Models and effort
 
-The tier map (`tuned(for:)`, the backendTuned twin): `gpt6astra`/`gpt6sol`/`gpt56terra` → `sonnet`, `gpt6luna` →
-`haiku`; a caller that earns Opus says so with `Invocation.claudeModel = .opus` (the vault legs via
-`runCodexInStaging`, and proactive research). On a **Pro** plan every Opus pick downshifts to Sonnet
-(`ClaudeAuth.isPro` — Pro's Opus window is tiny; the terra-downshift twin; unknown plans fail open).
-The Speed slider's Claude mapping (`ComputerUseSpeed.claudeModelAndEffort`): Faster = sonnet·low,
-Medium = sonnet·medium, Smarter = opus·medium.
+The tier map (`tuned(for:)`, the backendTuned twin): `gpt61terra`/`gpt61sol`/`gpt6astra`/`gpt6sol`/`gpt56terra`
+→ Sonnet 5.5, `gpt6luna` → Haiku 5.5; a caller selects Opus 5.5 explicitly with
+`Invocation.claudeModel = .opus` (vault work via `runCodexInStaging`, proactive planning, and
+proactive research). Pro and Max use the same models and reasoning efforts, as do other Claude plans.
+Planning and research both use Opus 5.5/high. Account usage limits remain provider-enforced.
+The Speed slider's Claude mapping (`ComputerUseSpeed.claudeModelAndEffort`): Faster = Sonnet 5.5/low,
+Medium = Opus 5.5/low, Smarter = Opus 5.5/medium.
 
 ## Hosted connectors and MCP recipes
 
@@ -93,7 +101,7 @@ structured builder remains independent of the Codex computer-task provider. The 
 mapping changes only model resolution; these recipes remain independent of the Codex speed tiers.
 
 - `mcpReadConnectors` keeps `dontAsk`, allows only each registry read list, and walls attachment to those servers. Missing read lists refuse the run.
-- `mcpActionServer` requires a classified connector, walls attachment to that server, allows its tools, and denies destructive tools by name. The sandboxed recipe never bypasses permissions.
+- `mcpActionServer` is the legacy explicit-action recipe; it walls attachment to that server without requiring a classifier result. The sandboxed recipe never bypasses permissions.
 - `mcpAttachServer` walls in one server with zero tool allows for classifier inventory.
 - Claude-hosted connectors remain available to dedicated connector tasks. Computer tasks advertise only the tools attached to their Codex run; prepared direct MCP accounts retain their existing policy.
 
@@ -153,3 +161,5 @@ types/plumbing), `Cloud/Documentation - Cloud - Codex Setup.md` (the lazy-instal
 driver step), `Driver/Documentation - Native Computer Use.md` (the shared computer runtime),
 `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md` (the engine-aware connect flow),
 `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md` (the picker and the Claude tab).
+
+All ingestion uses pinned `claude-haiku-5-5` at medium effort, including Gmail/Calendar, Outlook, Slack, Drive, Granola, writing-style samples and calendar context. Pro and Max share the same policy; no Sonnet ingestion overrides remain in production.

@@ -97,7 +97,7 @@ enum ProcessingRun {
 
         Fixture.reset();Fixture.state.withLock{$0.failPublish=true}
         let publicationParent=Diagnostics.Operation("required_analysis")
-        Diagnostics.$current.withValue(publicationParent){ProactiveCycle.publishWritingStyle("synthetic samples")}
+        await Diagnostics.$current.withValue(publicationParent){await ProactiveCycle.publishWritingStyle("synthetic samples")}
         check(Fixture.state.withLock{$0.reports}==1 && Fixture.state.withLock{$0.published}==1,
               "failed optional publication is attempted once and reported locally")
         check(!publicationParent.hasFailure,"failed optional publication does not taint required-analysis diagnostics")
@@ -107,7 +107,7 @@ enum ProcessingRun {
         Fixture.reset()
         let successParent=Diagnostics.Operation("required_analysis")
         await Diagnostics.$current.withValue(successParent){
-            ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
+            await ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
             check(Diagnostics.current === successParent,"optional wrappers restore the parent's task-local context")
         }
         check(Fixture.state.withLock{$0.collected}==1 && Fixture.state.withLock{$0.published}==1
@@ -121,8 +121,8 @@ enum ProcessingRun {
         let cancelled=Task { @MainActor in
             await Diagnostics.$current.withValue(cancellationParent){
                 let content=await ProactiveCycle.collectWritingStyle()
-                ProactiveCycle.publishWritingStyle(content)
-                ProactiveCycle.publishWritingStyle("must not publish after cancellation")
+                await ProactiveCycle.publishWritingStyle(content)
+                await ProactiveCycle.publishWritingStyle("must not publish after cancellation")
                 return Task.isCancelled
             }
         }
@@ -134,7 +134,7 @@ enum ProcessingRun {
 
         Fixture.reset();Fixture.state.withLock{$0.existing=true}
         _=await ProactiveCycle.collectWritingStyle()
-        ProactiveCycle.publishWritingStyle(nil)
+        await ProactiveCycle.publishWritingStyle(nil)
         check(Fixture.state.withLock{$0.collected}==0 && Fixture.state.withLock{$0.published}==0,
               "existing style and nil optional output cause no collection or publication")
         print("Writing diagnostic isolation: \(checks) checks passed")

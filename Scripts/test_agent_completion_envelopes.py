@@ -44,9 +44,11 @@ nonisolated enum CodexCLI {
     }
 __CODEX__
 }
+nonisolated enum ClaudeAuth { static func authenticationFailure(_ detail: String) -> Error? { nil } }
 nonisolated enum ClaudeCLI {
     static let usageLimitMarkers = ["usage limit", "rate limit"]
-    static func noteRateLimit(_ info: [String: Any]) {}
+    nonisolated(unsafe) static var recordedLimits = 0
+    static func noteRateLimit(_ info: [String: Any]) { recordedLimits += 1 }
 __CLAUDE__
 }
 '''
@@ -119,6 +121,25 @@ import Foundation
         rejects("Claude terminal failure wins existing text") { _ = try ClaudeCLI.parseEnvelope(out([initClaude, error, ordinary]), durationMS: 1, completion: .done) }
         let structured = json(["type":"result", "subtype":"success", "is_error":false, "structured_output":["answer":42]])
         check(try ClaudeCLI.parseEnvelope(out([initClaude, structured]), durationMS: 1).result.contains("42"), "Claude schema payload remains available without receipt")
+        for code in ["daily_time_exhausted", "usage_limit_reached"] {
+            let failure = json(["type":"result", "is_error":true, "errors":[code + " synthetic-secret"]])
+            do { _ = try ClaudeCLI.parseEnvelope(out([initClaude, failure], status: 1), durationMS: 1, hosted: true); preconditionFailure("hosted cap accepted") }
+            catch CodexCLI.CLIError.usageLimit(let message, let session) {
+                check(!message.contains("synthetic-secret") && session == "claude-fixture", "hosted cap is safe and retains resume identity")
+            }
+        }
+        for code in ["service_budget_reached", "upstream_rate_limited", "run_expired", "authentication_required"] {
+            let failure = json(["type":"result", "is_error":true, "errors":[code + " synthetic-secret"]])
+            do { _ = try ClaudeCLI.parseEnvelope(out([initClaude, failure], status: 1), durationMS: 1, hosted: true); preconditionFailure("hosted failure accepted") }
+            catch CodexCLI.CLIError.exitFailure(_, let message) {
+                check(!message.contains("synthetic-secret"), "hosted service failures remain distinct from a user quota and redact detail")
+            }
+        }
+        let rejected = json(["type":"rate_limit_event", "rate_limit_info":["status":"rejected", "resetsAt":12345]])
+        rejects("hosted limit fails") { _ = try ClaudeCLI.parseEnvelope(out([initClaude, rejected, error]), durationMS: 1, hosted: true) }
+        check(ClaudeCLI.recordedLimits == 0, "hosted limits do not poison subscription reset cache")
+        rejects("subscription limit fails") { _ = try ClaudeCLI.parseEnvelope(out([initClaude, rejected, error]), durationMS: 1) }
+        check(ClaudeCLI.recordedLimits == 1, "subscription reset behavior preserved")
         print("PASS \(checks) production envelope completion assertions")
     }
 }

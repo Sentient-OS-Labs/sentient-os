@@ -299,10 +299,7 @@ final class CodexSetup {
         // The one idle tick keeps EVERY managed engine CLI current — ClaudeSetup self-guards
         // (only while Claude is the backend, only the managed binary, once a day).
         Task { await ClaudeSetup.shared.updateIfDue(trigger: "idle") }
-        // Keep the dedicated connector action policies classified: the chips + every
-        // detected connector. Self-guards (Claude backend only) and cache hits are free, so
-        // this is one-time work per CLI version, done while the user is away.
-        Task { await ConnectorClassifier.sweepActionConnectors() }
+
     }
 
     /// A compatibility failure remains visible until a repair succeeds. An intact pinned release

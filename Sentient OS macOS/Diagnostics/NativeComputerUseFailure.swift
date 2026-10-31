@@ -14,8 +14,9 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case windowNotFoundForID, windowNotFoundAtPosition, failedToGetWindowIDForElement
         case blockedByPolicy, missingImage, invalidImage, malformedResponse, responseTooLarge
         case unexpectedEOF, processExited, requestTimedOut, unexpectedRequest, launchFailed, writeFailed
-        case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall
+        case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall, duplicateRequest
         case imageEncodingFailed, displayUnavailable, invalidArguments, testWindowNotObserved
+        case testWindowNotCurrentBeforeRead, testWindowNotCurrentAfterRead, testWindowMarkerMissing
         case focusChanged, inputInterrupted, elementUnavailable
         // Legacy diagnostic values only; no Chromium-specific runtime policy.
         case chromiumAppChanged, chromiumRecoveryExhausted
@@ -32,11 +33,44 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
     var stderrCode: Int?
     // A bounded tool-error excerpt for the model only. Never included in diagnostic fields.
     var modelError: String?
+    // Original failed response, retained locally and forwarded to the agent. Never in fields.
+    var rawError: Data?
     // A transport error can occur after an action was dispatched; retain that fact
     // separately from the diagnostic stage without deciding how the agent proceeds.
     var actionEffectsUnconfirmed: Bool?
 
     var effectsMayBeUnknown: Bool { actionEffectsUnconfirmed ?? (stage == .action) }
+
+    /// These failures can leave the native session unusable while its RPC process still runs.
+    /// A subsequent explicit read may open a new session. App/element errors need fresh state,
+    /// and permission failures need consent, so neither belongs to connection recovery.
+    var permitsSessionRecovery: Bool {
+        guard !requiresSystemPermissionSetup else { return false }
+        switch detail {
+        case .disconnected, .unexpectedEOF, .processExited, .writeFailed, .requestTimedOut,
+             .senderNotAuthenticated, .timeoutReached,
+             .screenshotCaptureFailed, .screenCaptureFailed, .unknownCaptureFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Only native system-grant failures open permission setup. Auth, app approvals, policy,
+    /// window/capture failures and timeouts are separate recovery paths.
+    var requiresSystemPermissionSetup: Bool {
+        guard ![.senderNotAuthenticated, .approvalDenied, .blockedByPolicy].contains(detail) else { return false }
+        return code == -10009 || code == -10014
+            || (["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(systemDomain ?? "")
+                && systemCode == -3801)
+    }
+
+    /// An owned capability check was interrupted or its marker was not observed. None of
+    /// these local proof failures establishes that an operating-system grant was denied.
+    var isReadinessInterruption: Bool {
+        [.testWindowNotObserved, .testWindowNotCurrentBeforeRead,
+         .testWindowNotCurrentAfterRead, .testWindowMarkerMissing].contains(detail)
+    }
 
     var modelGuidance: String {
         "This step did not complete as expected; it does not end the task. User clicks, typing or Space changes can interrupt computer use. Pause briefly, re-query the app with get_app_state and retry using fresh controls when appropriate. "
@@ -68,9 +102,9 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
 
     var errorDescription: String? {
         return switch kind {
-        case .capture: "Sidekick couldn’t capture the app’s window. Check Screen Recording access in Permissions & Health, then try again."
+        case .capture: "Sidekick couldn’t capture the app’s window. Check Screen Recording access in Permissions & Help, then try again."
         case .noWindows: "Sidekick couldn’t find a readable window. Keep the app open on your current desktop, then try again."
-        case .permission: "Computer use could not access the app. Check its permissions in Permissions & Health."
+        case .permission: "Computer use could not access the app. Check its permissions in Permissions & Help."
         case .connection: "Computer use lost its connection. Try the task again."
         case .timeout: "Computer use took too long to read the window. Keep the app open on your current desktop, then try again."
         case .unknown: "Sidekick couldn’t complete this computer-use step."
@@ -184,6 +218,7 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
                            rpcCode: codes.first(where: { (-32768 ... -32000).contains($0) }),
                            systemDomain: structuredDomain, systemCode: structuredCode)
         if explicitError(value) {
+            failure.rawError = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
             failure.modelError = texts.first(where: {
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{")
             }).map { String(decoding: $0.utf8.prefix(2048), as: UTF8.self) }
@@ -198,6 +233,10 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         if ["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(failure.systemDomain ?? ""),
            failure.systemCode == -3801 {
             failure.kind = .permission; failure.detail = .permissionDenied
+        }
+        if ["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain"].contains(failure.systemDomain ?? ""),
+           failure.systemCode == -3811 {
+            failure.kind = .capture; failure.detail = .screenCaptureFailed
         }
         return failure
     }

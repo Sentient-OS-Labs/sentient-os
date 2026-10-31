@@ -18,6 +18,15 @@ extension URL {
     /// background helpers alike (the cycle store, the disk-space guard, the model download).
     nonisolated static var sentientSupport: URL {
         #if DEBUG
+        if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "hostedconnectors" {
+            guard let path = ProcessInfo.processInfo.environment["LAB_HOSTED_CONNECTOR_ROOT"] else { preconditionFailure("Missing connector fixture root") }
+            let root = URL(fileURLWithPath: path).standardizedFileURL
+            guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-connectors-"),
+                  (try? String(contentsOf: root.appendingPathComponent(".fixture"), encoding: .utf8)) == "1\n" else { preconditionFailure("Invalid connector fixture root") }
+            let directory = root.appendingPathComponent("support")
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            return directory
+        }
         // The native prompt-path acceptance lab must redirect storage before AppState creates
         // its conversation singleton. A different bundle ID alone does not isolate this path.
         // Fail closed: an incomplete fixture configuration must never open real app data.

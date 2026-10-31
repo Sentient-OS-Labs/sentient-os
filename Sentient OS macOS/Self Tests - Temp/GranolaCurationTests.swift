@@ -388,20 +388,22 @@ enum GranolaCurationTests {
                 "The user has a project. [M1]\nACTION ITEMS\nDo something.",
                 "The user has a project at https://example.test [M1]", "The user emailed person@example.test [M1]",
                 "You agreed to review the draft. [M1]", "The user committed $500. [M1]", "The user needs your help. [M1]"] {
-                rejects("invalid citations, attribution or privacy refused") { _ = try GranolaSource.parseSummary(envelope(bad, action: bad.contains("ACTION ITEMS")), meetings: notes, mode: .initial, slug: "granola") }
+                check(try GranolaSource.parseSummary(envelope(bad, action: bad.contains("ACTION ITEMS")), meetings: notes, mode: .initial, slug: "granola").result != nil,
+                      "source-marker and wording differences do not reject a usable summary")
             }
-            rejects("invented count") { _ = try GranolaSource.parseSummary(envelope("The user has a project. [M1]", items: 2), meetings: notes, mode: .initial, slug: "granola") }
+            check(try GranolaSource.parseSummary(envelope("The user has a project. [M1]", items: 2), meetings: notes, mode: .initial, slug: "granola").itemCount == notes.count,
+                  "summary uses the native fetched count without requiring model agreement")
             check(try GranolaSource.parseSummary(envelope(""), meetings: notes, mode: .initial, slug: "granola").result == nil, "quiet content result stays empty")
-            rejects("word budget") { _ = try GranolaSource.parseSummary(envelope("The user " + String(repeating: "word ", count: 201) + "[M1]"), meetings: notes, mode: .initial, slug: "granola") }
+            check(try GranolaSource.parseSummary(envelope("The user " + String(repeating: "word ", count: 201) + "[M1]"), meetings: notes, mode: .initial, slug: "granola").result != nil,
+                  "word budget remains prompt guidance")
 
             check(GranolaSource.shouldRetrySummary(CodexCLI.CLIError.exitFailure(code: 1, message: "StructuredOutput error: Output does not match required schema")), "actual structured-output failure gets one bounded summary retry")
             check(GranolaSource.shouldRetrySummary(CodexCLI.CLIError.badEnvelope("malformed output")), "malformed tool-free envelope can retry")
             check(!GranolaSource.shouldRetrySummary(CodexCLI.CLIError.exitFailure(code: 1, message: "auth unavailable")), "other CLI exits do not retry")
             check(!GranolaSource.shouldRetrySummary(DirectMCPError.connectionChanged), "changed source identity cannot retry")
             check(!GranolaSource.shouldRetrySummary(CancellationError()), "cancelled summary cannot retry")
-            rejects("live note-taking opener cannot replace a substantive summary") {
-                _ = try GranolaSource.parseSummary(envelope("The user recorded that draft review was deferred. [M1]"), meetings: notes, mode: .iterative, slug: "granola")
-            }
+            check(try GranolaSource.parseSummary(envelope("The user recorded that draft review was deferred. [M1]"), meetings: notes, mode: .iterative, slug: "granola").result != nil,
+                  "note-taking opener does not reject a useful read")
             let tools = try fixtureTools()
             check(GranolaSource.supportsSurface(tools), "current reviewed tool shape")
             check(!GranolaSource.supportsSurface(tools.filter { $0.name != "get_account_info" }), "missing identity capability blocks reader")
@@ -524,7 +526,7 @@ enum GranolaCurationTests {
         for (command, services, expected) in cases {
             let route = await CommandRouter.route(command, services: services)
             let actual: String?
-            switch route { case .computer: actual = nil; case .connector(let slug, _, _, _, _): actual = slug }
+            switch route { case .computer: actual = nil; case .connector(let slug, _, _, _, _, _): actual = slug }
             let passed = actual == expected
             if !passed { failures += 1 }
             records.append(["command": command, "expected": expected ?? "computer", "actual": actual ?? "computer", "passed": passed])

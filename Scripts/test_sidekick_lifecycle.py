@@ -2,6 +2,8 @@
 """Exercise complete production Sidekick lifecycle types with inert providers/platforms.
 Uses isolated SQLite/defaults, real Swift Tasks/recovery continuations and cancellation barriers.
 No source extraction, app/UI launch, real provider, screen capture, credentials, or telemetry.
+SENTIENT_TEST_SOURCE_ROOT optionally selects a different checkout's production Swift sources;
+fixture support and assertions always come from this script's checkout.
 """
 from pathlib import Path
 import subprocess
@@ -9,14 +11,15 @@ import tempfile
 import os
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = ROOT / "Sentient OS macOS"
+PRODUCTION_ROOT = Path(os.environ.get("SENTIENT_TEST_SOURCE_ROOT", ROOT)).resolve()
+APP = PRODUCTION_ROOT / "Sentient OS macOS"
 SUPPORT = r'''
 import Foundation
 import Observation
 import Synchronization
 
 nonisolated enum ModelBackend: String, Sendable {
-    case chatgpt, claude, custom
+    case chatgpt, claude, custom, sentient
     @TaskLocal static var runOverride: Self?
     static var current: Self { runOverride ?? .claude }
 }
@@ -49,18 +52,15 @@ extension URL { nonisolated static var sentientSupport: URL { URL(fileURLWithPat
 nonisolated enum SlackConnector { enum Operation: Sendable { case write } }
 nonisolated enum OutlookMailConnector { static let slug = "outlook-mail"; enum Operation: Sendable { case write } }
 nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"; enum Operation: Sendable { case write } }
-@MainActor enum CommandRouter {
-    enum Route { case computer, connector(String, String, SlackConnector.Operation?, OutlookMailConnector.Operation?, OutlookCalendarConnector.Operation?) }
-    static var isActive = false
-    static func route(_ task: String, cardContext: String, standingInstructions: String) async -> Route { .computer }
-    static func recordOutcome(route: String, slug: String?, ms: Int, fellBack: Bool) { }
-}
+nonisolated enum ClaudeAuth { struct LoginRequired: Error {} }
+nonisolated enum HostedConnectorAuthorization { static func authorize(_ command: String) async throws {} }
 nonisolated enum CodexCLI {
     enum Effort: Sendable { case medium }
     struct Invocation: Sendable {
         let prompt: String
         var feature = "", effort: Effort = .medium, webSearch = false
         var timeout: TimeInterval = 600
+        var hostedConnectorMode = "read"
         var mcpActionServer: String?
         var slackOperation: SlackConnector.Operation?
         var outlookOperation: OutlookMailConnector.Operation?
@@ -81,10 +81,10 @@ nonisolated enum CodexCLI {
         return Fixture.response
     }
     static func run(_ invocation: CodexCLI.Invocation, onLine: @escaping @Sendable (String) -> Void) async throws -> CodexCLI.Envelope {
-        .init(result: try await runAgentCommand(invocation.prompt, imagePaths: [], onLine: onLine))
+        fatalError("Sidekick must not start a separate connector-only model run")
     }
 }
-nonisolated enum ConnectorRegistry { static func connectedServicesBlock() -> String { "" } }
+nonisolated enum ConnectorRegistry { static func connectedServicesBlock() -> String { "CONNECTED SERVICES: fixture-mail, fixture-calendar, fixture-notes" } }
 nonisolated enum ConnectorClassifier { static func ensureClassified(slug: String) async { } }
 nonisolated enum CodexTrigger: Sendable { case sidekick; @TaskLocal static var current: Self = .sidekick }
 nonisolated enum VaultGenerator { static var vaultRoot: URL { URL(fileURLWithPath: ProcessInfo.processInfo.environment["FIXTURE_EMPTY_VAULT"]!) } }
@@ -513,6 +513,58 @@ import SQLite3
         model.recovery.cancel()
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
+    static func hostedCleanupCompletion(root: URL, defaults: UserDefaults) async throws {
+        let conversation = SidekickConversation(url: root.appendingPathComponent("hosted-cleanup.sqlite"), defaults: defaults)
+        let model = CommandRunModel(conversation: conversation)
+        let store = conversation.store!
+        let baselineCalls = Fixture.providerCalls
+        defer { Fixture.provider = nil; Fixture.providerCalls = baselineCalls }
+        var finishes = 0
+        model.onFinished = { _ in finishes += 1 }
+        Fixture.provider = { _ in "Hosted provider finished.\nSTATUS: DONE" }
+        for shouldStop in [false, true] {
+            let enteredCleanup = Latch(), releaseCleanup = Latch()
+            let previousFinishes = finishes, previousCalls = Fixture.providerCalls
+            ModelBackend.$runOverride.withValue(.sentient) {
+                HostedInference.$afterOperation.withValue({
+                    await enteredCleanup.signal()
+                    await releaseCleanup.wait() // intentionally ignores task cancellation while draining
+                }) {
+                    model.start(shouldStop ? "Stop during hosted cleanup" : "Complete hosted cleanup", mode: .computer)
+                }
+            }
+            let taskID = model.runID
+            await enteredCleanup.wait()
+            try check(model.isRunning && model.runID == taskID && Fixture.providerCalls == previousCalls + 1,
+                "hosted provider success retains task ownership until withRun cleanup returns")
+            try check(try finishes == previousFinishes && store.records(taskID: taskID).allSatisfy { $0.event.kind != .taskFinished },
+                "hosted provider outcome cannot publish a terminal history event or callback before cleanup")
+            let sequence = try store.latestSequence
+            model.start("Must not overlap hosted cleanup", mode: .computer)
+            await Task.yield()
+            try check(try model.runID == taskID && store.latestSequence == sequence && Fixture.providerCalls == previousCalls + 1,
+                "hosted cleanup lock rejects a new command without creating history or another provider call")
+            if shouldStop {
+                model.stop(); model.stop()
+                try check(model.isRunning && model.statusLine == "Stopping…" && finishes == previousFinishes,
+                    "Stop during hosted cleanup stays owned and waits for the drain")
+                try check(try store.records(taskID: taskID).allSatisfy { $0.event.kind != .taskFinished },
+                    "Stop during hosted cleanup does not prematurely persist a terminal outcome")
+            }
+            await releaseCleanup.signal()
+            try await eventually { !model.isRunning }
+            let records = try store.records(taskID: taskID)
+            let terminals = records.filter { $0.event.kind == .taskFinished }
+            try check(terminals.count == 1 && terminals.first?.event.outcome == (shouldStop ? .stopped : .success),
+                "cleanup records exactly one final outcome; cancellation beats deferred provider success")
+            try check(finishes == previousFinishes + 1 && !model.recovery.isPending,
+                "hosted cleanup releases the task and invokes its completion callback exactly once")
+            await Task.yield()
+            try check(try store.records(taskID: taskID).filter { $0.event.kind == .taskFinished }.count == 1,
+                "late hosted completion cannot duplicate the terminal history event")
+        }
+        conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+    }
     static func networkRecovery(root: URL, defaults: UserDefaults) async throws {
         let conversation = SidekickConversation(url: root.appendingPathComponent("network-recovery.sqlite"), defaults: defaults)
         let model = CommandRunModel(conversation: conversation)
@@ -602,13 +654,94 @@ import SQLite3
         try check(!model.isRunning && !model.isOffline, "late network updates cannot revive finished task")
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
+    static func directAgentDispatch(root: URL, defaults: UserDefaults) async throws {
+        let conversation = SidekickConversation(url: root.appendingPathComponent("direct-dispatch.sqlite"), defaults: defaults)
+        let model = CommandRunModel(conversation: conversation)
+        let baseline = Fixture.providerCalls
+        defer { Fixture.provider = nil; Fixture.providerCalls = baseline }
+        var seen: [String] = []
+        Fixture.provider = { prompt in
+            seen.append(prompt)
+            try check(prompt.contains("fixture-mail") && prompt.contains("fixture-calendar"),
+                      "Main agent retains connected-service context")
+            return "Fixture task completed.\nSTATUS: DONE"
+        }
+        for backend in [ModelBackend.chatgpt, .claude, .custom, .sentient] {
+            for request in ["Find my invoice in fixture-mail", "Read fixture-notes and create a calendar event", "Open Calculator"] {
+                let previous = Fixture.providerCalls
+                ModelBackend.$runOverride.withValue(backend) { model.start(request, mode: .computer) }
+                let taskID = model.runID
+                try await eventually { !model.isRunning }
+                try check(Fixture.providerCalls == previous + 1 && seen.last?.contains(request) == true,
+                          "Every request starts exactly one main agent on \(backend)")
+                try check(try conversation.store!.records(taskID: taskID).last?.event.outcome == .success,
+                          "Direct main-agent completion preserves conversation outcome")
+            }
+        }
+        conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+    }
+
+    static func cardReplyDispatch(root: URL, defaults: UserDefaults) async throws {
+        let conversation = SidekickConversation(url: root.appendingPathComponent("card-reply.sqlite"), defaults: defaults)
+        let model = CommandRunModel(conversation: conversation)
+        let baseline = Fixture.providerCalls
+        defer { Fixture.provider = nil; Fixture.providerCalls = baseline }
+        let card = SidekickConversationEvent.CardReference(snapshotID: UUID(), cardID: "reply-card", title: "Reply to the planning email",
+            summary: "A follow-up is ready to send.", service: "Gmail", recipient: "reviewed@example.test", content: "The reviewed draft.",
+            actionJSON: #"{"recipient":"reviewed@example.test","preparedContent":"The reviewed draft."}"#)
+        let reference = SidekickConversationEvent.ReplyReference(card: card)
+        var preflights = 0, completions: [CommandRunModel.Outcome] = []
+        Fixture.provider = { prompt in
+            try check(prompt.contains("Do this for me."), "Card uses the same main-agent request prompt")
+            let context = SidekickInteraction.current!.historyContext
+            try check(context.contains(card.actionJSON) && context.contains("SELECTED PROACTIVE CARD"), "Main agent receives exact reviewed card data")
+            return "Sent the reviewed reply.\nSTATUS: DONE"
+        }
+        model.start("Do this for me.", mode: .computer, source: "proactive_card", reply: reference,
+                    preflight: { preflights += 1 }, onCompletion: { completions.append($0) })
+        let taskID = model.runID
+        try check(model.activeCardID == card.cardID && !model.isExternal, "Card belongs to the regular main-agent task")
+        try await eventually { !model.isRunning }
+        let records = try conversation.store!.records(taskID: taskID)
+        let request = records.first { $0.event.kind == .userMessage }!.event
+        try check(request.text == "Do this for me." && request.reply?.card == card, "Transcript stores readable request and durable reply preview")
+        try check(preflights == 2 && completions == [.success] && Fixture.providerCalls == baseline + 1, "Preflight surrounds setup; one main agent and completion run")
+        let encoded = try JSONEncoder().encode(request)
+        try check(try JSONDecoder().decode(SidekickConversationEvent.self, from: encoded).reply?.card == card, "Card reply survives serialization")
+        do {
+            _ = try conversation.store!.append(.init(taskID: UUID(), kind: .userMessage, text: "Bad reference",
+                reply: .init(messageID: "wrong-card-reference", card: card)))
+            fatalError("Mismatched card reference accepted")
+        } catch SidekickConversationStore.Failure.invalidReply { checks += 1 }
+        do {
+            _ = try conversation.store!.append(.init(taskID: UUID(), kind: .answer, text: "Bad answer", reply: reference))
+            fatalError("Card reference accepted as a question answer")
+        } catch SidekickConversationStore.Failure.invalidReply { checks += 1 }
+
+        let historical = SidekickContext.build(records: records, summaries: [])
+        try check(historical.prompt.contains("reviewed@example.test"), "Later conversation context retains selected card details")
+        let oldReply = try JSONDecoder().decode(SidekickConversationEvent.ReplyReference.self, from: Data(#"{"messageID":"old-message","selectedText":"quote"}"#.utf8))
+        try check(oldReply.card == nil && oldReply.selectedText == "quote", "Existing message replies remain compatible")
+        var failedCompletions: [CommandRunModel.Outcome] = []
+        struct ChangedCard: LocalizedError { var errorDescription: String? { "This card's account changed." } }
+        model.start("Do this for me.", mode: .computer, source: "proactive_card", reply: reference,
+                    preflight: { throw ChangedCard() }, onCompletion: { failedCompletions.append($0) })
+        try await eventually { !model.isRunning }
+        try check(Fixture.providerCalls == baseline + 1 && failedCompletions == [.failed], "Stale card preflight blocks execution and retains the suggestion")
+        model.recovery.cancel()
+        conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
+    }
+
     static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sidekick-lifecycle-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let suite = "sidekick-lifecycle-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
+        try await cardReplyDispatch(root: root, defaults: defaults)
+        try await directAgentDispatch(root: root, defaults: defaults)
         try await completionContract(root: root, defaults: defaults)
+        try await hostedCleanupCompletion(root: root, defaults: defaults)
         try await networkRecovery(root: root, defaults: defaults)
         try await recoveryPresentation(root: root, defaults: defaults)
         try await clearChat(root: root, defaults: defaults)
@@ -639,7 +772,7 @@ import SQLite3
         }
         model.ownExternalTask(work, cardID: "fixture-card")
         await started.wait()
-        try check(model.externalCardID == "fixture-card", "app model owns proactive task identity")
+        try check(model.activeCardID == "fixture-card", "app model owns proactive task identity")
         do { _ = try conversation.begin(request: "Cannot recover a live producer", source: "fixture", taskID: UUID()); fatalError("conversation accepted overlapping producer") }
         catch { checks += 1 }
         try check(try store.records(taskID: first).allSatisfy { $0.event.kind != .taskFinished }, "before-begin orphan repair cannot terminate a legitimate active task")
@@ -657,7 +790,7 @@ import SQLite3
         await allowCleanup.signal(); await work.value
         let drained = await drain.value
         try check(drained, "teardown confirms owned task drained")
-        try check(!model.isRunning && model.externalCardID == nil && finishes == 1, "cleanup releases lock exactly once")
+        try check(!model.isRunning && model.activeCardID == nil && finishes == 1, "cleanup releases lock exactly once")
         try check(conversation.latestActivity == nil, "terminal task clears live notch activity")
         let firstRecords = try store.records(taskID: first)
         try check(firstRecords.last?.event.outcome == .stopped, "latched user Stop beats late success")
@@ -956,7 +1089,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
     names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
-    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift"]
+    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift", ROOT / "Scripts/Fixtures/HostedInferenceStub.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault"), "FIXTURE_PERMISSION_SUPPORT": str(tmp / "permission-support")})

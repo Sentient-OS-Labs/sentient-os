@@ -62,6 +62,7 @@ actor ProactiveCycle {
         Proactive.clear()
         ProactiveResearch.clear()
         GiftLetter.clear()
+        try? VaultMergeCheckpoint().clear()
         UserDefaults.standard.removeObject(forKey: lastCycleKey)
     }
 
@@ -121,7 +122,15 @@ actor ProactiveCycle {
 
             let giftPreexisted = GiftLetter.latest() != nil
             let needsWelcome = GiftLetter.needsWelcome()
-            var consumedSourceIDs = Set<String>()
+            let mergeCheckpoint = ModelBackend.current == .sentient || InitialAnalysisRecovery.replayCloudStages
+                || FileManager.default.fileExists(atPath: VaultMergeCheckpoint().file.path)
+                ? VaultMergeCheckpoint() : nil
+            let mergeInputs = notes.map { VaultMergeCheckpoint.Input(sourceID: $0.sourceID, kind: $0.kind.rawValue,
+                folder: $0.folder, title: $0.title, text: $0.text, itemDate: $0.itemDate) }
+            let merged = mergeCheckpoint?.coveredSourceIDs(in: mergeInputs,
+                vaultFingerprint: (try? VaultValidation.fingerprint(VaultGenerator.vaultRoot)) ?? "") ?? []
+            let mergeNotes = notes.filter { !merged.contains($0.sourceID) }
+            var consumedSourceIDs = merged
             if !notes.isEmpty {
                 // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
                 let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
@@ -143,11 +152,17 @@ actor ProactiveCycle {
                 // happened. A build failure returns below, which cancels the collection with it.
                 async let writingStyle = Self.collectWritingStyle()
                 do {
-                    if exists { _ = try await VaultCloud.shared.update(notes: notes, onProgress: phase, onLine: onLine) }
-                    else      { _ = try await VaultCloud.shared.create(notes: notes, onProgress: phase, onLine: onLine) }
-                    consumedSourceIDs = await VaultCloud.shared.lastConsumedSourceIDs
-                    Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
-                                     parameters: ["newSummaries": "\(notes.count)"])
+                    if !mergeNotes.isEmpty {
+                        if exists { _ = try await VaultCloud.shared.update(notes: mergeNotes, onProgress: phase, onLine: onLine) }
+                        else      { _ = try await VaultCloud.shared.create(notes: mergeNotes, onProgress: phase, onLine: onLine) }
+                        consumedSourceIDs.formUnion(await VaultCloud.shared.lastConsumedSourceIDs)
+                        Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
+                                         parameters: ["newSummaries": "\(mergeNotes.count)"])
+                    }
+                    if let mergeCheckpoint {
+                        try mergeCheckpoint.recordSuccessfulMerge(inputs: mergeInputs, consumedSourceIDs: consumedSourceIDs,
+                            resultingVaultFingerprint: VaultValidation.fingerprint(VaultGenerator.vaultRoot))
+                    }
                 } catch {
                     Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
                     // half-edited vault isn't dirty; summaries kept
@@ -156,6 +171,15 @@ actor ProactiveCycle {
                 }
                 guard !Task.isCancelled else { return nil }
                 await Self.publishWritingStyle(await writingStyle)
+                if let mergeCheckpoint {
+                    do {
+                        try mergeCheckpoint.recordSuccessfulMerge(inputs: mergeInputs, consumedSourceIDs: consumedSourceIDs,
+                            resultingVaultFingerprint: VaultValidation.fingerprint(VaultGenerator.vaultRoot))
+                    } catch {
+                        return await Self.fail("Knowledge recovery: \(Self.msg(error))", error: error, stage: .vault,
+                                               scheduled: scheduled, progress: progress)
+                    }
+                }
                 guard !Task.isCancelled else { return nil }
                 await Notify.connectorsUnavailable(unavailableConnectors)
                 await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
@@ -229,6 +253,11 @@ actor ProactiveCycle {
             // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
             guard !Task.isCancelled else { return nil }
             await CycleStore.shared.wipeNotes(sourceIDs: consumedSourceIDs)
+            // A failed database wipe retains summaries. Keep their merge checkpoint as well,
+            // so retrying cleanup cannot spend hosted inference on the same successful merge.
+            if !(await CycleStore.shared.notes()).contains(where: { consumedSourceIDs.contains($0.sourceID) }) {
+                try? mergeCheckpoint?.clear()
+            }
             if Diagnostics.current?.hasFailure == true {
                 Diagnostics.report(.cycleIncomplete, phase: .complete, reason: "completed_with_diagnostics", flags: [.partial: true])
             }
@@ -268,16 +297,16 @@ actor ProactiveCycle {
         guard initial, !WritingStyle.exists() else { return nil }
         // Samples are optional. Retain their own diagnostics without marking the required
         // analysis operation failed when this independent enrichment cannot be collected.
-        return await Diagnostics.$current.withValue(nil) {
+        return await Diagnostics.withOperation("writing_style_setup", propagatesFailure: false) {
             do { return try await WritingStyle.collect() }
             catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
         }
     }
 
     /// Land collected samples in the knowledge base, which exists by the time this is called.
-    @MainActor static func publishWritingStyle(_ content: String?) {
+    @MainActor static func publishWritingStyle(_ content: String?) async {
         guard !Task.isCancelled, let content else { return }
-        Diagnostics.$current.withValue(nil) {
+        await Diagnostics.withOperation("writing_style_publish", propagatesFailure: false) {
             do { try WritingStyle.publishIfNeeded(content) }
             catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
         }
