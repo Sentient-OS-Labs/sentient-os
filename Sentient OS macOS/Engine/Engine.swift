@@ -113,7 +113,7 @@ actor Engine {
     }
 
     /// One stateless generation: fresh Conversation, optional image + prompt → text.
-    func generate(prompt: String, imageData: Data? = nil) async throws -> Result {
+    func generate(prompt: String, imageData: Data? = nil, samplingSeed: Int = 0) async throws -> Result {
         let diagnosticWatchdog = Diagnostics.Watchdog(phase: .generate, seconds: 300)
         defer { diagnosticWatchdog.finish() }
         guard let native else { throw EngineError.notLoaded }
@@ -123,7 +123,8 @@ actor Engine {
         // is the LOOPIEST setting, and LiteRT-LM has no repetition penalty, so a sliver of temperature
         // is our only lever to let the model escape gibberish-repeat grooves. `maxOutputTokens` (below)
         // is the hard backstop that bounds any loop that still slips through.
-        let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15)
+        // Calendar format retries vary the seed; other callers retain the original default.
+        let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15, seed: samplingSeed)
         // Fresh Conversation per call = a CLEAN context: no history bleed, its own KV cache.
         // It deinits at function exit (frees the native handle + KV cache), so per-file memory
         // is fully released — RAM stays flat whether it's file #1 or #500.
