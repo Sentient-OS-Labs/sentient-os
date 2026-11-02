@@ -186,6 +186,7 @@ final class ClaudeSetup {
     var loggedIn: Bool { statusLoggedIn && !ClaudeAuth.requiresVerification }
     /// The plan's display name ("Max", "Pro"…), refreshed with the login status.
     private(set) var plan: String?
+    private(set) var email: String?
     /// A login flow is in progress — the browser opened, awaiting the user to finish.
     private(set) var loggingIn = false
     private(set) var verifyingLogin = false
@@ -201,6 +202,34 @@ final class ClaudeSetup {
     private var loginStatusProbe = UUID()
     private var authRevision: UUID?
     private var verificationTask: Task<Void, Never>?
+    private(set) var signingOut = false
+
+    func signOut() async throws {
+        guard !signingOut else { return }
+        signingOut = true
+        defer { signingOut = false }
+        let verification = verificationTask
+        let login = loginProcess
+        cancelLogin()
+        _ = await verification?.value
+        if let login {
+            await Task.detached { login.waitUntilExit() }.value
+        }
+        guard let binary = ClaudeCLI.locateBinary() else {
+            throw CodexCLI.CLIError.notAvailable(.notInstalled)
+        }
+        let result = try await CodexCLI.executeAsync(binary: binary, args: ["auth", "logout"],
+            stdinText: nil, cwd: nil, timeout: 30, extraEnv: ClaudeCLI.baseEnv,
+            includeCustomProviderKey: false)
+        guard result.status == 0 else {
+            throw CodexCLI.CLIError.exitFailure(code: result.status, message: result.stderr)
+        }
+        ClaudeAuth.destroy()
+        statusLoggedIn = false
+        plan = nil
+        email = nil
+        loginStatusLine = nil
+    }
 
     /// Refresh observable UI state without spawning a status poll that could race OAuth.
     func authenticationRejected() {
@@ -211,14 +240,15 @@ final class ClaudeSetup {
     func refreshLoginStatus() async {
         // The old credential can still look logged in while OAuth is unfinished. Only the
         // owned process's successful exit starts verification; polling never completes login.
-        guard !Task.isCancelled, !loggingIn else { return }
+        guard !Task.isCancelled, !loggingIn, !signingOut else { return }
         let generation = loginGeneration
         let probe = UUID()
         loginStatusProbe = probe
         let status = await ClaudeAuth.refresh()
-        guard !Task.isCancelled, !loggingIn, generation == loginGeneration, probe == loginStatusProbe else { return }
+        guard !Task.isCancelled, !loggingIn, !signingOut, generation == loginGeneration, probe == loginStatusProbe else { return }
         statusLoggedIn = status.loggedIn
         plan = ClaudeAuth.planDisplayName
+        email = status.email
         if loggedIn {
             verificationPending = false
         }
@@ -227,6 +257,7 @@ final class ClaudeSetup {
     /// Step 2a — start the interactive login. Spawns `claude auth login` (opens the browser) and
     /// flips into the awaiting-browser state; the panels notice the finished sign-in on their own.
     func startLogin(force: Bool = false) {
+        guard !signingOut else { return }
         guard installed else { loginStatusLine = "✗ Install Claude Code first"; return }
         guard !loggingIn else { return }
         if !force, loggedIn { loginStatusLine = "✓ Already signed in"; return }

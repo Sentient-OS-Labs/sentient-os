@@ -69,15 +69,19 @@ import UniformTypeIdentifiers
         let nativeSetup = try await NativePermissionReadiness.helperSetup { tool, args in
             precondition(tool == "get_app_state")
             let target = try JSONSerialization.jsonObject(with: args) as? [String:String]
-            precondition(target == ["app":"com.apple.systempreferences"])
+            precondition(target == ["app":Bundle.main.bundleURL.path])
             return payload
         }
         check(nativeSetup.isReady,"Successful helper setup accepts an actual app read and screenshot")
-        for invalid in [["content":[image]], ["content":[["type":"text","text":"Done"]]],
-                        ["content":[["type":"text","text":"  "],image]],
+        let textOnly = try await NativePermissionReadiness.helperSetup { _,_ in
+            try JSONSerialization.data(withJSONObject:["content":[["type":"text","text":"Native app state"]]])
+        }
+        check(textOnly.accessibility == .verified && textOnly.screenRecording == .unknown,
+              "Usable native text completes the operation without inventing screenshot proof")
+        for invalid in [["content":[]],
                         ["isError":true,"content":[["type":"text","text":"Denied"],image]]] as [[String:Any]] {
             let data = try JSONSerialization.data(withJSONObject:invalid)
-            do { _ = try await NativePermissionReadiness.helperSetup { _,_ in data };fatalError("Incomplete helper setup accepted") }
+            do { _ = try await NativePermissionReadiness.helperSetup { _,_ in data };fatalError("Failed helper request accepted") }
             catch is NativeComputerUseFailure {count+=1}
         }
         for code in [-10009,-10014] {

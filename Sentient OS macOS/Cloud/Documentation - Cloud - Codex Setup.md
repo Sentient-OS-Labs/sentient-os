@@ -71,3 +71,20 @@ does not start another download or a login.
 `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`,
 `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md`,
 `Views/Permissions/Documentation - Permission Gate & Guide.md`.
+
+## Account controls and model recovery
+
+Settings → AI Models & Accounts provides Switch account and Sign out for ChatGPT and Claude.
+An explicit logout stops current AI work and withdraws subscription connector reading choices.
+The existing knowledge and independent direct/hosted connections remain available. After signing
+in, Review connected apps returns to source selection. Codex uses `logout` in its private profile.
+Claude uses `auth logout` in its existing shared installation, and the confirmation explains the
+shared Terminal sign-out.
+
+Missing plan metadata and Free/Go use Luna. A present, unfamiliar plan name tries the selected model. The Settings plan override is scoped to the current account.
+A terminal model-unavailable rejection before any task activity can retry once with Luna and
+normal service, within the original timeout. Activity or unknown stream events prevent automatic
+replay. A successful process is never reclassified from incidental error text. Explicit retries
+in Settings restore the selected model. Normal ChatGPT work tries the actual request without a
+separate inference probe. Real login/model failures retain the existing retry flow with account,
+update and support actions.

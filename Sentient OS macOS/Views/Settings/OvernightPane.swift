@@ -6,17 +6,21 @@ import AppKit
 struct OvernightPane: View {
     @Environment(AppState.self) private var appState
     @AppStorage(OvernightScheduler.minutesKey) private var wakeMinutes = OvernightScheduler.defaultMinutes
+    @AppStorage(OvernightScheduler.prodEnabledKey) private var scheduleEnabled = false
+    @AppStorage(OvernightScheduler.enabledKey) private var developerScheduleEnabled = false
     @AppStorage(CustomInstructions.proactiveKey) private var proactiveInstructions = ""
     @State private var wakeSetup = OvernightWakeSetup()
 
-    private var overnightRequested: Bool { HealthCaution.overnightRequested() }
+    private var overnightRequested: Bool {
+        scheduleEnabled || developerScheduleEnabled || appState.processing.hasPendingFirstNight
+    }
 
     @State private var checkedWake = false
     @State private var setupExpansionOverride: Bool?
 
     private var setupExpanded: Binding<Bool> {
         Binding(
-            get: { setupExpansionOverride ?? (checkedWake && !wakeSetup.ready) },
+            get: { setupExpansionOverride ?? (checkedWake && (!wakeSetup.ready || appState.scheduler.needsSchedulerSetup)) },
             set: { setupExpansionOverride = $0 })
     }
 
@@ -40,12 +44,25 @@ struct OvernightPane: View {
 
     private var scheduleCard: some View {
         VStack(alignment: .leading, spacing: 16) {
+            Toggle("Overnight analysis", isOn: Binding(
+                get: { overnightRequested },
+                set: { appState.scheduler.setEnabled($0) }))
+                .font(.system(size: 17, weight: .medium))
+                .toggleStyle(.switch)
+                .tint(Theme.Ink.green)
+                .accessibilityIdentifier("settings.overnightEnabled")
+            Text(scheduleStatus)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.overnightStatus")
+            SettingsHairline(opacity: 0.07)
             HStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Overnight time")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Theme.Ink.statusInk)
-                    Text(overnightRequested ? "Each night, in your Mac’s local time." : "Overnight analysis is currently off.")
+                    Text("Each night, in your Mac’s local time.")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Ink.body)
                 }
@@ -57,7 +74,7 @@ struct OvernightPane: View {
             DisclosureGroup(isExpanded: setupExpanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     OvernightWakeRow(setup: wakeSetup)
-                    SettingsProse("Leave Sentient open and your Mac plugged in. Changing the time doesn’t turn overnight analysis on.")
+                    SettingsProse("Leave Sentient open in the menu bar and your Mac plugged in. With wake setup complete, your first analysis and overnight runs can continue with the lid closed. Pause or resume anytime in Analysis.")
                     Button("Manage launch at login") {
                         MainNavigation.shared.show(.settings, settingsPane: .health)
                     }
@@ -77,6 +94,16 @@ struct OvernightPane: View {
         .background(Color.white.opacity(0.015), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12)
             .strokeBorder(SettingsStyle.border, lineWidth: 1))
+    }
+
+    private var scheduleStatus: String {
+        if !overnightRequested { return "Turn on to keep your knowledge up to date overnight." }
+        if appState.processing.paused { return "Analysis is paused. Resume it in Analysis to schedule the next wake." }
+        if !appState.hasCompletedPersonalSetup { return "Finish personal setup to start overnight analysis." }
+        if let next = appState.scheduler.nextWakeAt {
+            return "Next wake · \(ProcessingCoordinator.scheduleLabel(next))"
+        }
+        return appState.scheduler.statusLine
     }
 
     private var suggestionsCard: some View {

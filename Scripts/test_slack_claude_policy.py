@@ -13,7 +13,7 @@ import re
 import uuid
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from test_connector_read_policy import Fixture, make_handler, SLACK
+from test_connector_read_policy import Fixture, make_handler, tool, SLACK
 
 
 def main():
@@ -73,6 +73,8 @@ def main():
         fixture.reset()
         fixture.tools = [dict(tool, name=tool["name"].removeprefix("slack."))
                          for tool in fixture.tools if tool.get("_meta", {}).get("connector_id") == SLACK]
+        if recipe == "live-source":
+            fixture.tools.append(tool("future_read", SLACK, "future_read", True))
         fixture.force = "mcp__claude_ai_Slack__" + name
         fixture.force_args = arguments or {}
         fixture.force_count = repetitions
@@ -126,9 +128,13 @@ def main():
         run("new-write-denied", "action", "slack_future_write", [])
         run("draft-consumption-denied", "action", "slack_send_message", [], {**message, "draft_id": "existing-fixture"})
         run("broadcast-denied", "action", "slack_send_message", [], {**message, "reply_broadcast": True})
-        run("computer-send", "computer", "slack_send_message", ["slack_send_message"], message)
-        run("computer-new-write-denied", "computer", "slack_future_write", [])
-        run("computer-broadcast-denied", "computer", "slack_send_message", [], {**message, "reply_broadcast": True})
+        if recipes.get("claude-slack-computer", [None])[0] != "exec":
+            run("computer-send", "computer", "slack_send_message", ["slack_send_message"], message)
+            run("computer-new-write-denied", "computer", "slack_future_write", [])
+            run("computer-broadcast-denied", "computer", "slack_send_message", [], {**message, "reply_broadcast": True})
+        if "claude-slack-live-source" in recipes:
+            run("renamed-read", "live-source", "future_read", ["future_read"])
+            run("live-source-write-denied", "live-source", "slack_send_message", [], message)
         run("missing-helper-denied", "action", "slack_send_message", [], message, missing_helper=True)
         run("duplicate-send-denied", "action", "slack_send_message", ["slack_send_message"], message, repetitions=2)
         run("reviewed-message", "approved", "slack_send_message", ["slack_send_message"], {**message, "message": "Approved fixture"})

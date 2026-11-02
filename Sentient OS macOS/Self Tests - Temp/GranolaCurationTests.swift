@@ -428,7 +428,7 @@ enum GranolaCurationTests {
             check(try GranolaSource.discovery(xmlResult(xmlList), window: recent, owned: true).candidates.count == 1, "delayed enrichment candidate survives recent-sample window")
             check(MCPSource.promptRevision(slug: connection.slug) == MCPSource.granolaPromptRevision, "account resolves provider prompt revision")
             let prompt = MCPSource.prompt(slug: connection.slug, name: "Granola", backend: .claude, mode: .initial, window: window)
-            check(prompt.contains("You have no connector, file or browsing tools") && prompt.contains("capturedByUser"), "native evidence prompt applied to direct account")
+            check(prompt.contains("current") && prompt.contains("argument schemas") && prompt.contains("capturedByUser"), "live-tool prompt applied to direct account")
             check(ConnectorRegistry.readToolNames(slug: connection.slug).count == 2, "nightly attachment excludes transcript/query/account tools")
             let inv = MCPSource.modelInvocation(prompt: "Synthetic", schema: MCPSource.readSchema, claudeModel: nil)
             check(inv.toolsDisabled && !inv.includeUserConfig && inv.mcpReadConnectors.isEmpty, "summarizer has no inherited tools")

@@ -27,8 +27,11 @@ struct ConnectorConnectSheet: View {
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
     @AppStorage private var hostedSelected: Bool
+    @AppStorage private var pageProgress: HostedConnectorSetup.PageProgress
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
     private let hostedBackend: ModelBackend
+
+    private var hasOpenedConnectorPage: Bool { openedConnectorPage || pageProgress != .unopened }
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
          context: KnowledgeSourcesPicker.Context = .settings) {
@@ -38,11 +41,15 @@ struct ConnectorConnectSheet: View {
         _boundConnectorID = State(initialValue: source.connector?.id)
         _hostedSelected = AppStorage(wrappedValue: false,
             ConnectorRegistry.kbKey(source.connector?.slug ?? source.serviceSlug))
+        let backend: ModelBackend
         switch source.connector?.origin {
-        case .claude: hostedBackend = .claude
-        case .chatgpt: hostedBackend = .chatgpt
-        default: hostedBackend = ModelBackend.current
+        case .claude: backend = .claude
+        case .chatgpt: backend = .chatgpt
+        default: backend = ModelBackend.current
         }
+        hostedBackend = backend
+        _pageProgress = AppStorage(wrappedValue: .unopened,
+            HostedConnectorSetup.pageProgressKey(slug: source.serviceSlug, backend: backend))
     }
 
     private var connector: ConnectorCensus.DetectedConnector? {
@@ -238,7 +245,7 @@ struct ConnectorConnectSheet: View {
                         .padding(.top, 18)
                 }
             }
-            if openedConnectorPage {
+            if hasOpenedConnectorPage {
                 ConnectorActionButton(title: "Done", kind: .done, action: done)
                     .padding(.top, 14).disabled(busy)
             }
@@ -246,7 +253,7 @@ struct ConnectorConnectSheet: View {
     }
 
     private var hostedInstructions: String {
-        if openedConnectorPage {
+        if hasOpenedConnectorPage {
             return "Connect \(name) to your \(reader) account, and then come back to Sentient."
         }
         return hostedCanRead
@@ -255,7 +262,7 @@ struct ConnectorConnectSheet: View {
     }
 
     private var taskOnlyNotice: some View {
-        Text("Available for tasks. This app does not support knowledge-base analysis.")
+        Text("Sidekick can use this connection when you ask.")
             .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
             .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
     }

@@ -108,6 +108,16 @@ nonisolated enum CodexRuntime {
         return (try? readConnectorCacheIdentity()) == identity
     }
 
+    static func clearSignedOutAccountCache() throws {
+        try prepareHome()
+        let lease = try FileLock(root.appendingPathComponent(".runtime.lock"), exclusive: true)
+        defer { lease.unlock() }
+        _ = try readConnectorCacheIdentity()
+        for path in [home.appendingPathComponent("plugins/cache"), home.appendingPathComponent(".sentient-connector-account")] {
+            if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
+        }
+    }
+
     /// A cache path or marker can never redirect inspection or cleanup into a different profile.
     /// Missing directories are normal before the first connector refresh; existing links are not.
     private static func readConnectorCacheIdentity() throws -> String? {

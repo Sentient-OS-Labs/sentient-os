@@ -63,7 +63,7 @@ nonisolated enum Diagnostics {
 
     /// No source IDs or user-supplied connector labels may cross this boundary.
     static func source(_ value: String) -> String {
-        let known: Set<String> = ["file", "files", "whatsapp", "imessage", "notes", "apple_mail", "appleMail",
+        let known: Set<String> = ["file", "files", "whatsapp", "imessage", "notes", "siyuan", "apple_mail", "appleMail",
             "apple_calendar", "appleCalendar", "apple-calendar", "apple-mail", "gmail", "calendar", "google-calendar", "outlook", "outlook-mail",
             "outlook-calendar", "slack", "notion", "granola", "voice", "screen_capture", "hotkey", "mirror",
             "doubletap", "google-drive", "linear", "asana", "github", "teams", "dropbox", "box", "hubspot", "direct_connector", "provider", "invite", "mail_account", "app", "wakeHelper"]

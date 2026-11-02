@@ -53,7 +53,10 @@ fixture = '\n'.join((
     'static var plan: Plan?',
     'static var assertedPlus = false',
     'static func currentPlan() -> Plan? { plan }',
+    'enum PlanChoice { case automatic, free, paid }; static var planChoice = PlanChoice.automatic',
+    'static var usingModelFallback = false',
     member(auth, 'static func isLimited()'),
+    member(auth, 'static var usesLuna:'),
     '}',
     'struct CustomProvider {',
     'var modelName: String',
@@ -118,13 +121,13 @@ checks = r'''
                             "Claude Opus 5.5 · med thinking"]
         let claudeEfforts = ["low", "low", "medium"]
         let plans: [String?] = ["free", "go", "Free", "Go", "FREE", "GO", "plus", "pro",
-                                "prolite", "team", "business", "edu", "enterprise", "future", nil]
+                                "prolite", "promax", "team", "business", "business-premium", "edu", "enterprise", "future", nil]
 
         for raw in plans {
             CodexAuth.plan = raw.map { CodexAuth.Plan(raw: $0) }
             for assertedPlus in [false, true] {
                 CodexAuth.assertedPlus = assertedPlus
-                let limited = !assertedPlus && ["free", "go"].contains(raw?.lowercased() ?? "")
+                let limited = raw == nil || ["free", "go"].contains(raw?.lowercased() ?? "")
                 select("faster")
                 let backgroundModels: [CodexCLI.Model] = [.gpt61terra, .gpt61sol, .gpt6astra, .gpt6sol, .gpt56terra, .gpt6luna]
                 let backgroundEfforts: [CodexCLI.Effort] = [.low, .medium, .high, .xhigh]

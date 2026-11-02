@@ -12,7 +12,10 @@ import os
 
 enum ConnectorCurationTests {
     @MainActor static func run() async {
-        await ModelBackend.$runOverride.withValue(.chatgpt) { await checks() }
+        let fixtures = Dictionary(uniqueKeysWithValues: ConnectorRegistry.packs.map { ($0.slug, ConnectorReadDiscovery.Surface()) })
+        await ConnectorReadDiscovery.$current.withValue(fixtures) {
+            await ModelBackend.$runOverride.withValue(.chatgpt) { await checks() }
+        }
     }
 
     @MainActor private static func checks() async {
@@ -353,6 +356,36 @@ enum ConnectorCurationTests {
             else { check(false, "exact final DONE accepts trailing whitespace") }
             if case .couldNot = AgentStatus.parseConnector("STATUS: COULD_NOT - The content is not done") { check(true, "failure reason mentioning done remains a failure") }
             else { check(false, "failure reason mentioning done remains a failure") }
+
+            let coverage = AppleCalendarSource.Coverage(now: now, ids: ["fixture"])
+            func event(_ id: String, _ content: String) -> AppleCalendarSource.Event {
+                .init(id: id, start: now, end: now.addingTimeInterval(60), schedule: "fixture", content: content, revision: content)
+            }
+            let before = AppleCalendarSource.Snapshot(capturedAt: now, coverage: coverage,
+                events: [event("keep", "same"), event("edit", "old"), event("delete", "old")])
+            let after = AppleCalendarSource.Snapshot(capturedAt: now, coverage: coverage,
+                events: [event("keep", "same"), event("edit", "new"), event("add", "new")])
+            check(after.unchangedEventIDs(comparedTo: before) == ["keep"],
+                  "calendar reconciliation retains unchanged events while isolating additions, edits and deletions")
+            check(after.partialMarker(pending: 2).text.contains("2 events are still awaiting analysis"),
+                  "partial calendar publication states its missing coverage")
+            check(after.partialMarker(pending: 2).text.contains("do not establish free time"),
+                  "partial calendar coverage cannot imply availability")
+            var skippedCalendar = CalendarRetryCache(coverage: coverage)
+            skippedCalendar.skipped = ["keep": "same", "edit": "old", "delete": "old"]
+            skippedCalendar.validate(against: after)
+            check(skippedCalendar.skipped == ["keep": "same"], "unchanged failed calendar events stay skipped; edits and deletions clear old failures")
+            let tomorrow = AppleCalendarSource.Snapshot(capturedAt: now.addingTimeInterval(86400),
+                coverage: .init(now: now.addingTimeInterval(86400), ids: ["fixture"]), events: after.events)
+            skippedCalendar.validate(against: tomorrow)
+            check(skippedCalendar.skipped == ["keep": "same"], "rolling calendar window does not retry yesterday's failed event")
+            let mail = AppleMailRow(id: 100, account: "fixture", messageID: "fixture", date: now, excluded: false, sent: false)
+            var mailState = AppleMailCheckpoint(generation: "fixture", top: 0)
+            mailState.finish(.init(row: mail, phase: .discovery), retry: false, skipFailure: true)
+            check(mailState.deferred.isEmpty && mailState.prepare(generation: "fixture", rows: [mail], now: now).isEmpty,
+                  "failed model item is excluded from Mail retries and reconciliation")
+            let restoredMail = try JSONDecoder().decode(AppleMailCheckpoint.self, from: JSONEncoder().encode(mailState))
+            check(restoredMail.skippedRows == [100], "Mail skip survives restart")
 
             if let path = ProcessInfo.processInfo.environment["LAB_MIGRATION_STORE"] {
                 let migrated = try ModelContainer(for: schema,

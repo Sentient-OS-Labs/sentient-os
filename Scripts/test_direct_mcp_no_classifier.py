@@ -4,14 +4,23 @@ from pathlib import Path
 import subprocess,tempfile
 APP=Path(__file__).resolve().parents[1]/'Sentient OS macOS'
 source=(APP/'Connectors/DirectMCPConnections.swift').read_text()
-a=source.index('            // Provider annotations')
+a=source.index('            // Live annotations')
 b=source.index('            // Closed provider/reason',a)
 refresh=source[a:b]
+a=source.index('            let identity = DirectMCPIdentity.parse(snapshot.account)')
+b=source.index('            updated.tools = tools',a)
+identity_refresh=source[a:b]
 fixture=r'''
 import Foundation
 nonisolated enum ConnectorRegistry {struct Pack {let directProvider:DirectMCPProvider?};static let packs:[Pack]=[]}
 nonisolated enum ConnectorCensus {struct DetectedConnector {enum Origin {case direct};let slug:String;let displayName:String;let origin:Origin;let serverURL:String?;let catalogID:String?;let iconPath:String?;let healthy:Bool;let lastSeen:Date}}
 @main struct Tests {
+ static func identified(_ connection:DirectMCPConnection,account:Data?)throws->DirectMCPConnection {
+  struct Snapshot {let account:Data?}
+  let snapshot=Snapshot(account:account)
+  // IDENTITY_REFRESH
+  return updated
+ }
  static func refreshed(_ connection:DirectMCPConnection,_ tools:[DirectMCPTool])->DirectMCPConnection {
   var updated=connection;updated.tools=tools
   // REFRESH
@@ -49,11 +58,24 @@ nonisolated enum ConnectorCensus {struct DetectedConnector {enum Origin {case di
   precondition(!disconnected.connected && !disconnected.usable,"Real authentication failures still need reconnecting")
   let renamed=refreshed(current,try [tool("brand_new_name")])
   precondition(renamed.usable && renamed.actionNames==["brand_new_name"],"New inventory needs no model or exact-name rule update")
+  func profile(_ workspace:String)throws->Data {
+   try JSONSerialization.data(withJSONObject:["structuredContent":["email":"synthetic@example.test","workspace_id":workspace]])
+  }
+  var known=current
+  known.accountFingerprint=DirectMCPIdentity.parse(try profile("A"))!.fingerprint
+  known.accountLabel="Synthetic"
+  let missing=try identified(known,account:nil)
+  precondition(missing.accountFingerprint==known.accountFingerprint && missing.accountLabel==known.accountLabel,
+               "missing optional account metadata preserves the selected connection")
+  let same=try identified(known,account:profile("A"))
+  precondition(same.accountFingerprint==known.accountFingerprint)
+  do {_=try identified(known,account:profile("B"));preconditionFailure("account switch accepted")}
+  catch DirectMCPError.connectionChanged {}
   print("PASS direct MCP classifier removal and renamed-tool checks")
  }
 }
-'''.replace('// REFRESH',refresh)
+'''.replace('// REFRESH',refresh).replace('// IDENTITY_REFRESH',identity_refresh)
 with tempfile.TemporaryDirectory(prefix='sentient-no-classifier-') as directory:
  p=Path(directory);(p/'Tests.swift').write_text(fixture)
- subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','5',str(APP/'Connectors/DirectMCPModels.swift'),str(p/'Tests.swift'),'-o',str(p/'test')],check=True)
+ subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','5',str(APP/'Connectors/DirectMCPModels.swift'),str(APP/'Connectors/DirectMCPIdentity.swift'),str(APP/'Connectors/DirectMCPResult.swift'),str(p/'Tests.swift'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True)

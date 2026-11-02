@@ -40,7 +40,7 @@ nonisolated enum OutlookCalendarConnector {
         }.joined(separator: ", ")
         let entry = "{ enabled = true, default_tools_enabled = false, destructive_enabled = false, "
             + "default_tools_approval_mode = \"prompt\", tools = { \(tools) } }"
-        return exclusive ? "apps = { _default = { enabled = false }, \(id) = \(entry) }" : "apps.\(id) = \(entry)"
+        return exclusive ? "apps = { _default = { enabled = false }, \(DirectMCPRuntime.quoted(id)) = \(entry) }" : "apps.\(DirectMCPRuntime.quoted(id)) = \(entry)"
     }
 
     static func bareName(_ name: String, backend: ModelBackend) -> String? {
@@ -95,7 +95,7 @@ nonisolated enum OutlookCalendarConnector {
         let calls = MCPCallEvidence.receipts(raw: raw, backend: backend)
             .filter { bareName($0, backend: backend) == profileTool(backend) }
         guard calls.count == 1, let call = calls.first else { throw MCPSource.MCPError.connectionChanged }
-        return try OutlookMailConnector.profileIdentity(call, backend: backend, requiresUUID: false)
+        return try OutlookMailConnector.profileIdentity(call, backend: backend)
     }
     @MainActor static func readIdentity(onReceipt: MCPSource.ReceiptObserver? = nil, trackUsage: Bool = true) async throws -> Identity {
         let backend = ModelBackend.current

@@ -52,13 +52,15 @@ never enter the hosted catalog-ID fallback.
 
 Before use, Sentient refreshes the live inventory and verifies the connected account. There is
 no AI classifier. User-directed Sidekick actions receive every advertised tool; new or renamed
-tools require no hardcoded action-rule update. Background read attachments use the server's
-readOnlyHint metadata. Source-specific knowledge readers retain their own API contracts.
+tools require no hardcoded action-rule update. Background read attachments combine the server's
+readOnlyHint metadata with the provider's existing reviewed reads. Missing optional annotations
+do not hide those known reads; an explicit destructive annotation still excludes a tool.
 
 The existing policy fields are retained as inventory-cache metadata for migration. Revision 2
 is refreshed locally without inference; old classifier failures remain eligible for retry.
 Missing, partial or stale classification metadata never gates advertised action tools or a ready
-connection. Background read selection still follows the live read-only annotations.
+connection. A missing optional account tool retains the existing OAuth connection identity;
+an actual returned profile must still agree with the previously observed account.
 Connection generations, OAuth grants, cancellation and credential-lease boundaries still apply.
 Codex receives the names from the current inventory, not a separately reviewed frozen list.
 
@@ -94,9 +96,13 @@ revocation are distinct outcomes.
 The checkpoint origin includes the connection generation. BYOM can use direct connections while
 hosted account connectors retain their existing gates. The opt-in requires a connected account,
 the provider's `kbVerified` flag and reviewed read tools. The reader verifies the live policy before
-content reads; selecting the source grants no unchecked tool access. Granola's candidate surface is restricted to
-`list_meetings` and `get_meetings`, with a bounded prompt and observed read receipts. A notable
-Granola summary requires a successful content read; a quiet result requires a successful list call.
+content reads; selecting the source grants no unchecked tool access. Granola uses the shared
+MCP ingestion agent with the live read tools and argument schemas. Its prompt bounds discovery,
+content reads and the date window. The production path has no native listing-schema eligibility
+check. Connection generations, cancellation, normal result decoding and atomic checkpoint commits
+remain shared with the other MCP readers. Legacy native parsers are retained only for DEBUG
+transport/curation fixtures. A quiet result requires successful discovery, and actual provider
+failures follow the shared bounded retry and reconnect handling.
 Notion's reviewed read surface contains `notion-fetch` and `notion-list-recent-pages`. Its live
 transport check uses one recent page's metadata; that check does not enable KB ingestion.
 

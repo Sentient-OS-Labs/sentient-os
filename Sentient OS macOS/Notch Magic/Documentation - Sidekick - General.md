@@ -197,6 +197,9 @@ At dispatch, `FrontierRun` appends the selected runtime's manual once. Every act
 `OpenAIComputerUse.promptRules`; custom models also receive `CustomProvider.computerUsePromptRules`.
 Prepared direct connector attachments and their account-specific guidance follow the same dispatch.
 The native computer-use guide describes the shared snapshot → act → verify contract.
+For user-initiated computer tasks, `SidekickInteraction.websiteInstructions` covers CAPTCHAs,
+required site terms, and consent dialogs. Codex receives it as a developer instruction, and
+the Claude bridge appends the same text to its system prompt.
 
 ## The hotkey (`SidekickHotkeyMonitor`)
 

@@ -15,6 +15,13 @@ struct ConnectorSource: Identifiable {
 
     var isCurated: Bool { ConnectorRegistry.pack(forSlug: serviceSlug) != nil }
 
+    /// Presentation only. Keep supported setup routes and saved choices available to manage,
+    /// including when a connection needs repair or the current plan cannot read it.
+    var showsInKnowledgeSources: Bool {
+        let slug = connector?.slug ?? serviceSlug
+        return isCurated || ConnectorRegistry.kbEligible(slug) || ConnectorRegistry.isKBEnabled(slug)
+    }
+
     var directProvider: DirectMCPProvider? {
         ConnectorRegistry.pack(forSlug: serviceSlug)?.directProvider
     }
@@ -129,20 +136,22 @@ struct ConnectorPill: View {
     }
 
     private var detail: String? {
+        if !source.showsInKnowledgeSources { return "Connected" }
         guard !locked else { return nil }
         if source.isDirectSetup { return "Connect to Sentient" }
         if ConnectorRegistry.requiresDirectKnowledgeConnection(source.connector?.slug ?? source.serviceSlug) {
-            return knowledgeEnabled ? "Knowledge connection needed" : "Tasks only"
+            return knowledgeEnabled ? "Knowledge connection needed" : "Connect for analysis"
         }
         if ModelBackend.current == .sentient, source.connector == nil, HostedConnectorStore.services.contains(source.serviceSlug) {
             return "Connect with Sentient"
         }
         if knowledgeEnabled && !selected { return "Connection needs attention · Manage" }
-        if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Tasks only" }
+        if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Available to Sidekick" }
         return nil
     }
 
     private var status: String {
+        if !source.showsInKnowledgeSources { return "Connected to Sidekick. Open to manage this connection." }
         if locked { return CodexAuth.connectorLockedTip }
         if source.isDirectSetup { return "Connect an account directly to Sentient for knowledge analysis." }
         if ConnectorRegistry.requiresDirectKnowledgeConnection(source.connector?.slug ?? source.serviceSlug) {
@@ -156,7 +165,9 @@ struct ConnectorPill: View {
     var body: some View {
         KnowledgeSourcePill(label: source.displayName, detail: detail,
                             asset: source.logoAsset, iconPath: source.connector?.iconPath,
-                            selected: selected, featured: featured, locked: locked, action: action)
+                            selected: selected, featured: featured, locked: locked,
+                            isAction: !source.showsInKnowledgeSources,
+                            trailingSymbol: source.showsInKnowledgeSources ? nil : "chevron.right", action: action)
         .accessibilityValue(status)
         .help(status)
     }

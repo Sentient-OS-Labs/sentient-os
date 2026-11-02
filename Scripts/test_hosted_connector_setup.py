@@ -130,6 +130,45 @@ func ErrorLabel(_ error: Error) -> String { "fixture_error" }
 
 @main struct Main {
     @MainActor static func main() async throws {
+        for backend in [ModelBackend.chatgpt, .claude] {
+            for slug in ["gmail", "google-calendar", "google-drive"] {
+                await Fixture.reset()
+                ModelBackend.selected = backend
+                let key = HostedConnectorSetup.pageProgressKey(slug: slug, backend: backend)
+                let otherBackend: ModelBackend = backend == .claude ? .chatgpt : .claude
+                try Fixture.check(key.hasPrefix("mcp.")
+                    && key != HostedConnectorSetup.pageProgressKey(slug: slug, backend: otherBackend)
+                    && key != HostedConnectorSetup.pageProgressKey(slug: "another-source", backend: backend),
+                    "browser history is resettable and scoped to its source and reader")
+                HostedConnectorSetup.settingsOpened(slug: slug, backend: backend)
+                try Fixture.check(UserDefaults.standard.string(forKey: key) == "awaitingConfirmation",
+                                  "successful browser handoff survives loss of the sheet")
+                try Fixture.check(ConnectorCensus.declarations.isEmpty && Fixture.pending() == nil
+                    && !UserDefaults.standard.bool(forKey: "dbg.run.gmail")
+                    && !UserDefaults.standard.bool(forKey: "dbg.run.calendar")
+                    && !UserDefaults.standard.bool(forKey: "mcp.google-drive.kb"),
+                    "remembering a browser handoff does not select a source")
+                try Fixture.check(HostedConnectorSetup.confirm(slug: slug, backend: backend)
+                    && ConnectorCensus.declarations.last?.2 == true
+                    && UserDefaults.standard.string(forKey: key) == "confirmed",
+                    "Done from a reopened sheet completes the pending reconnect")
+                try Fixture.check(HostedConnectorSetup.confirm(slug: slug, backend: backend)
+                    && ConnectorCensus.declarations.last?.2 == false,
+                    "previous browser history does not repeatedly request backfill")
+                HostedConnectorSetup.stopReading(slug: slug, backend: backend)
+                try Fixture.check(UserDefaults.standard.string(forKey: key) == "confirmed",
+                                  "Done remains available after an explicit opt-out")
+                HostedConnectorSetup.settingsOpened(slug: slug, backend: otherBackend)
+                try Fixture.check(UserDefaults.standard.string(forKey:
+                    HostedConnectorSetup.pageProgressKey(slug: slug, backend: otherBackend)) == nil,
+                    "a stale sheet cannot create browser history for another reader")
+                await HostedConnectorSetup.beginTeardown()
+                HostedConnectorSetup.settingsOpened(slug: slug, backend: backend)
+                try Fixture.check(UserDefaults.standard.string(forKey: key) == "confirmed",
+                                  "teardown prevents late browser history writes")
+                HostedConnectorSetup.endTeardown()
+            }
+        }
         await Fixture.reset()
         try Fixture.check(HostedConnectorSetup.confirm(slug: "gmail"), "Done saves explicit selection without connection verification")
         try Fixture.check(UserDefaults.standard.bool(forKey: "dbg.run.gmail") && Fixture.pending() != nil,

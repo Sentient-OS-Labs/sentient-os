@@ -23,8 +23,20 @@ final class AgentRunDiagnostics {
     func recordHelper(running: Bool, atStart: Bool) { samples.append((running, atStart)) }
 }
 enum Permissions {
-    enum State { case granted }
-    static func nativeAutomationState() async -> State { .granted }
+    enum State { case granted, notAsked, denied, unavailable }
+    static var state: State = .granted
+    static var reads = 0
+    static func nativeAutomationState() async -> State { reads += 1; return state }
+}
+@MainActor final class ComputerUseGate {
+    static let shared = ComputerUseGate()
+    var observed: [Permissions.State] = []
+    var hold = false
+    func waitForNativeAutomation(observed state: Permissions.State) async throws {
+        observed.append(state)
+        while hold { try await Task.sleep(for: .milliseconds(5)) }
+        try Task.checkCancellation()
+    }
 }
 enum CodexRuntime {
     enum Failure: Error { case busy }
@@ -166,6 +178,25 @@ extension OpenAIComputerUseRuntime {
             fatalError("Unbounded launch failure")
         } catch OpenAIComputerUse.RuntimeError.launchFailed {}
         check(NSWorkspace.shared.launches == 3, "startup retry budget is bounded")
+
+        for permission in [Permissions.State.notAsked, .denied, .unavailable] {
+            let unconfigured = fresh()
+            Permissions.state = permission; Permissions.reads = 0
+            let task = try await unconfigured.beginTask(configuration: configuration)
+            check(Permissions.reads == 1 && ComputerUseGate.shared.observed.last == permission,
+                  "runtime passes the real Automation result to host setup after starting the helper")
+            unconfigured.endTask(task)
+        }
+        Permissions.state = .granted
+        let cancelledSetup = fresh()
+        ComputerUseGate.shared.hold = true
+        let waitingForGrant = Task { try await cancelledSetup.beginTask(configuration: configuration) }
+        try await Task.sleep(for: .milliseconds(50))
+        waitingForGrant.cancel()
+        do { _ = try await waitingForGrant.value; fatalError("Cancelled grant wait resumed") } catch is CancellationError {}
+        ComputerUseGate.shared.hold = false
+        let afterCancellation = try await cancelledSetup.beginTask(configuration: configuration)
+        cancelledSetup.endTask(afterCancellation)
 
         let observed = fresh()
         let observedTask = try await observed.beginTask(configuration: configuration)

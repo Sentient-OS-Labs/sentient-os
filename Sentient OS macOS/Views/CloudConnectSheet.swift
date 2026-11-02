@@ -38,17 +38,23 @@ struct CloudConnectSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage private var connected: Bool
     @AppStorage private var selected: Bool
+    @AppStorage private var pageProgress: HostedConnectorSetup.PageProgress
     @AppStorage(ModelBackend.key) private var backendRaw = ""
 
     @State private var openedConnectorPage = false
 
+    private var hasOpenedConnectorPage: Bool { openedConnectorPage || pageProgress != .unopened }
+
     init(_ service: Service) {
         self.service = service
-        self.backend = .current
+        let backend = ModelBackend.current
+        self.backend = backend
         let connection = AppStorage(wrappedValue: false, service.connectedKey)
         let selection = AppStorage(wrappedValue: false, service.selectedKey)
         _connected = connection
         _selected = selection
+        _pageProgress = AppStorage(wrappedValue: .unopened,
+            HostedConnectorSetup.pageProgressKey(slug: service.slug, backend: backend))
     }
 
     var body: some View {
@@ -69,7 +75,7 @@ struct CloudConnectSheet: View {
                 .padding(.top, 18)
 
             if !selected {
-                Text(openedConnectorPage
+                Text(hasOpenedConnectorPage
                      ? "Connect \(service.title) to your \(backend == .claude ? "Claude" : "ChatGPT") account, and then come back to Sentient."
                      : "Sentient reads through your \(backend == .claude ? "Claude" : "ChatGPT") connector. Enable it and sign in on that page, then press Done.")
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
@@ -87,7 +93,7 @@ struct CloudConnectSheet: View {
             if selected {
                 stopLink.padding(.top, 18)
             }
-            if openedConnectorPage {
+            if hasOpenedConnectorPage {
                 doneButton.padding(.top, 14)
             }
         }

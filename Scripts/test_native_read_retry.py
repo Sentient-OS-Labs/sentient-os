@@ -400,7 +400,9 @@ import AppKit
         }
         // Expired waiting calls cannot execute late after the upstream request times out.
         do {
-            let (server,script) = try await open([reply], delay: .milliseconds(160), timeout: 0.05)
+            // Leave time for initial dispatch under concurrent build/test load, while the
+            // scripted first call still outlasts the queued request's real deadline.
+            let (server,script) = try await open([reply], delay: .milliseconds(1500), timeout: 0.5)
             let first = Task { try await server.respond(request(30)) }; try await started(script)
             let expired = try await server.respond(request(31,"click"))
             check(!successfulUnchecked(expired), "Queued call expires")

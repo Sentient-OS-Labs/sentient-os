@@ -126,10 +126,13 @@ nonisolated enum ConnectorCensus {
     /// subprocess on Claude, microseconds of file reads on codex. Custom endpoints have no
     /// account to carry connectors, so they always answer empty (ModelBackend.connectorsAvailable).
     static func list() async -> [DetectedConnector] {
+        let backend = ModelBackend.current
+        let revision = UserDefaults.standard.integer(forKey: "account.connectionsRevision.\(backend.rawValue)")
         switch ModelBackend.current {
         case .claude:
             let connectors = await listClaude()
-            guard !Task.isCancelled else { return [] }
+            guard !Task.isCancelled,
+                  revision == UserDefaults.standard.integer(forKey: "account.connectionsRevision.\(backend.rawValue)") else { return [] }
             return persist(connectors, for: .claude)
         case .chatgpt: return persist(listCodex(), for: .chatgpt)
         case .custom, .sentient:
@@ -201,6 +204,30 @@ nonisolated enum ConnectorCensus {
               let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
         else { return [] }
         return logicalServices(decoded)
+    }
+
+    /// Explicit sign-out withdraws subscription-source selections. Independently connected
+    /// sources retain their own credentials and consent.
+    static func forgetAccount(_ origin: DetectedConnector.Origin) {
+        let defaults = UserDefaults.standard
+        let revisionKey = "account.connectionsRevision.\(origin.rawValue)"
+        defaults.set(defaults.integer(forKey: revisionKey) + 1, forKey: revisionKey)
+        let selected = defaults.dictionaryRepresentation().keys.compactMap { key -> String? in
+            guard key.hasPrefix("mcp."), key.hasSuffix(".kb"), defaults.bool(forKey: key) else { return nil }
+            return String(key.dropFirst(4).dropLast(3))
+        }
+        let slugs = Set(cached(for: origin).map(\.slug)).union(dedicatedSourceSlugs).union(selected)
+        for slug in slugs where DirectMCPStore.connection(slug) == nil && HostedConnectorStore.account(slug) == nil {
+            ConnectorRegistry.setKBEnabled(slug, false)
+            if slug == "gmail" || slug == "google-calendar" {
+                let name = slug == "gmail" ? "gmail" : "calendar"
+                defaults.set(false, forKey: "dbg.run.\(name)")
+                defaults.set(false, forKey: "dbg.\(name).connected")
+            }
+            let key = ConnectorRegistry.readGenerationKey(slug, origin.rawValue)
+            defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
+        }
+        if let key = storageKey(for: origin) { defaults.removeObject(forKey: key) }
     }
 
     /// The observed provider identity remains in the endpoint/catalog fields. Outlook's

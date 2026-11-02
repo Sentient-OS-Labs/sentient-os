@@ -214,18 +214,42 @@ struct SidekickUpgradeActions: View {
                     .font(.system(size: 12)).foregroundStyle(.white.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
+                    if offer == .loginRequired {
+                        Button("Reconnect ChatGPT") {
+                            guard recovery.content?.id == content.id else { return }
+                            recovery.dismiss()
+                            HomeWindowOpening.open(.settings, settingsPane: .frontierModel)
+                            Task { _ = await CodexSetup.shared.startLogin(force: true) }
+                        }
+                    } else if offer == .modelUnavailable {
+                        Button("Get latest version") {
+                            NSWorkspace.shared.open(URL(string: "https://sentient-os.ai/download")!)
+                        }
+                        Button("Contact us") {
+                            var url = URLComponents()
+                            url.scheme = "mailto"
+                            url.path = "feedback@sentient-os.ai"
+                            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+                            url.queryItems = [URLQueryItem(name: "subject", value: "ChatGPT model unavailable"),
+                                URLQueryItem(name: "body", value: "Sentient version: \(version)\nDetected ChatGPT plan: \(CodexAuth.currentPlan()?.displayName ?? "Unknown")\nMy ChatGPT plan: \n\nChatGPT couldn't use the requested model.")]
+                            if let url = url.url { NSWorkspace.shared.open(url) }
+                        }
+                    } else {
                     Button("Upgrade to Plus") {
                         guard recovery.content?.id == content.id else { return }
                         recovery.dismiss()
                         NSWorkspace.shared.open(CodexAuth.upgradeURL)
                     }
                     .accessibilityIdentifier("sidekick.recovery.upgradePlus")
+                    }
+                    if offer != .modelUnavailable {
                     Button("Change AI") {
                         guard recovery.content?.id == content.id else { return }
                         recovery.dismiss()
                         HomeWindowOpening.open(.settings, settingsPane: .frontierModel)
                     }
                     .accessibilityIdentifier("sidekick.recovery.changeAI")
+                    }
                     Button("Try again") {
                         guard recovery.content?.id == content.id else { return }
                         let guidance = recovery.draft.trimmingCharacters(in: .whitespacesAndNewlines)

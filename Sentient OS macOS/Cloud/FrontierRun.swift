@@ -42,7 +42,10 @@ enum FrontierRun {
                     }
                 }
             }
-            return try await runPrepared(invocation, onLine: onLine)
+            return try await ConnectorReadDiscovery.withTools(slugs: invocation.mcpReadConnectors) {
+                try Task.checkCancellation()
+                return try await runPrepared(invocation, onLine: onLine)
+            }
         }
     }
 

@@ -18,6 +18,7 @@ final class UserDefaults {
     var values: [String: Bool] = [:]
     var plan = ProcessingPlan.Record()
     func bool(forKey key: String) -> Bool { values[key] ?? false }
+    func object(forKey key: String) -> Any? { values[key] }
     func set(_ value: Bool, forKey key: String) { values[key] = value }
 }
 @MainActor enum ProtectedLocalSource: String {
@@ -220,6 +221,10 @@ import Foundation
         reset(); UserDefaults.standard.plan.status = .scheduled
         check(permissionIssue(await HealthCaution.probe(), equals: [.overnightWake, .launchAtLogin]),
               "pending scheduled intent requires wake and launch at login")
+        UserDefaults.standard.set(false, forKey: OvernightScheduler.prodEnabledKey)
+        let wakeChecksBeforeOff = WakeHelperClient.shared.checks
+        check(await HealthCaution.probe() == nil && WakeHelperClient.shared.checks == wakeChecksBeforeOff,
+              "explicit off takes priority over a late scheduled retry")
         reset(); UserDefaults.standard.plan.status = .paused
         check(await HealthCaution.probe() == nil && WakeHelperClient.shared.checks == 0,
               "paused plan alone does not invent an active overnight schedule")

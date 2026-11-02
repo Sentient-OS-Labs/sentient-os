@@ -68,9 +68,9 @@ enum ConnectorReadPolicyTests {
         install("")
         check(refuses(invocation(["google-drive"])), "empty catalog identity refuses the read")
         install("connector_bad.id")
-        check(refuses(invocation(["google-drive"])), "malformed catalog identity refuses the read")
+        check(!refuses(invocation(["google-drive"])), "opaque catalog identity is accepted")
         install(driveID + "\n")
-        check(refuses(invocation(["google-drive"])), "catalog identity must match completely")
+        check(!refuses(invocation(["google-drive"])), "catalog identity is encoded without interpreting its contents")
         install(driveID)
         check(refuses(invocation(["notion"])), "uncurated connector cannot borrow a read policy")
         check(refuses(invocation(["unknown"])), "unknown connector refuses the read")
@@ -107,7 +107,7 @@ enum ConnectorReadPolicyTests {
             check(refuses(identity), "empty read-tool subset refuses the run")
             check(drive.contains("--ignore-user-config"), "read ignores inherited MCP servers and approvals")
             check(policy(drive).contains("_default = { enabled = false }"), "unrequested and unidentified apps default off")
-            check(policy(drive).contains("default_tools_enabled = false"), "new tools default off")
+            check(policy(drive).contains("default_tools_enabled = true"), "new read tools use provider permission metadata")
             check(!policy(drive).contains("create_file") && !policy(drive).contains("share_file"), "writes are absent from the allowlist")
             check(!policy(drive).contains(otherID), "unrelated cached connector has no enabled entry")
             check(!policy(gmail).contains(driveID), "Drive is unavailable during a Gmail-only read")
@@ -129,7 +129,7 @@ enum ConnectorReadPolicyTests {
 
             var fired = invocation([]); fired.mcpActionServer = "google-drive"
             let action = try args(fired)
-            check(policy(action).isEmpty && action.contains("apps.\(driveID).default_tools_approval_mode=\"approve\""), "user-fired action retains its separate approval")
+            check(policy(action).isEmpty && action.contains("apps.\(DirectMCPRuntime.quoted(driveID)).default_tools_approval_mode=\"approve\""), "user-fired action retains its separate approval")
             check(!action.contains("--ignore-user-config"), "action configuration remains unchanged")
             let plain = try args(invocation([]))
             check(policy(plain).isEmpty && !plain.contains("--ignore-user-config"), "non-connector recipe remains unchanged")
@@ -138,6 +138,35 @@ enum ConnectorReadPolicyTests {
             check(claude.contains("dontAsk") && claude.joined(separator: " ").contains("mcp__claude_ai_Google_Drive__search_files"),
                   "Claude retains its existing curated reads")
             check(!claude.joined(separator: " ").contains("mcp__claude_ai_Google_Drive__create_file"), "Claude still omits create_file")
+
+            let server = ConnectorRegistry.server(for: "google-drive")!
+            let discovered = ConnectorReadDiscovery.claudeSurfaces([[
+                "name": "claude.ai Drive Next", "status": "connected",
+                "config": ["url": server.claudeServerURL!], "tools": [
+                    ["name": "renamed_search", "annotations": ["readOnly": true]],
+                    ["name": "read_file_content", "annotations": [:]],
+                    ["name": "search_files", "annotations": ["readOnly": false]],
+                    ["name": "delete_file", "annotations": ["readOnly": true, "destructive": true]],
+                    ["name": "unknown_operation", "annotations": [:]]
+                ]
+            ]], servers: [server])
+            check(Set(discovered[server.slug]?.readTools ?? []) == ["renamed_search", "read_file_content"],
+                  "live read metadata admits renamed reads and rejects changed/destructive operations")
+            try ConnectorReadDiscovery.$current.withValue(discovered) {
+                let live = try ClaudeCLI.arguments(for: invocation(["google-drive"]), modelID: "haiku", effortArg: "medium")
+                check(live.joined(separator: " ").contains("mcp__claude_ai_Drive_Next__renamed_search")
+                      && live.joined(separator: " ").contains("mcp__claude_ai_Drive_Next__read_file_content"),
+                      "Claude read policy uses observed server prefix and tool names")
+            }
+            check(ConnectorReadDiscovery.claudeSurfaces([], servers: [server]).isEmpty,
+                  "unavailable discovery supplies no negative override")
+            let opaqueID = "future.app/drive=1"
+            let resolved = ConnectorReadDiscovery.codexSurfaces([["_meta": ["connector_id": opaqueID,
+                "connector_name": "Google Drive"]]], servers: [server])
+            try ConnectorReadDiscovery.$current.withValue(resolved) {
+                check(policy(try args(invocation(["google-drive"]))).contains(DirectMCPRuntime.quoted(opaqueID) + " = "),
+                      "live routing resolves a changed opaque catalog identity")
+            }
 
             if let path = ProcessInfo.processInfo.environment["LAB_POLICY_OUTPUT"] {
                 var slackAction = invocation([]); slackAction.mcpActionServer = "slack"; slackAction.slackOperation = .send
@@ -155,6 +184,12 @@ enum ConnectorReadPolicyTests {
                                           ("slack-draft", slackDraft), ("slack-task-read", slackRead), ("slack-approved", slackApproved)] {
                     fixture["claude-" + key] = try ModelBackend.$runOverride.withValue(.claude) {
                         try ClaudeCLI.arguments(for: invocation, modelID: "haiku", effortArg: "low")
+                    }
+                }
+                fixture["claude-slack-live-source"] = try ModelBackend.$runOverride.withValue(.claude) {
+                    try ConnectorReadDiscovery.$current.withValue(["slack": .init(
+                        claudePrefix: SlackConnector.claudePrefix, readTools: ["future_read"])]) {
+                        try ClaudeCLI.arguments(for: slackSource, modelID: "haiku", effortArg: "low")
                     }
                 }
                 fixture["claude-slack-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
@@ -187,12 +222,9 @@ enum ConnectorReadPolicyTests {
                     }
                     let computer = fixture["claude-" + slug + "-computer"]!
                     check(computer.first == "exec" && !computer.contains("--disallowedTools"), "Claude computer tasks use Codex; hosted connector actions retain Claude policy")
-                    for mode in ["action"] {
-                        let args = fixture["claude-" + slug + "-" + mode]!
-                        let index = args.firstIndex(of: "--disallowedTools")!
-                        let denied = Set(args[index + 1].split(separator: ",").map(String.init))
-                        check(Set(destructive.map { prefix + $0 }).isSubset(of: denied), "\(slug) \(mode) removes every reviewed destructive mode")
-                    }
+                    let actionArgs = fixture["claude-" + slug + "-action"]!
+                    check(actionArgs.joined(separator: " ").contains(prefix + "*"),
+                          "\(slug) user-requested action remains scoped to its server")
                 }
                 try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys])
                     .write(to: URL(fileURLWithPath: path))

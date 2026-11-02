@@ -55,6 +55,14 @@ struct KnowledgeSourcesPicker: View {
         return context == .onboarding ? sources.filter(\.isCurated) : sources
     }
 
+    private var knowledgeConnectorSources: [ConnectorSource] {
+        connectorSources.filter(\.showsInKnowledgeSources)
+    }
+
+    private var sidekickConnectorSources: [ConnectorSource] {
+        connectorSources.filter { !$0.showsInKnowledgeSources }
+    }
+
     // Connector opt-ins use dynamic mcp.<slug>.kb keys, so the fixed @AppStorage properties
     // above cannot observe every selection. Recount on preferences changes, including edits
     // in a connection sheet or another window, and report the live count to onboarding.
@@ -63,7 +71,7 @@ struct KnowledgeSourcesPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: context == .settings ? 30 : 20) {
             if context == .settings {
-                Text("Choose at least three sources to set up your personal context.")
+                Text("Choose at least three sources for analysis and nightly updates.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.72))
                     .padding(.top, -16)
@@ -74,8 +82,20 @@ struct KnowledgeSourcesPicker: View {
             SettingsHairline()
             otherAppsGroup
             foldersGroup
+            if context == .settings, !sidekickConnectorSources.isEmpty {
+                SettingsHairline()
+                SettingsGroup(label: "Connected Sidekick apps",
+                              description: "Already connected. Sidekick can use these apps when you ask.") {
+                    ChipFlow {
+                        ForEach(sidekickConnectorSources) { source in
+                            connectorPill(source)
+                        }
+                    }
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: ClaudeAuth.changed))
             .receive(on: RunLoop.main)) { _ in
                 selectionCount = SourceSelection.selectionCount
             }
@@ -259,13 +279,13 @@ struct KnowledgeSourcesPicker: View {
         let mailSupported = AppleMailSource.isSupported
         return VStack(alignment: .leading, spacing: 9) {
             if ModelBackend.current == .sentient {
-                ForEach(connectorSources.filter { $0.serviceSlug == "gmail" }) { connectorPill($0, featured: true) }
+                ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "gmail" }) { connectorPill($0, featured: true) }
             } else {
             KnowledgeSourcePill(label: "Gmail", detail: runGmail && !SourceSelection.hostedSourceReady("gmail") ? "Connection needs attention · Manage" : nil,
                                 asset: "GmailMark", selected: runGmail,
                                 featured: true, locked: CodexAuth.connectorsLocked && !runGmail) { showGmailConnect = true }
             }
-            ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
+            ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
             KnowledgeSourcePill(label: "Apple Mail", detail: mailSupported
@@ -288,13 +308,13 @@ struct KnowledgeSourcesPicker: View {
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
             if ModelBackend.current == .sentient {
-                ForEach(connectorSources.filter { $0.serviceSlug == "google-calendar" }) { connectorPill($0, featured: true) }
+                ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "google-calendar" }) { connectorPill($0, featured: true) }
             } else {
             KnowledgeSourcePill(label: "Google Calendar", detail: runCalendar && !SourceSelection.hostedSourceReady("calendar") ? "Connection needs attention · Manage" : nil,
                                 asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked && !runCalendar) { showCalendarConnect = true }
             }
-            ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
+            ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
                 connectorPill(source, featured: true)
             }
             KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
@@ -315,7 +335,7 @@ struct KnowledgeSourcesPicker: View {
         SettingsGroup(label: "Apps & notes") {
             VStack(alignment: .leading, spacing: 12) {
                 ChipFlow {
-                    ForEach(connectorSources.filter {
+                    ForEach(knowledgeConnectorSources.filter {
                         !["gmail", "google-calendar", "outlook-mail", "outlook-calendar"].contains($0.serviceSlug)
                     }) { source in
                         connectorPill(source)
@@ -339,7 +359,8 @@ struct KnowledgeSourcesPicker: View {
 
     private func connectorPill(_ source: ConnectorSource, featured: Bool = false) -> some View {
         ConnectorPill(source: source,
-                      locked: !ConnectorRegistry.isKBEnabled(source.connector?.slug ?? source.serviceSlug)
+                      locked: source.showsInKnowledgeSources
+                        && !ConnectorRegistry.isKBEnabled(source.connector?.slug ?? source.serviceSlug)
                         && (source.usesHostedConnection ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly),
                       featured: featured) { selectedConnector = source }
     }

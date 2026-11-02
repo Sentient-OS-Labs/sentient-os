@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the production Granola reader, native MCP session/HTTP, parser and privacy filter.
+"""Exercise legacy native Granola fixtures, production MCP session/HTTP and privacy filtering.
 
 A loopback-only server supplies fictional accounts/notes. Grant access, provider verification,
 model replies and diagnostic sinks are controlled. No Keychain, app preferences, real provider,
@@ -77,6 +77,7 @@ nonisolated enum MCPSource {
  enum MCPError:Error{case invalidResponse(slug:String),connectorAuth(slug:String),toolFailure(slug:String)}
  typealias ReceiptObserver = @Sendable (CodexCLI.Envelope?, ReadOutcome?, Int, String, String, [String:Int]) -> Void
  static let readSchema="{}"
+ static func readUsingTools(slug:String,prompt:String,claudeModel:ClaudeCLI.Model?,onReceipt:ReceiptObserver?)async throws->ReadOutcome{fatalError("Agent reads have separate acceptance coverage")}
  static func shapeMismatch(slug:String,missing:String,len:Int){}
  static func timestamp(_ d:Date)->String{let f=ISO8601DateFormatter();f.formatOptions=[.withInternetDateTime,.withFractionalSeconds];return f.string(from:d)}
  static func model(prompt:String,schema:String,slug:String,claudeModel:ClaudeCLI.Model?)async throws->CodexCLI.Envelope{
@@ -106,9 +107,16 @@ TEST=r'''
    return DirectMCPTool(name:name,description:"Fixture",definition:try DirectMCPHTTP.json(["name":name,"inputSchema":input,"annotations":["readOnlyHint":true,"destructiveHint":false]]))
   }
   let connection=DirectMCPConnection(id:UUID(),providerSlug:"fixture",label:"Fixture",generation:UUID(),state:.ready,tools:tools,accountFingerprint:fp)
+  let unannotated=try ["list_meetings","get_meetings","get_account_info"].map { name in
+   DirectMCPTool(name:name,description:"",definition:try DirectMCPHTTP.json(["name":name,"inputSchema":["type":"object"]]))
+  }
+  let renamed=DirectMCPTool(name:"new_meeting_search",description:"Search notes",definition:try DirectMCPHTTP.json(["name":"new_meeting_search","inputSchema":["type":"object"],"annotations":["readOnlyHint":true]]))
+  let unsafe=DirectMCPTool(name:"delete_meeting",description:"Delete",definition:try DirectMCPHTTP.json(["name":"delete_meeting","inputSchema":["type":"object"],"annotations":["destructiveHint":true]]))
+  let capabilities=DirectMCPConnection(id:UUID(),providerSlug:"granola",label:"Fixture",generation:UUID(),state:.ready,tools:unannotated+[renamed,unsafe])
+  Fixture.check(Set(capabilities.readNames)==Set(["list_meetings","get_meetings","new_meeting_search"]),"live renamed reads and reviewed unannotated reads stay available without exposing deletion or native-only tools")
   DirectMCPStore.value.withLock{$0=connection}
   let window=MCPSource.Window(lower:GranolaSource.date("2026-10-01T00:00:00Z")!,upper:GranolaSource.date("2026-10-31T00:00:00Z")!,label:"Fictional")
-  let run=Task {try await GranolaSource.read(connection:connection,prompt:"Summarize this fictional test.",mode:.initial,window:window,claudeModel:nil,onReceipt:nil)}
+  let run=Task {try await GranolaSource.readNativeFixture(connection:connection,prompt:"Summarize this fictional test.",mode:.initial,window:window,claudeModel:nil,onReceipt:nil)}
   if Fixture.scenario=="cancel" {try await Task.sleep(for:.milliseconds(200));run.cancel()}
   do {
    let result=try await run.value

@@ -363,7 +363,12 @@ actor NativeComputerUseServer {
             guard !closed else { throw CancellationError() }
             guard remaining > 0 else { throw Self.queueTimeout() }
             dispatched = true
-            let data = try await session.call(tool, arguments: encoded, timeout: min(isState ? 90 : 120, remaining))
+            let timeout = min(isState ? 90 : 120, remaining)
+            // Native consent can open during an ordinary tool call, including after a
+            // previously successful setup. Keep its companion note with that window too.
+            let data = try await NativeHelperPermissionNote.withGuide(appURL: configuration.appURL) {
+                try await session.call(tool, arguments: encoded, timeout: timeout)
+            }
             try Task.checkCancellation()
             guard !closed else { throw CancellationError() }
             guard var result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {

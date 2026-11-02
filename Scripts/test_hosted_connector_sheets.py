@@ -33,6 +33,10 @@ for name, source in (("dedicated", dedicated), ("generic", generic)):
     assert "checkingEmail" not in source, name
     assert "MailAccountCollection.collect" not in source, name
     assert '"Open connector settings"' in source, name
+    assert "@AppStorage private var pageProgress: HostedConnectorSetup.PageProgress" in source, name
+    assert "HostedConnectorSetup.pageProgressKey(" in source, name
+    assert "openedConnectorPage || pageProgress != .unopened" in source, name
+    assert "if hasOpenedConnectorPage {" in source, name
 for action in (dedicated_done, generic_done):
     assert "Task" not in action and "await " not in action
     assert "HostedConnectorSetup.confirm" in action
@@ -190,6 +194,7 @@ __GENERIC__
         let connector: ConnectorCensus.DetectedConnector?
         var usesHostedConnection = true
         var isDirectSetup = false
+        var showsInKnowledgeSources = true
     }
     var source: Source
     var knowledgeEnabled = true
@@ -434,6 +439,11 @@ __PILL__
               "Unselected source appeared selected or broken")
         pill.locked = true
         check(pill.statusText == CodexAuth.connectorLockedTip && pill.detailText == nil, "Locked connector lost its plan guidance")
+        pill.locked = false
+        pill.source = .init(serviceSlug: "github", connector: .init(slug: "github"), showsInKnowledgeSources: false)
+        check(!pill.isSelected && pill.detailText == "Connected"
+              && pill.statusText == "Connected to Sidekick. Open to manage this connection.",
+              "Connected Sidekick app looked like an unselected knowledge source")
         print("PASS: \(checks) hosted sheet confirmation, state, provider and direct-route checks")
     }
 }

@@ -4,7 +4,7 @@ How visible setup surfaces acquire the grants needed for computer use. Backgroun
 only check permission state and never request consent. Three pieces:
 
 1. **`ComputerUseGate`**: the one-time setup window that appears the first time the user fires anything
-   that acts on the Mac (the command bar, Sidekick, a card's fire) while a required grant is missing.
+   that acts on the Mac (the command bar, Sidekick, a card's fire) while a required Sentient grant is missing.
 2. **`PermissionGuide` + `PermissionDragPanel` + `SettingsWindowTracker`**: the floating System-Settings
    companion that opens the right privacy pane and carries a draggable `.app` card the user drops
    straight into the permission list (no "+", no file picker).
@@ -16,8 +16,8 @@ only check permission state and never request consent. Three pieces:
 | File | Job |
 |---|---|
 | `ComputerUseGate.swift` | The interception (`intercept`, `interceptBeforeStart`, `presentVoiceFixIfDenied`), the grant probes, the AppKit-owned floating window, Continue. |
-| `ComputerUseGateView.swift` | The window's face: the grants as `StatusLine` rows in two groups (`SentientPermissionRows` is shared with the upgrade window). |
-| `NativePermissionSetup.swift` | Restart workflow receipt; never permission evidence. First-use confirmation permits a normal task only in a later app process. |
+| `ComputerUseGateView.swift` | The window's face: Sentient grants as `StatusLine` rows (`SentientPermissionRows` is shared with the upgrade window). |
+| `NativePermissionSetup.swift` | Records native setup and recovery history for diagnostics. Never gates chat admission. Legacy drag/click receipts are ignored. |
 | `ComputerUseUpgrade.swift` | Persistent upgrade coordination, native setup window, installation, readiness, release, and reset. |
 | `ComputerUseWindowGuard.swift` | Excludes regular scene content during setup and registers its AppKit window for hiding. |
 | `PermissionGuide.swift` | `guide(pane, dragging:)`: open the pane and raise the panel; drag vs instruction mode; close. |
@@ -30,11 +30,14 @@ sizingOptions = []` (otherwise the hosting view re-advertises its own size every
 panel strands off-screen), the Finder-shaped pasteboard mix, and the CG → AppKit coordinate flip.
 
 The Sidekick popup keeps **One-time setup** and uses **Let Sidekick use your computer** as its title.
-Its compact layout keeps muted Computer use and Sentient permissions headings, removes Not granted
+Its compact layout keeps the muted Sentient permissions heading, removes Not granted
 labels, and uses **Grant** buttons for
 remaining steps. Release hides verified rows; Debug deliberately shows all rows. Settings keeps its full permission layout. Double Tap uses the same compact layout and Grant
 buttons for Sentient’s own Accessibility and Screen Recording. Its Done button still requires
 both real grants; once ready, a short hint tells the user to focus their reply field and tap again.
+
+When a user clicks **Grant**, the shared permission rows move their setup window to the left
+of its current screen before opening System Settings, making room for the authentication dialog.
 
 The Sidekick and Double Tap gates add a localized, slowly moving indigo/blue rim with a small warm accent. Its
 opaque center separates it from Home’s broader color washes. Only the decorative Canvas updates
@@ -50,35 +53,39 @@ The required grants follow the selected runtime:
 | All active backends / OpenAI | Sentient-to-helper Automation; OpenAI helper Accessibility and Screen Recording; Sentient Screen Recording for screen context. |
 | All | Microphone and Speech are optional; typed commands work without them. |
 
-OpenAI Automation is checked through Apple's asynchronous API after launching the signed helper.
-Visible permission setup requests unasked Automation consent through the macOS dialog. Asking for
-Automation never starts a capability test. The helper's Accessibility and Screen Recording rows use
-Sentient's floating drag guide. A completed copy drop inside the tracked Settings window changes
-only that row to **Restart to finish**; cancelled, misplaced and stale-guide drops do nothing.
-The user opens each required grant action, enables its macOS toggle, and selects **Restart Sentient**.
-There is no confirmation checkbox or explanatory block. Restart enables once each helper grant
-action has been opened (or that grant is verified), and Automation/Sentient Screen Recording are
-either already granted or their grant actions have been opened. Automatic Automation probing does
-not count as a button click. Grant actions and drags never create permission proof. Full Disk Access is not required and the gate never reads TCC databases.
+Sentient Screen Recording is checked before a prompt starts because Sentient captures screen
+context. After starting the owned helper, the runtime also checks Sentient’s Automation access
+through the macOS API. Confirmed denied or not-yet-requested access opens an Automation row in
+our setup window. Unavailable observations permit the real connection attempt. CUA still needs
+Sentient Accessibility too.
 
-Each helper grant action and completed drag is persisted with its app-process identity. Any real
-relaunch, including macOS Quit & Reopen, applies those setup steps; the remaining Sentient permission
-can then be completed without repeating helper setup. Applied steps say **Set up**, not Granted.
-Factory Reset clears these receipts. `isReadyForTask` permits an
-ordinary native request; `allRequiredGranted` continues to mean actual capability evidence. The
-macOS helper enforces access during the task. Known denial keeps the workflow blocked for recovery.
+The native helper owns its Accessibility and Screen Recording rows, grant actions, and any
+macOS restart instructions. Tool-catalog startup waits for confirmed missing host Automation
+access to be resolved, without issuing a synthetic app read or testing the helper’s grants. When the agent actually calls a
+computer tool, that authenticated native request can show the helper's setup window and request
+system consent. A greeting that uses no native tools therefore never invokes native setup.
 
-Native first-use setup checks both the compatible Codex CLI and helper installation, and exposes
-the shared installer when either needs preparation. Claude users are not asked for a ChatGPT login. Existing grants are reused. `SentientPermissionRows` and
-`NativeComputerUsePermissionRows` keep first-use, migration and Settings consistent.
+Settings retains explicit **Fix permissions…**, including its Automation request and harmless
+native setup read. A timeout or lost connection keeps its real error and does not become a denial.
+`NativePermissionSetup` stores native completion/recovery history in version-2 keys for diagnostics;
+that history never blocks a new chat. A previous Automation denial is refreshed before showing
+setup, so a grant made directly in System Settings can release the next request. Old clicked/dropped steps and
+restart receipts never create readiness. After a restart, the next real native operation lets the
+helper handle any missing grant, including an unfinished setup.
+
+The companion browser-extension note follows only the helper's main setup window. It is vertically
+aligned to the browser row using optional Accessibility geometry, with a permissionless placement
+for the pinned helper layout. This cosmetic lookup runs off the main thread and cannot gate setup.
+The note hides while System Settings or the native drag guide is active.
+Ordinary native tool calls also attach the note because the helper can open consent during a task.
+Starting and closing the decorative note never delays the native request or its cancellation.
 
 ## The gate (`ComputerUseGate`)
 
-`intercept(action)` returns true when it holds an action for required setup or a readiness check.
-First-use and post-restart admission never open the synthetic test window. Missing installation,
-Sentient Screen Recording or Automation still hold the task in our setup screen. A confirmed restart
-allows real work to try without claiming either helper grant. Closing or cancelling drops the held
-action, and late startup results cannot revive it. Voice remains optional for typed requests.
+`intercept(action)` returns true only while holding an action for Sentient's own required grants.
+Continue re-reads those grants and releases the held action once. Native setup, installation,
+and transport startup are owned by the task runner, not the permission gate. Closing or cancelling
+drops the held action. Voice remains optional for typed requests.
 The legacy `computerUse.micSpeechOffered` key remains only for reset cleanup.
 
 Before waiting, `CommandRunModel` writes a private `PermissionWaitDraft` bound to its run ID and
@@ -94,26 +101,17 @@ use that path. Other busy work blocks restart with an explanation; a gate-held e
 be stopped explicitly before restarting. The setup window remains available if saving the draft
 or preparing the relaunch fails. No saved request is automatically submitted after relaunch.
 
-The restart receipt is bound to the process that changed permissions. Each helper grant action
-and completed drag is saved immediately. macOS Quit & Reopen counts as a real restart even when
-Sentient’s own restart button was never reached. An untouched fresh setup cannot complete merely
-by reopening the app; known setup history and recorded helper steps are restored independently
-of Sentient’s own permissions, which are still checked live. Before the first post-restart request, an exclusive runtime
-lease protects a graceful stop of only Sentient's idle helper. Active work and foreign helpers are
-never stopped by this preparation. Confirmation survives later launches until reset or a new setup
-round; it remains separate from grant evidence.
+### Native setup and recovery
 
-### Official helper fallback
+The same native setup request is used for first use, explicit Settings repair, and real permission
+failures. It reads Sentient, which is already running, and does not require System Settings to be
+open. The normal session sends the required Codex request metadata. The helper can reopen its own
+setup window after a restart and reflect the grants already stored by macOS.
 
-A native `-10009`/`-10014` or exact ScreenCaptureKit user denial permits one recovery attempt per task.
-`NativeComputerUseServer` uses its existing authenticated, model-free MCP session to request
-`get_app_state` for System Settings. The helper presents its own permission UI when needed; its
-Chrome extension step is optional. Successful text plus a decodable screenshot completes recovery.
-Timeout, dismissal, helper exit or Stop do not. The failed original action is never replayed and
-still reaches the agent as an error with fresh-read guidance. Recovery shares the original request's
-bounded time budget. Further failures leave **Open helper setup** available in our permission screen.
-Auth failures, app approvals/policy blocks, missing windows, timeouts and ordinary interaction errors
-never trigger this fallback. Reset/new setup invalidates late recovery results.
+Only one gate-owned setup attempt runs at a time. Cancellation prevents late completion from
+starting a held task. Read-only setup can reconnect after a helper relaunch within its bounded
+setup deadline. Native `-10009`/`-10014` or an explicit ScreenCaptureKit denial can request recovery
+once per task. An uncertain original action is never replayed by setup recovery.
 
 `presentVoiceFixIfDenied()` is used only after deliberate voice input encounters denied Microphone or
 Speech access. Its voice-only window has Done and no held typed action. Unasked voice permission
@@ -158,10 +156,10 @@ An onboarded user enters native migration when prior computer-use readiness, a C
 receipt or binary, or an earlier deferred migration establishes existing setup history.
 Earlier deferral is treated as unfinished setup. Native completion remains separate from CUA history.
 
-The flow is pitch → shared installation → required grant actions → restart → normal task.
-Failure is retryable. Completing it
-requires a fresh readiness check and an explicit Done action. Native migration is mandatory:
-the regular interface stays unavailable until installation and required permissions are ready.
+The flow is pitch → shared installation → host grants → normal task.
+Failure is retryable. Completing it requires fresh host grants and an explicit Done action.
+Native helper consent is deferred until a real tool call. Native migration is mandatory:
+the regular interface stays unavailable until installation and host permissions are ready.
 Closing or minimizing setup does not release the interface, and quitting preserves pending setup for
 the next launch. Errors and permission fixes remain in the setup window. Already-ready installations
 are recognized at launch without requiring another migration.

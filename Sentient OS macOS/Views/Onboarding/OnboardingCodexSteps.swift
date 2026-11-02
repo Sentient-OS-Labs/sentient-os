@@ -37,6 +37,10 @@ struct OnboardingCodexLoginPanel: View {
         ModelSelectionPanel(title: "ChatGPT", subtitle: "Connect your ChatGPT account to power Sentient.") {
             VStack(spacing: 18) {
                 loginStates
+                if settingsStyle {
+                    if codex.loggedIn { ChatGPTPlanControls() }
+                    ProviderAccountControls(backend: .chatgpt)
+                }
                 if settingsStyle && codex.loggedIn {
                     Button(checkingPlan ? "Checking plan…" : "Refresh plan") {
                         checkingPlan = true
@@ -68,6 +72,9 @@ struct OnboardingCodexLoginPanel: View {
     /// The login state machine: done → browser out → install failed → the button.
     @ViewBuilder private var loginStates: some View {
         if codex.loggedIn {
+            if let email = CodexAuth.diagnosticEmail() {
+                Text(email).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+            }
             ModelConnectionLine(text: (backend == .chatgpt ? "In use" : "Connected")
                 + (plan.map { " · \($0.displayName)" } ?? ""))
             if backend != .chatgpt {

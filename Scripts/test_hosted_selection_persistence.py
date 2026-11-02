@@ -124,10 +124,7 @@ enum RunSource {
     case appleMail(accounts: Set<String>), appleCalendar(calendarIDs: Set<String>)
     static func connectors(from sources: [Self]) -> [any Connector] { precondition(sources.isEmpty); return [] }
 }
-enum SiYuanSource {
-    static let enabledKey = "siyuan.enabled"
-    static let isInstalled = false, isEnabled = false
-}
+enum SiYuanSource { static let enabledKey = "siyuan.enabled", isInstalled = false, isEnabled = false }
 struct WhatsAppSource { static var isInstalled = false; var dbPath: String { "/nonexistent/synthetic" } }
 struct iMessageSource { var dbPath: String { "/nonexistent/synthetic" } }
 struct NotesSource { var dbPath: String { "/nonexistent/synthetic" } }
@@ -157,6 +154,7 @@ fixture = fixture.replace('// REGISTRY', '\n'.join(member(registry, signature) f
     'static func kbEligible(', 'static func readGenerationKey(',
 )))
 fixture = fixture.replace('// SETUP', '\n'.join(('@discardableResult\n' if signature == 'static func confirm(' else '') + member(setup, signature) for signature in (
+    'enum PageProgress:', 'static func pageProgressKey(',
     'static func confirm(', 'static func stopReading(', 'private static func mailCollectionRequest(',
 )))
 

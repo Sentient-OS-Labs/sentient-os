@@ -36,7 +36,7 @@ def main():
         app.require(report.get('completed') is True and report.get('provider_calls') == 0
                     and report.get('oauth_actions') == 0, 'Connector fixture did not complete safely')
         captures = report.get('captures', [])
-        app.require(len(captures) == 5 and report.get('capture_scope') == 'current_process_windows_only',
+        app.require(len(captures) == 7 and report.get('capture_scope') == 'current_process_windows_only',
                     'Unexpected connector capture scope')
         for capture in captures:
             image = (root / capture['file']).resolve()

@@ -56,7 +56,8 @@ nonisolated enum CustomProvider {
 nonisolated enum CodexRuntime {
     final class FileLock: Sendable { func unlock() { } }
     static let executable = URL(fileURLWithPath: "/fixture-no-real-codex")
-    static func executionLease(for binary: String, cancelled: @Sendable () -> Bool) throws -> FileLock? {
+    static func executionLease(for binary: String, exclusive: Bool = false,
+                               cancelled: @Sendable () -> Bool) throws -> FileLock? {
         if cancelled() { throw CancellationError() }; return nil
     }
     static func verifyCLIForLaunch() throws { fatalError("No real CLI should launch") }

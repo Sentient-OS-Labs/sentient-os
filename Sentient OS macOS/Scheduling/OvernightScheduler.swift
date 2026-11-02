@@ -1,5 +1,5 @@
 // Arms the next local overnight wake and asks the shared analysis owner to run.
-// Nightly work waits for first-analysis completion and never owns a second pipeline.
+// First-analysis recovery and nightly updates share the same single analysis owner.
 // Doc: Documentation - Overnight Scheduler & Wake Helper.md
 
 import Foundation
@@ -44,7 +44,7 @@ final class OvernightScheduler {
     }
 
     /// Called after completing explicit background setup. No implicit helper install or login prompt.
-    /// Existing deliberately disabled schedulers stay disabled; nightly work waits for initial completion.
+    /// Existing deliberately disabled schedulers stay disabled.
     func enableAfterSetup() {
         let d = UserDefaults.standard
         guard d.bool(forKey: AppState.onboardingKey), PersonalSetupProgress.isComplete() else { return }
@@ -60,6 +60,7 @@ final class OvernightScheduler {
     }
 
     func reevaluate() {
+        restoreLegacyScheduleIfNeeded()
         if clockObservers.isEmpty {
             for name in [Notification.Name.NSSystemTimeZoneDidChange, Notification.Name.NSSystemClockDidChange] {
                 clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -78,6 +79,28 @@ final class OvernightScheduler {
         } else { restart() }
     }
 
+    /// Older releases promised automatic scheduling after the first analysis. Preserve that
+    /// intent when the user upgraded before its timer fired, while retaining explicit off values.
+    private func restoreLegacyScheduleIfNeeded() {
+        let d = UserDefaults.standard
+        guard !processing.isSuspended, d.bool(forKey: AppState.onboardingKey), Self.firstCycleCompletedAt != nil,
+              !d.bool(forKey: Self.setupEnabledKey), !d.bool(forKey: Self.autoEnableFiredKey),
+              d.object(forKey: Self.prodEnabledKey) == nil, !CodexAuth.knowledgeBaseOnly else { return }
+        d.set(true, forKey: Self.prodEnabledKey)
+        d.set(true, forKey: Self.setupEnabledKey)
+        d.removeObject(forKey: "scheduler.autoEnableDelaySeconds")
+    }
+
+    /// Changes future scheduling. An analysis already running keeps its independent lifetime.
+    func setEnabled(_ enabled: Bool) {
+        let d = UserDefaults.standard
+        d.set(enabled, forKey: Self.prodEnabledKey)
+        d.set(false, forKey: Self.enabledKey)
+        d.set(true, forKey: Self.setupEnabledKey)
+        if !enabled { processing.cancelScheduled() }
+        reevaluate()
+    }
+
     /// Saving a new clock time updates durable first-night/deferred intent too. It does
     /// not enable an otherwise-disabled schedule or cancel app-owned analysis.
     func commit() {
@@ -94,7 +117,7 @@ final class OvernightScheduler {
         loopEnabled = enabled
         previous?.cancel()
         nextWakeAt = nil
-        if !enabled { statusLine = "off" }
+        statusLine = enabled ? "Scheduling overnight analysis…" : "Overnight analysis is off"
         loopTask = Task {
             // XPC wake requests cannot be recalled by Task cancellation. Drain the old
             // scheduling owner before replacing its wake, so stale arms/cancels cannot
@@ -113,31 +136,15 @@ final class OvernightScheduler {
 
     private func loop(id: UUID) async {
         let log = SchedulerLog()
-        while !Task.isCancelled && generation == id && isEnabled {
-            if !processing.initialComplete {
-                nextWakeAt = nil
-                statusLine = processing.paused ? "Analysis paused" : "Nightly updates start after your first analysis"
-                _ = await WakeHelperClient.shared.cancelWake()
-                do { try await Task.sleep(for: .seconds(5)) } catch { return }
-                continue
-            }
+        scheduling: while !Task.isCancelled && generation == id && isEnabled {
             if processing.paused {
                 nextWakeAt = nil; statusLine = "Analysis paused"
                 _ = await WakeHelperClient.shared.cancelWake()
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 continue
             }
-            let health = await WakeHelperClient.shared.healthProbe()
-            guard !Task.isCancelled, generation == id else { return }
-            let loginReady = health == .ready ? await LoginItem.refresh() : false
-            guard !Task.isCancelled, generation == id else { return }
-            guard health == .ready && loginReady else {
-                needsSchedulerSetup = true
-                statusLine = health == .ready ? "enable launch at login" : "overnight wake needs setup"
-                nextWakeAt = nil
-                do { try await Task.sleep(for: .seconds(15)) } catch { return }
-                continue
-            }
+            // The app is already running. The actual arm request establishes whether the
+            // helper can schedule a wake; login-item status governs future app launches.
             needsSchedulerSetup = false
             var target = processing.record.status == .scheduled ? processing.record.due : nil
             if let missed = target, missed <= Date() {
@@ -176,7 +183,14 @@ final class OvernightScheduler {
                     break
                 }
                 if Date() < due && Date().timeIntervalSince(lastArm) >= 300 {
-                    _ = await WakeHelperClient.shared.armWake(at: due)
+                    let rearmed = await WakeHelperClient.shared.armWake(at: due)
+                    guard generation == id, !Task.isCancelled else { return }
+                    if !rearmed && Date() < due {
+                        nextWakeAt = nil
+                        statusLine = "Retrying overnight wake…"
+                        log.line("wake re-arm failed; retrying setup check")
+                        continue scheduling
+                    }
                     lastArm = Date()
                 }
             }

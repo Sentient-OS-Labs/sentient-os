@@ -16,13 +16,14 @@ final class Process: @unchecked Sendable {
     var onURL: (@Sendable (URL) -> Void)?
     var onExit: (@Sendable (Int32) -> Void)?
     func terminate() { isRunning = false }
+    func waitUntilExit() {}
 }
 enum FixtureFailure: Error { case quota, network }
 @MainActor enum CodexFailureReason { case usageLimit, unknown
     static func classify(_ error: Error) -> Self { (error as? FixtureFailure) == .quota ? .usageLimit : .unknown }
 }
 @MainActor enum ClaudeAuth {
-    struct Status { var loggedIn: Bool }
+    struct Status { var loggedIn: Bool; var email: String? { "fixture@example.com" } }
     struct LoginRequired: Error {}
     static var requiresVerification = false
     static var cachedLoggedIn = false
@@ -31,6 +32,8 @@ enum FixtureFailure: Error { case quota, network }
     static var verification: () async throws -> Void = {}
     static var planDisplayName: String? { "Pro" }
     static var accountChanges = 0
+    static var destroys = 0
+    static func destroy() { destroys += 1; cachedLoggedIn = false; requiresVerification = false; revision = UUID() }
     static func beginAccountChange() { accountChanges += 1 }
     static func refresh() async -> Status { Status(loggedIn: await status() && !requiresVerification) }
     static func beginLogin() -> UUID { revision = UUID(); requiresVerification = true; cachedLoggedIn = false; return revision }
@@ -42,7 +45,21 @@ enum FixtureFailure: Error { case quota, network }
         requiresVerification = false; cachedLoggedIn = true; revision = UUID()
     }
 }
+@MainActor enum CodexCLI {
+    enum Availability { case notInstalled }
+    enum CLIError: Error { case notAvailable(Availability), exitFailure(code: Int32, message: String) }
+    struct Result { let status: Int32; let stderr: String }
+    static var logoutStatus: Int32 = 0
+    static var logoutArgs: [String] = []
+    static func executeAsync(binary: String, args: [String], stdinText: String?, cwd: String?, timeout: TimeInterval,
+                             extraEnv: [String: String], includeCustomProviderKey: Bool) async throws -> Result {
+        precondition(!includeCustomProviderKey)
+        logoutArgs = args; return Result(status: logoutStatus, stderr: "fixture")
+    }
+}
 @MainActor enum ClaudeCLI {
+    static let baseEnv: [String: String] = [:]
+    static func locateBinary() -> String? { "/fixture/claude" }
     enum Failure: Error { case launch }
     static var launchFails = false
     static var processes: [Process] = []
@@ -185,6 +202,14 @@ __METHODS__
         failed.installed = false; failed.startLogin()
         check(!failed.loggingIn && failed.loginStatusLine?.contains("Install") == true,
               "Missing CLI never exposes a copy link")
+        try! await setup.signOut()
+        check(!setup.loggedIn && !setup.signingOut && ClaudeAuth.destroys == 1, "Logout clears cached Claude identity")
+        check(CodexCLI.logoutArgs == ["auth", "logout"], "Existing Claude installation uses official logout")
+        replacement.onExit?(0); await settle()
+        check(!setup.loggedIn, "Old Claude login completion cannot undo logout")
+        CodexCLI.logoutStatus = 1
+        do { try await setup.signOut(); fatalError("Expected logout failure") } catch {}
+        check(!setup.signingOut && ClaudeAuth.destroys == 1, "Failed logout keeps identity cache and allows retry")
         print("PASS: \(checks) Claude login state checks")
     }
 }

@@ -151,6 +151,7 @@ struct RootView: View {
         // Source opt-ins and account generations may change in another window. Compare the
         // complete consent identity before retrying; unrelated defaults changes do no work.
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: ClaudeAuth.changed))
             .receive(on: RunLoop.main)) { _ in
                 writingStyleSelection = WritingStyle.selectionIdentity
         }

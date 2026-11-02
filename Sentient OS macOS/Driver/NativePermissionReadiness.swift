@@ -5,21 +5,23 @@ import Foundation
 
 nonisolated enum NativePermissionReadiness {
     /// The helper owns consent and its live grant indicators. The native request opens its
-    /// setup UI when necessary; a cancelled, denied or text-only result is never readiness.
+    /// setup UI when necessary. Useful native results complete the workflow; individual
+    /// evidence fields describe only capabilities present in that result.
     static func helperSetup(call: Call) async throws -> Snapshot {
         try Task.checkCancellation()
-        let data = try await call("get_app_state", JSONSerialization.data(withJSONObject: ["app": "com.apple.systempreferences"]))
+        // Sentient is already running. Setup must not depend on System Settings being open.
+        let data = try await call("get_app_state", JSONSerialization.data(withJSONObject: ["app": Bundle.main.bundleURL.path]))
         try Task.checkCancellation()
         guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .probe)
         }
-        try OpenAIComputerUseProbe.validateResult(result, requiresCapture: true)
-        guard (result["content"] as? [[String: Any]] ?? []).contains(where: {
+        _ = try OpenAIComputerUseProbe.appStateResult(result)
+        let hasText = (result["content"] as? [[String: Any]] ?? []).contains(where: {
             $0["type"] as? String == "text" && ($0["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }) else {
-            throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .probe)
-        }
-        return Snapshot(accessibility: .verified, screenRecording: .verified)
+        })
+        let hasCapture = (try? OpenAIComputerUseProbe.validateResult(result, requiresCapture: true)) != nil
+        return Snapshot(accessibility: hasText ? .verified : .unknown,
+                        screenRecording: hasCapture ? .verified : .unknown)
     }
 
     enum State: String, Sendable { case unknown, verified, denied }

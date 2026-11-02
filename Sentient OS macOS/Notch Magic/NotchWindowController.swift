@@ -31,7 +31,10 @@ final class NotchWindowController {
     private let coordinator: CommandCoordinator
     private var panel: NotchPanel?
     private var host: NotchHostingView?
-    private var metrics = NotchMetrics(hardwareNotch: nil)
+    private var baseMetrics = NotchMetrics(hardwareNotch: nil)
+    private var metrics: NotchMetrics {
+        baseMetrics.showingSetup(coordinator.setupCaption != nil)
+    }
     /// Which display the current `metrics` were derived from — the anchor can move the overlay between
     /// displays (a notch-click session vs the hotkey's main-display session), and landing on a new
     /// screen must re-derive the metrics for its bezel (real cutout vs the notch-less fallback pill).
@@ -154,7 +157,7 @@ final class NotchWindowController {
 
     private func build() {
         guard panel == nil, let screen = Self.menuBarScreen() else { return }
-        metrics = Self.metrics(for: screen)
+        baseMetrics = Self.metrics(for: screen)
         metricsDisplayID = screen.displayID
         refreshHoverEntryRect()
         let frame = windowFrame(for: canvasSize, on: screen)
@@ -188,6 +191,7 @@ final class NotchWindowController {
         #endif
         withObservationTracking {
             _ = coordinator.phase
+            _ = coordinator.setupCaption
             _ = coordinator.messageReplyFocused
             _ = coordinator.run.recovery.isPending // refresh return zones when a hidden question expires
         } onChange: { [weak self] in
@@ -204,6 +208,7 @@ final class NotchWindowController {
         guard !stoppedForTesting else { return }
         #endif
         guard let panel else { return }
+        host?.update(metrics: metrics)
         refreshHoverEntryRect()
         sizeToken &+= 1
         let token = sizeToken
@@ -306,7 +311,7 @@ final class NotchWindowController {
 
     /// Re-derive the metrics for a screen and re-render the host with them.
     private func applyMetrics(for screen: NSScreen) {
-        metrics = Self.metrics(for: screen)
+        baseMetrics = Self.metrics(for: screen)
         metricsDisplayID = screen.displayID
         host?.update(metrics: metrics)
     }
@@ -407,7 +412,7 @@ final class NotchWindowController {
                                          recoveryContent: coordinator.run.recovery.content,
                                          messageContent: coordinator.notchMessage)
         let p = location ?? NSEvent.mouseLocation            // screen coords, origin bottom-left
-        let localX = p.x - (screen.frame.midX - s.width / 2)
+        let localX = p.x - (screen.frame.midX + metrics.horizontalOffset(for: coordinator.phase) - s.width / 2)
         let depthFromTop = screen.frame.maxY - p.y           // 0 at the bezel, increasing downward
         guard localX >= 0, localX <= s.width, depthFromTop >= 0, depthFromTop <= s.height else { return false }
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: coordinator.phase)
@@ -605,6 +610,10 @@ final class NotchWindowController {
             })
         }
         add(nc, NSApplication.didChangeScreenParametersNotification) { [weak self] in self?.reposition() }
+        add(nc, .notchAppearanceChanged) { [weak self] in
+            self?.reposition()
+            self?.updateMousePassthrough()
+        }
         add(nc, .notchInteractionChanged) { [weak self] in
             guard let self else { return }
             self.notchClickEnabled = NotchPreferences.clickEnabled()
@@ -703,7 +712,8 @@ final class NotchWindowController {
     }
 
     static func metrics(for screen: NSScreen) -> NotchMetrics {
-        NotchMetrics(availableSize: screen.frame.size, hardwareNotch: screen.notchSize)
+        NotchMetrics(availableSize: screen.frame.size, hardwareNotch: screen.notchSize,
+                     compactMode: NotchPreferences.compactModeEnabled())
     }
 }
 

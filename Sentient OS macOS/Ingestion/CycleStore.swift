@@ -182,7 +182,7 @@ actor CycleStore {
         var cache = try fetchRow(AppleCalendarSource.bucketKey)?.appleCalendarRetry
             .flatMap { try? JSONDecoder().decode(CalendarRetryCache.self, from: $0) }
             ?? CalendarRetryCache(coverage: snapshot.coverage)
-        if cache.coverage != snapshot.coverage || cache.version != 1 {
+        if cache.version != 1 {
             cache = CalendarRetryCache(coverage: snapshot.coverage)
         }
         cache.validate(against: snapshot)
@@ -625,7 +625,7 @@ actor CycleStore {
     /// A complete local calendar snapshot replaces pending summaries and its coverage checkpoint
     /// together, including an empty result. A crash never publishes half a schedule. Rejected event
     /// IDs and raw content are absent from both the notes and the checkpoint.
-    func commitCalendarSnapshot(_ snapshot: AppleCalendarSource.Snapshot, notes: [NoteDraft]) -> CommitOutcome {
+    func commitCalendarSnapshot(_ snapshot: AppleCalendarSource.Snapshot, notes: [NoteDraft], pending: Int = 0) -> CommitOutcome {
         // Cancellation may arrive while the caller is waiting to enter this actor. Keep
         // earlier notes hidden and leave the persisted snapshot untouched in that case.
         calendarSnapshotReady = false
@@ -639,11 +639,12 @@ actor CycleStore {
             let previous = try self.modelContext.fetch(FetchDescriptor<CycleNote>(
                 predicate: #Predicate { $0.bucketKey == key }))
             for note in previous { self.modelContext.delete(note) }
-            for note in notes + [snapshot.marker] { self.insertNote(bucketKey: key, note: note) }
+            let marker = pending == 0 ? snapshot.marker : snapshot.partialMarker(pending: pending)
+            for note in notes + [marker] { self.insertNote(bucketKey: key, note: note) }
         }, apply: { r in
             r.order = mark.order; r.tiebreak = mark.tiebreak
             r.floorOrder = nil; r.floorTiebreak = nil; r.mcpReadOrigin = nil; r.updatedAt = Date()
-            r.appleCalendarRetry = nil
+            // Keep validated decisions, including skipped revisions, for the next window.
         }, make: { BucketPointer(bucketKey: key, mark: mark) })
         calendarSnapshotReady = result == .saved
         return result

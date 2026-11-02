@@ -128,16 +128,18 @@ actor DirectMCPConnections {
                                    counts: [.before: connection.tools.count, .after: tools.count])
             }
             let identity = DirectMCPIdentity.parse(snapshot.account)
-            if let previous = connection.accountFingerprint, previous != identity?.fingerprint {
+            // A missing optional account tool does not revoke the selected OAuth grant.
+            // A returned profile must still agree with the previously observed account.
+            if let previous = connection.accountFingerprint, snapshot.account != nil, previous != identity?.fingerprint {
                 throw DirectMCPError.connectionChanged
             }
             var updated = connection
-            updated.accountFingerprint = identity?.fingerprint
-            updated.accountLabel = identity?.label
+            updated.accountFingerprint = identity?.fingerprint ?? connection.accountFingerprint
+            updated.accountLabel = identity?.label ?? connection.accountLabel
             updated.tools = tools
-            // Provider annotations supply read-only metadata; no inference or name classifier.
+            // Live annotations supplement the provider's existing reviewed read capabilities.
             updated.policy = Dictionary(uniqueKeysWithValues: tools.map {
-                ($0.name, $0.readOnlyHint ? DirectMCPTool.Category.read : .write)
+                ($0.name, updated.category(for: $0))
             })
             updated.policyFingerprint = DirectMCPTool.fingerprint(tools)
             updated.policyRevision = DirectMCPConnection.currentPolicyRevision
@@ -146,7 +148,7 @@ actor DirectMCPConnections {
             CrashReporting.diagnosticBreadcrumb("connector.policy_verified", data: ["source": provider,
                 "tools": String(tools.count), "read_tools": String(updated.readNames.count),
                 "native_reads": String(connection.provider?.nativeKnowledgeReads.intersection(Set(updated.readNames)).count ?? 0),
-                "account_verified": String(updated.accountFingerprint != nil)])
+                "account_verified": String(identity != nil)])
             try Task.checkCancellation()
             guard DirectMCPStore.connection(id: connection.id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
             updated.verifiedAt = Date()

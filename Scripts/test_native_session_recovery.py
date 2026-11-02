@@ -129,7 +129,7 @@ for line in sys.stdin:
         if scenario == 'tool_error': result = {'isError': True, 'content': [{'type': 'text', 'text': 'Element is not settable'}]}
         if scenario.startswith('permission'):
             result = {'isError':True,'content':[{'type':'text','text':'Computer Use server error -10009: permissionsNotGranted'}]}
-        if args.get('app') == 'com.apple.systempreferences':
+        if set(args) == {'app'} and args.get('app') != 'fixture':
             state['setup_calls'] = state.get('setup_calls',0)+1;save()
             if state.get('permission_scenario') == 'permission_hang':time.sleep(30)
             if state.get('permission_scenario') == 'permission_late': time.sleep(0.5)

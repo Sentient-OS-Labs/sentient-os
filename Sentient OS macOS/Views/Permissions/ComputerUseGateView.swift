@@ -51,21 +51,13 @@ struct ComputerUseGateView: View {
         if gate.requiresPermissionRestart {
             return SafeAppRelaunch.shared.isPreparing ? "Restarting Sentient…" : "Restart Sentient"
         }
-        if gate.needsHelperPermissionRepair {
-            return gate.requestingAutomation || gate.checkingCapabilities
-                ? "Finish helper setup…" : "Fix computer-use permissions"
-        }
         if gate.isReadyForTask { return "Continue" }
-        if gate.backend == .openAI {
-            return gate.checkingCapabilities ? "Finish helper setup…" : "Finish setup to continue"
-        }
         return "Grant permissions to continue"
     }
 
     private var canContinue: Bool {
         if gate.showingVoiceRepair { return true }
         if gate.requiresPermissionRestart { return gate.canRestartAfterPermissions }
-        if gate.needsHelperPermissionRepair { return gate.canRepairHelperPermissions }
         return gate.isReadyForTask
     }
 
@@ -95,8 +87,8 @@ struct ComputerUseGateView: View {
 
 }
 
-/// The selected computer-use runtime's required grants. Sentient's own rows are also reused by
-/// Double Tap; the native helper's rows remain specific to computer use.
+/// Sentient's own required grants. Native helper consent appears during actual tool use.
+/// Double Tap also reuses these app permission rows.
 /// `gate` is the one probe source; call `gate.refresh()` around presentation.
 struct SentientPermissionRows: View {
     let gate: ComputerUseGate
@@ -104,148 +96,19 @@ struct SentientPermissionRows: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 18 : 22) {
-            if gate.backend == .openAI, !gate.setup.ready || !CodexSetup.shared.computerUseReady {
-                PermissionSetupGroup(label: "Computer use", compact: compact) {
-                    StatusLine(title: "Set up computer use",
-                               health: gate.setup.isInstalling ? .warn : .bad,
-                               note: gate.setup.isInstalling ? "setting up…" : "not set up",
-                               tip: "Prepares the computer-use tools for your selected AI engine.",
-                               fixTitle: "Set up…",
-                               fix: gate.setup.isInstalling ? nil : { Task { await gate.setup.install() } })
-                    if let line = gate.setup.status { SettingsProse(line) }
-                }
-            }
-            if gate.backend == .openAI { NativeComputerUsePermissionRows(gate: gate, showsRestartAction: false, compact: compact) }
             SentientAppPermissionRows(accessibility: gate.backend == .cua ? gate.sentientAccessibility : nil,
                                      screen: gate.sentientScreen,
                                      compact: compact,
                                      onPermissionChange: {
                 if gate.backend == .openAI { gate.beganPermissionAction(.sentientScreen) }
-            })
+            }, onScreenRecordingDrop: {
+                gate.completedPermissionDrag(.sentientScreen)
+            }, automation: gate.backend == .openAI && gate.automation != .unavailable ? gate.automation : nil,
+               requestingAutomation: gate.requestingAutomation,
+               onRequestAutomation: gate.requestAutomation)
             if gate.requiresPermissionRestart {
                 NativePermissionRestartSection(gate: gate, showsButton: false)
             }
-        }
-    }
-}
-
-/// Native helper setup steps are shared by the first-use gate and upgrade flow.
-struct NativeComputerUsePermissionRows: View {
-    @Environment(\.settingsFormStyle) private var formStyle
-    let gate: ComputerUseGate
-    var showsRestartAction = true
-    var compact = false
-    private var accessibilitySetUp: Bool {
-        gate.helperAccessibility || NativePermissionSetup.shared.stepIsApplied(.accessibility)
-    }
-    private var screenRecordingSetUp: Bool {
-        gate.helperScreen || NativePermissionSetup.shared.stepIsApplied(.screenRecording)
-    }
-    private var showsHeading: Bool {
-        PermissionSetupPresentation.showsGrant(accessibilitySetUp, compact: compact)
-            || PermissionSetupPresentation.showsGrant(screenRecordingSetUp, compact: compact)
-            || PermissionSetupPresentation.showsGrant(gate.automation == .granted, compact: compact)
-    }
-    private var automationNote: String {
-        switch gate.automation {
-        case .granted: return "granted"
-        case .denied, .notAsked, .unavailable: return compact ? "" : "not granted"
-        }
-    }
-    private func note(_ state: NativePermissionReadiness.State, grant: NativePermissionSetup.Grant) -> String {
-        if state == .verified { return "granted" }
-        if NativePermissionSetup.shared.stepIsApplied(grant) { return "set up" }
-        if gate.requiresPermissionRestart,
-           NativePermissionSetup.shared.dropped.contains(grant) {
-            return "restart to finish"
-        }
-        if NativePermissionSetup.shared.canAttemptTask { return "set up" }
-        return compact ? "" : "not granted"
-    }
-    var body: some View {
-        PermissionSetupGroup(label: formStyle ? "Computer use" : "Computer Use", compact: compact, showsHeading: showsHeading) {
-            VStack(alignment: .leading, spacing: 2) {
-                if PermissionSetupPresentation.showsGrant(accessibilitySetUp, compact: compact) {
-                    StatusLine(title: "Accessibility",
-                               health: accessibilitySetUp ? .ok : .warn,
-                               note: note(gate.helperPermissionState.accessibility, grant: .accessibility),
-                               tip: "Allows clicking and typing in your apps.",
-                               fixTitle: compact ? "Grant" : "Open Settings",
-                               fix: !gate.setup.ready || accessibilitySetUp ? nil : {
-                        gate.beganPermissionAction(.helperAccessibility)
-                        PermissionGuide.shared.guide(.accessibility, dragging: OpenAIComputerUse.appURL) {
-                            NativePermissionSetup.shared.didDrop(.accessibility)
-                        }
-                    })
-                }
-                if formStyle { SettingsHairline(opacity: 0.10) }
-                if PermissionSetupPresentation.showsGrant(screenRecordingSetUp, compact: compact) {
-                    StatusLine(title: "Screen Recording",
-                               health: screenRecordingSetUp ? .ok : (gate.helperPermissionState.screenRecording == .denied ? .bad : .warn),
-                               note: note(gate.helperPermissionState.screenRecording, grant: .screenRecording),
-                               tip: "Allows computer use to see the app it is working in.",
-                               fixTitle: compact ? "Grant" : "Open Settings",
-                               fix: !gate.setup.ready || screenRecordingSetUp ? nil : {
-                        gate.beganPermissionAction(.helperScreenRecording)
-                        PermissionGuide.shared.guide(.screenRecording, dragging: OpenAIComputerUse.appURL) {
-                            NativePermissionSetup.shared.didDrop(.screenRecording)
-                        }
-                    })
-                }
-                if formStyle { SettingsHairline(opacity: 0.10) }
-                if PermissionSetupPresentation.showsGrant(gate.automation == .granted, compact: compact) {
-                    StatusLine(title: "Automation",
-                               health: gate.automation == .granted ? .ok : (gate.automation == .denied ? .bad : .warn),
-                               note: automationNote,
-                               tip: "Allows Sentient OS to control its computer-use helper. This is separate from Screen Recording and Accessibility.",
-                               fixTitle: compact ? "Grant" : (gate.automation == .denied ? "Open Settings" : (gate.automation == .notAsked ? "Allow…" : "Check again")),
-                               fix: !gate.setup.ready || gate.automation == .granted || gate.requestingAutomation || gate.checkingAutomation ? nil : {
-                        gate.beganPermissionAction(.automation)
-                        if gate.automation == .denied {
-                            Permissions.openAutomationSettings()
-                        }
-                        else { gate.requestAutomation() }
-                    })
-                }
-                if gate.restartingNative {
-                    SettingsProse("Restarting computer use…")
-                } else if gate.requestingAutomation || gate.checkingCapabilities {
-                    SettingsProse(gate.automation == .granted ? "Finish the permissions in the helper’s setup window. The Chrome extension is optional." : "Choose Allow in the macOS permission prompt.")
-                } else if gate.automation == .denied {
-                    SettingsProse("In System Settings → Privacy & Security → Automation, expand Sentient OS and turn on ChatGPT Computer Use (called Codex Computer Use in some versions).")
-                } else if gate.setup.ready, let error = gate.nativePermissionError {
-                    SettingsProse(error)
-                    if !gate.requiresPermissionRestart, gate.nativeRestartRequired {
-                        SettingsPillButton(title: "Restart computer use") { gate.restartComputerUse() }
-                            .disabled(gate.checkingAutomation)
-                    } else if !gate.requiresPermissionRestart, NativePermissionSetup.shared.recoveryNeeded {
-                        SettingsPillButton(title: "Open helper setup") { gate.verifyNativePermissions() }
-                            .disabled(gate.checkingAutomation)
-                    } else if !gate.requiresPermissionRestart {
-                        SettingsPillButton(title: "Try again") { gate.requestAutomation() }
-                            .disabled(gate.checkingAutomation)
-                    }
-                } else if gate.setup.ready, gate.checkingAutomation, gate.automation != .granted {
-                    SettingsProse("Checking permissions…")
-                }
-                if gate.setup.ready, !gate.requiresPermissionRestart, gate.automation == .granted, NativePermissionSetup.shared.recoveryNeeded,
-                   !gate.requestingAutomation, !gate.checkingCapabilities {
-                    SettingsProse("Finish Accessibility and Screen Recording in the helper’s window. Sentient doesn’t use its browser extension.")
-                    if !compact {
-                        SettingsPillButton(title: "Open helper setup") { gate.fixNativePermissions() }
-                            .disabled(!gate.canRepairHelperPermissions)
-                    }
-                }
-                if showsRestartAction, gate.requiresPermissionRestart {
-                    NativePermissionRestartSection(gate: gate)
-                        .padding(.top, 16)
-                }
-            }
-        }
-        .task(id: gate.setup.ready) { await gate.prepareNativePermissions() }
-        .task(id: gate.shouldCheckAfterRestart) { gate.checkAfterRestartIfNeeded() }
-        .onChange(of: gate.automation) { _, state in
-            if state == .notAsked, gate.setup.ready { gate.requestAutomation() }
         }
     }
 }
@@ -277,8 +140,11 @@ struct NativeComputerUseSettings: View {
                 SettingsProse("Computer-use permissions are ready.")
             }
         }
-        .task { gate.refresh(); await gate.awaitAutomationRefresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in gate.refresh() }
+        .task { gate.refresh(); await gate.checkNativePermissionsIfNeeded() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            gate.refresh()
+            Task { await gate.checkNativePermissionsIfNeeded() }
+        }
     }
 }
 

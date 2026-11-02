@@ -202,7 +202,9 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
 
     func heartbeat(withReply reply: @escaping (Bool) -> Void) {
         queue.async {
-            guard self.prepared, !self.removing else { reply(false); return }
+            // After a restart the app must reacquire its hold. A successful heartbeat means
+            // the existing awake session survived, rather than merely that this process exists.
+            guard self.prepared, !self.removing, self.holdingAwake else { reply(false); return }
             self.startDeadman(seconds: self.lastTimeout); reply(true)
         }
     }
@@ -293,6 +295,7 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
         t.setEventHandler { [weak self] in
             self?.log("CEILING fired — awake \(seconds)s since beginAwake; forcing disablesleep 0")
             let restored = self?.pmset(["-a", "disablesleep", "0"], phase: .ceiling) ?? false
+            if restored { self?.holdingAwake = false }
             Diagnostics.report(.wakeFailed, phase: .ceiling, reason: "safety_timer_fired",
                                source: "wakeHelper", counts: [.elapsedMS: seconds * 1000], flags: [.restored: restored])
             self?.cancelDeadman()

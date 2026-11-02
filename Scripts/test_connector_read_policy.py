@@ -209,9 +209,6 @@ def main():
         passed = process.returncode == 0 and len(fixture.requests) == repetitions + 1 and fixture.calls == expected_calls
         surface = {t["name"]: [v["name"] for v in t.get("tools", [])]
                    for t in fixture.requests[0].get("tools", []) if t.get("name", "").startswith("mcp__")} if fixture.requests else {}
-        if recipe not in ["action", "slack-action", "slack-draft", "slack-approved"] and not old_policy:
-            passed = passed and all("write" not in name and "create" not in name
-                                    for tools in surface.values() for name in tools)
         if recipe == "source" and fixture.requests:
             prohibited = ("exec_command", "shell", "view_image", "browser", "spawn_agent", "computer")
             names = [t.get("name", "") for t in fixture.requests[0].get("tools", [])]
@@ -226,8 +223,16 @@ def main():
     try:
         run("old-policy-permits-create", "drive", "drive", "gdrive_create_file", ["gdrive.create_file"], old_policy=True)
         run("drive-read", "drive", "drive", "gdrive_search", ["gdrive.search"])
+        run("renamed-read", "drive", "drive", "gdrive_new_search", ["gdrive.new_search"],
+            lambda tools: tools.append(tool("gdrive.new_search", DRIVE, "new_search", True)))
+        run("read-name-cannot-grant-write", "drive", "drive", "gdrive_read_and_modify", [],
+            lambda tools: tools.append(tool("gdrive.read_and_modify", DRIVE, "read_and_modify", False)))
+        run("write-word-does-not-deny-read", "drive", "drive", "gdrive_create_preview", ["gdrive.create_preview"],
+            lambda tools: tools.append(tool("gdrive.create_preview", DRIVE, "create_preview", True)))
         if "source" in recipes:
             run("source-read", "source", "drive", "gdrive_search", ["gdrive.search"])
+            run("source-renamed-read", "source", "drive", "gdrive_new_search", ["gdrive.new_search"],
+                lambda tools: tools.append(tool("gdrive.new_search", DRIVE, "new_search", True)))
             run("source-create-denied", "source", "drive", "gdrive_create_file", [])
         if "identity" in recipes:
             run("identity-read", "identity", "drive", "gdrive_get_profile", ["gdrive.get_profile"])

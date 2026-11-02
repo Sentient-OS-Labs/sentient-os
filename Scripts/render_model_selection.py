@@ -57,7 +57,7 @@ enum Verdict { case survivor, junk, sensitive }
     func refreshInstalled() async {}
     func refreshLoginStatus() async {}
     func ensureCurrent() async -> Bool { true }
-    func startLogin() async -> UUID? { fatalError("No login in render fixture") }
+    func startLogin(force: Bool = false) async -> UUID? { fatalError("No login in render fixture") }
     func cancelLogin(ifAttempt: UUID) async {}
 }
 @MainActor final class ClaudeSetup {
@@ -65,13 +65,14 @@ enum Verdict { case survivor, junk, sensitive }
     var loggedIn = Fixture.signedIn
     var loggingIn = false, preparing = false, installing = false, installGaveUp = false, installed = true
     var verifyingLogin = false, verificationPending = false
+    var email: String? = "you@example.com"
     var plan: String? = "Max", loginURL: URL? = nil
     var loginActionTitle = "Sign in with Claude"
     var loginStatusLine: String? = nil, installStatus: String? = nil
     func refreshInstalled() async {}
     func refreshLoginStatus() async {}
     func ensureCurrent() async -> Bool { true }
-    func startLogin() { fatalError("No login in render fixture") }
+    func startLogin(force: Bool = false) { fatalError("No login in render fixture") }
 }
 @MainActor final class SentientSetup {
     static let shared = SentientSetup()
@@ -82,6 +83,14 @@ enum Verdict { case survivor, junk, sensitive }
 }
 @MainActor enum CodexAuth {
     struct Plan { var displayName = "Plus" }
+    enum PlanChoice: String, CaseIterable { case automatic, free, paid
+        var title: String { switch self { case .automatic: "Automatic"; case .free: "Free / Go"; case .paid: "Plus or above" } }
+    }
+    static var planChoice = PlanChoice.automatic
+    static let modelFallbackKey = "fixture.fallback"
+    static var usingModelFallback = false
+    static func diagnosticEmail() -> String? { "you@example.com" }
+    static func retrySelectedModel() {}
     static var knowledgeBaseOnly = false
     static let connectorLockedTip = "Connect an account first."
     static func currentPlan() -> Plan? { Fixture.signedIn ? Plan() : nil }
@@ -116,6 +125,19 @@ struct SentientInferencePanel: View { var body: some View { EmptyView() } }
 struct DoubleTapModelSettings: View { var body: some View { EmptyView() } }
 struct OnboardingTelemetryConsent: View { var body: some View { EmptyView() } }
 '''
+STUBS += r'''
+@MainActor @Observable final class AppState {}
+@MainActor @Observable final class ProviderAccountActions {
+    static let shared = ProviderAccountActions()
+    var changing = false
+    func signOut(_ backend: ModelBackend, appState: AppState) async throws { fatalError("render only") }
+}
+enum HomeDestination { case settings }
+enum Pane { case sources }
+@MainActor enum HomeWindowOpening { static func open(_ destination: HomeDestination, settingsPane: Pane) {} }
+func Log(_ text: String) {}
+func ErrorLabel(_ error: Error) -> String { "fixture" }
+'''
 MAIN = r'''
 @main @MainActor struct Render {
     static func main() async throws {
@@ -140,6 +162,7 @@ MAIN = r'''
         .background(Color.black)
         .defaultAppStorage(defaults)
         .preferredColorScheme(.dark)
+        .environment(AppState())
         let host = NSHostingView(rootView: content)
         let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: width, height: height),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -164,7 +187,7 @@ MAIN = r'''
 def main():
     output = Path(sys.argv[1]).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    files = ['Views/Settings/SettingsComponents.swift', 'Views/ModelSelectionDesign.swift',
+    files = ['Views/Settings/ProviderAccountControls.swift', 'Views/Settings/SettingsComponents.swift', 'Views/ModelSelectionDesign.swift',
              'Views/FrontierEngineTab.swift', 'Views/FrontierEnginePicker.swift',
              'Views/Onboarding/OnboardingCodexSteps.swift', 'Views/Onboarding/OnboardingFrontierModelView.swift',
              'Views/Settings/FrontierModelPane.swift', 'Views/LoginLinkButton.swift',
@@ -175,6 +198,7 @@ def main():
         paths = []
         for relative in files:
             source = (APP / relative).read_text().split('#Preview(')[0]
+            if relative.endswith('ProviderAccountControls.swift'): source = 'import SwiftUI\n' + source[source.index('struct ProviderAccountControls:'):]
             source = source.replace('@State private var tab: FrontierEngineTab = .chatgpt', '@State private var tab: FrontierEngineTab = Fixture.tab')
             source = source.replace('@State private var plan: CodexAuth.Plan?', '@State private var plan: CodexAuth.Plan? = CodexAuth.currentPlan()')
             source = source.replace('tab = activeTab.visibleTab', 'tab = Fixture.tab')
@@ -187,7 +211,7 @@ def main():
         executable = build / 'render'
         subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '6', '-default-isolation', 'MainActor',
                         str(fixture), *paths, '-o', str(executable)], check=True)
-        for state in ['settings-claude-ready', 'settings-chatgpt', 'settings-endpoint-narrow', 'onboarding-claude-ready', 'onboarding-chatgpt']:
+        for state in ['settings-claude-ready', 'settings-chatgpt', 'settings-chatgpt-ready', 'settings-chatgpt-ready-narrow', 'settings-endpoint-narrow', 'onboarding-claude-ready', 'onboarding-chatgpt']:
             subprocess.run([str(executable), str(output), state], check=True, timeout=30)
 
 if __name__ == '__main__':

@@ -165,16 +165,21 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
     var connected: Bool { state == .connected || state == .ready || state == .policyRequired }
     var usable: Bool { state == .ready && !tools.isEmpty }
     var readNames: [String] {
-        return tools.filter(\.readOnlyHint).map(\.name).sorted()
+        // The provider's reviewed reads remain usable when optional annotations are absent.
+        // New read tools can advertise themselves through the live MCP metadata.
+        let reviewed = provider?.reviewedReads ?? []
+        return tools.filter { !$0.destructiveHint && ($0.readOnlyHint || reviewed.contains($0.name)) }
+            .map(\.name).sorted()
     }
     /// A failed, absent or stale classifier cache must never hide live advertised actions.
     var actionNames: [String] {
         return tools.map(\.name).sorted()
     }
     /// Compatibility metadata for inventory displays and explicit diagnostic fixtures.
-    /// Action access is independent of categories; background reads require readOnlyHint.
+    /// Action access is independent of categories; background reads use reviewed permissions
+    /// and live readOnlyHint metadata.
     func category(for tool: DirectMCPTool) -> DirectMCPTool.Category {
-        return tool.readOnlyHint ? .read : .write
+        return readNames.contains(tool.name) ? .read : .write
     }
     var kbEligible: Bool {
         // Selection is user intent. Live grant and tool policy checks happen only on use.
@@ -189,7 +194,6 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
             required.insert("get_account_info")
         }
         return required.isSubset(of: Set(readNames))
-            && tools.filter { required.contains($0.name) }.allSatisfy(\.readOnlyHint)
     }
     var detected: ConnectorCensus.DetectedConnector {
         .init(slug: slug, displayName: displayName, origin: .direct, serverURL: provider?.endpoint.absoluteString,

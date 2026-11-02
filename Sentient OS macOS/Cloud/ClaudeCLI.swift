@@ -445,7 +445,7 @@ actor ClaudeCLI {
             Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
             return env
         } catch {
-            if let authRevision { ClaudeAuth.rejected(error, after: authRevision) }
+            if let authRevision { await ClaudeAuth.rejected(error, after: authRevision) }
             throw error
         }
     }

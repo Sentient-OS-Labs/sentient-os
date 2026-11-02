@@ -6,6 +6,16 @@ import Foundation
 
 @MainActor
 enum HostedConnectorSetup {
+    enum PageProgress: String {
+        case unopened, awaitingConfirmation, confirmed
+    }
+
+    /// Keep browser handoffs across sheet dismissal and app restart, scoped to the reader.
+    /// The mcp namespace also lets the existing factory reset clear this setup history.
+    static func pageProgressKey(slug: String, backend: ModelBackend) -> String {
+        "mcp.\(ConnectorRegistry.canonicalSlug(slug)).pageProgress.\(backend.rawValue)"
+    }
+
     private static var collectionJobs: [String: Task<Void, Never>] = [:]
     private static var teardownDepth = 0
     /// Done saves the user's declaration immediately. Actual reads record health observations;
@@ -15,8 +25,10 @@ enum HostedConnectorSetup {
         guard teardownDepth == 0, !Task.isCancelled, backend.hasSubscriptionConnectors, ModelBackend.current == backend else { return false }
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return false }
-        ConnectorCensus.confirmSelection(slug: slug, reconnected: reconnected)
         let defaults = UserDefaults.standard
+        let progressKey = pageProgressKey(slug: slug, backend: backend)
+        let awaitingConfirmation = defaults.string(forKey: progressKey) == PageProgress.awaitingConfirmation.rawValue
+        ConnectorCensus.confirmSelection(slug: slug, reconnected: reconnected || awaitingConfirmation)
         switch slug {
         case "gmail":
             defaults.set(true, forKey: "dbg.gmail.connected")
@@ -34,6 +46,7 @@ enum HostedConnectorSetup {
             // does not lose the disclosed request. Existing selections never imply consent.
             defaults.set(UUID().uuidString, forKey: request.key)
         }
+        defaults.set(PageProgress.confirmed.rawValue, forKey: progressKey)
         return true
     }
 
@@ -46,6 +59,8 @@ enum HostedConnectorSetup {
         let slug = ConnectorRegistry.canonicalSlug(slug)
         guard !slug.hasPrefix("direct-") else { return }
         let defaults = UserDefaults.standard
+        defaults.set(PageProgress.awaitingConfirmation.rawValue,
+                     forKey: pageProgressKey(slug: slug, backend: backend))
         let selected: Bool
         switch slug {
         case "gmail": selected = defaults.bool(forKey: "dbg.run.gmail")

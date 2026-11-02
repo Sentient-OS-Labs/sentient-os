@@ -12,31 +12,35 @@ import Foundation
  @MainActor static func main() {
   let suite=CommandLine.arguments[1],phase=CommandLine.arguments[2]
   let d=UserDefaults(suiteName:suite)!
-  let setup=NativePermissionSetup(defaults:d,processID:phase)
+  let setup=NativePermissionSetup(defaults:d)
   switch phase {
-  case "grant-helper":
+  case "legacy":
    d.removePersistentDomain(forName:suite)
-   setup.requestRestart();setup.beganGrant(.accessibility);setup.didDrop(.accessibility)
-   setup.requestRestart();setup.beganGrant(.screenRecording);setup.didDrop(.screenRecording)
-   precondition(setup.needsRestart && !setup.canAttemptTask)
-  case "macos-reopened":
-   precondition(setup.dropped == [.accessibility,.screenRecording],"Lost completed drag receipts")
-   precondition(setup.hasRestarted && setup.canAttemptTask,"OS restart must count without our restart button")
-   precondition(setup.stepIsApplied(.accessibility) && setup.stepIsApplied(.screenRecording))
-   setup.preparedAfterRestart()
-   setup.requestRestart() // Remaining Sentient Screen Recording step, then a second OS restart.
-   precondition(setup.stepIsApplied(.accessibility) && setup.stepIsApplied(.screenRecording),"Helper steps must remain done")
-  case "second-reopen":
-   precondition(setup.canAttemptTask && setup.hasVisited(.accessibility) && setup.hasVisited(.screenRecording))
-   setup.preparedAfterRestart()
+   d.set(true, forKey:"computerUse.nativePermissionSetupCompleted")
+   d.set("old", forKey:"computerUse.nativePermissionConfirmedProcess")
+   precondition(!setup.canAttemptTask)
+  case "interrupted":
+   precondition(!setup.canAttemptTask,"Legacy clicks and partial setup cannot become readiness")
+  case "native-success":
+   precondition(!setup.canAttemptTask)
+   setup.verified()
+   precondition(setup.canAttemptTask)
   case "later-launch":
-   precondition(setup.canAttemptTask && !setup.needsRestart,"Normal relaunch must retain completed setup")
-   _=setup.permissionFailed()
-   precondition(!setup.canAttemptTask && !setup.stepIsApplied(.screenRecording),"Actual denial must override setup history")
-   setup.reset();d.removeObject(forKey:HealthCaution.nativeComputerUseEverReadyKey)
+   precondition(setup.canAttemptTask,"Native success survives restart")
+   _ = setup.permissionFailed()
+   precondition(!setup.canAttemptTask)
+  case "repair-interrupted":
+   precondition(!setup.canAttemptTask && setup.recoveryNeeded)
+   let old = setup.permissionFailed()
+   setup.reset()
+   setup.recovered(ifCurrent:old)
+   precondition(!setup.canAttemptTask,"Late repair cannot undo reset")
+   setup.verified()
+  case "repair-finished":
+   precondition(setup.canAttemptTask && !setup.recoveryNeeded)
+   setup.reset()
   case "after-reset":
-   precondition(!setup.canAttemptTask && setup.needsRestart && setup.dropped.isEmpty,"Reset must remove progress receipts")
-   precondition(!setup.hasVisited(.accessibility) && !setup.hasVisited(.screenRecording))
+   precondition(!setup.canAttemptTask)
    d.removePersistentDomain(forName:suite)
   default:fatalError("phase")
   }
@@ -49,5 +53,5 @@ with tempfile.TemporaryDirectory(prefix='sentient-native-setup-restart-') as tmp
  subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','5',str(p/'Main.swift'),
   str(APP/'Views/Permissions/NativePermissionSetup.swift'),'-o',str(p/'test')],check=True)
  suite='sentient.native-setup-fixture.'+str(uuid.uuid4())
- for phase in ['grant-helper','macos-reopened','second-reopen','later-launch','after-reset']:
+ for phase in ['legacy','interrupted','native-success','later-launch','repair-interrupted','repair-finished','after-reset']:
   subprocess.run([str(p/'test'),suite,phase],check=True)

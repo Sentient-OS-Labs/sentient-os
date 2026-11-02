@@ -41,7 +41,7 @@ nonisolated enum SlackConnector {
         }.joined(separator: ", ")
         let entry = "{ enabled = true, default_tools_enabled = false, destructive_enabled = false, "
             + "default_tools_approval_mode = \"prompt\", tools = { \(tools) } }"
-        return exclusive ? "apps = { _default = { enabled = false }, \(id) = \(entry) }" : "apps.\(id) = \(entry)"
+        return exclusive ? "apps = { _default = { enabled = false }, \(DirectMCPRuntime.quoted(id)) = \(entry) }" : "apps.\(DirectMCPRuntime.quoted(id)) = \(entry)"
     }
 
     static let actionInstructions = """

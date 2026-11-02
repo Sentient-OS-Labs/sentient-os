@@ -77,7 +77,7 @@ actor OpenAIComputerUseSession {
     }
     func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         let values = try JSONSerialization.jsonObject(with: arguments) as? [String:String]
-        let helperSetup = values?["app"] == "com.apple.systempreferences"
+        let helperSetup = timeout > 12
         precondition(timeout > 0 && timeout <= (helperSetup ? 300 : 12) && tool == "get_app_state")
         if helperSetup {
             precondition(timeout > 298 && timeout <= 300, "Manual setup shares its full five-minute budget across reconnects")
@@ -113,6 +113,7 @@ actor OpenAIComputerUseSession {
     }
 }
 nonisolated enum OpenAIComputerUseProbe {
+    static func appStateResult(_ result:[String:Any]) throws -> [String:Any] { try validateResult(result, requiresCapture:false); return result }
     static func validateResult(_ result: [String:Any], requiresCapture: Bool) throws {}
 }
 '''

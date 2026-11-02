@@ -23,7 +23,8 @@ registry='\n'.join(method('Cloud/ConnectorRegistry.swift',x) for x in [
  'static func contributesToKnowledgeBase','static func kbEligible','static func requiresDirectKnowledgeConnection',
  'static func detectedForCurrentBackend'])
 require=method('Sources/MCPSource.swift','private static func requireReadable').replace('private static','static',1)
-confirm=method('Cloud/HostedConnectorSetup.swift','static func confirm(slug:')
+confirm='\n'.join(method('Cloud/HostedConnectorSetup.swift', signature) for signature in (
+ 'enum PageProgress:', 'static func pageProgressKey(', 'static func confirm(slug:'))
 lookup=method('Connectors/DirectMCPStore.swift','static func connection(_ slug:')
 can=method('Cloud/ConnectorCensus.swift','var canAttempt: Bool')
 source=(SRC/'Views/Settings/ConnectorsSection.swift').read_text();source=source[source.index('struct ConnectorSource:'):source.index('/// Green means')]
@@ -127,6 +128,21 @@ func check(_ x:Bool,_ name:String){precondition(x,name);print("PASS: "+name)}
  @MainActor static func main()throws{
   for backend in [ModelBackend.chatgpt,.claude]{
    ModelBackend.current=backend
+   UserDefaults.standard.v=[:];DirectMCPStore.records=[];ConnectorCensus.records=[]
+   let taskApp=ConnectorCensus.DetectedConnector(slug:"github",displayName:"GitHub",origin:.init(backend:backend)!)
+   ConnectorCensus.records=[taskApp]
+   let taskCatalog=ConnectorSource.catalog(with:[taskApp])
+   let taskChoice=taskCatalog.first{$0.id==taskApp.id}!
+   check(!taskChoice.showsInKnowledgeSources,"\(backend) extra connected app goes in Sidekick section")
+   check(taskCatalog.filter(\.showsInKnowledgeSources).count==ConnectorRegistry.packs.count,
+     "\(backend) curated setup choices stay in knowledge sources")
+   check(ConnectorCensus.records.map(\.id)==[taskApp.id] && UserDefaults.standard.v.isEmpty,
+     "presentation leaves connector inventory and selections untouched")
+   UserDefaults.standard.set(true,forKey:CodexAuth.kbOnlyKey)
+   check(!taskChoice.showsInKnowledgeSources && taskCatalog.filter(\.isCurated).allSatisfy(\.showsInKnowledgeSources),
+     "plan restriction does not move setup choices or connected Sidekick apps")
+   UserDefaults.standard.set(true,forKey:ConnectorRegistry.kbKey(taskApp.slug))
+   check(taskChoice.showsInKnowledgeSources,"older saved choice remains in knowledge sources for management")
    for slug in ["notion","granola"]{
     DirectMCPStore.records=[];ConnectorCensus.records=[];UserDefaults.standard.v=[:]
     let empty=ConnectorSource.catalog(with:[]).first{$0.serviceSlug==slug}!
@@ -161,6 +177,8 @@ func check(_ x:Bool,_ name:String){precondition(x,name);print("PASS: "+name)}
     DirectMCPStore.records=[direct]
     let both=ConnectorSource.catalog(with:[hosted,direct.detected])
     check(both.filter{$0.serviceSlug==slug}.count == 3,"hosted, direct account and add-account routes remain distinct")
+    check(both.filter{$0.serviceSlug==slug}.allSatisfy(\.showsInKnowledgeSources),
+      "hosted repair, direct account and setup remain in knowledge sources")
     let chosen=SheetFixture(source:setup,newConnectionID:direct.id,connectors:[hosted,direct.detected])
     check(chosen.selected?.slug == direct.slug && chosen.native,"completed setup binds the exact chosen direct account")
     check(true,"stored \(slug) direct UUID passes route admission")

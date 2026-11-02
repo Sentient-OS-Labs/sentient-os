@@ -71,7 +71,12 @@ enum CrashReporting {enum Level{case warning};static func captureEvent(_ name:St
   let c=Coordinator(defaults:d)
   check(ProcessingPlan.recovered(.init(status:.requested),initialComplete:false).status == .paused,
         "Queued first analysis also waits for explicit resume after quit")
-  await c.runScheduled();check(c.begins==0,"Scheduler cannot start initial creation")
+  c.record = .init(status:.failed,trigger:.onboarding)
+  await c.runScheduled()
+  check(c.begins==1 && c.record.status == .requested && c.record.trigger == .overnight,
+        "Scheduler can recover a failed first analysis")
+  await c.runScheduled();check(c.begins==1,"Scheduler cannot duplicate already requested analysis")
+  c.begins=0
   c.record = .init(status:.running,trigger:.onboarding);c.isBusy=true;c.pause()
   check(c.state == .stopping && ProcessingPlan.read(d).status == .paused,"Pause persists before worker drains")
   let recovered=ProcessingPlan.recovered(ProcessingPlan.read(d),initialComplete:false)

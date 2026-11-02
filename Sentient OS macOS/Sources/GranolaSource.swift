@@ -1,7 +1,7 @@
 //
 // GranolaSource.swift
-// Fetches a bounded sample of Granola notes natively before tool-free summarization.
-// Checks account scope, bounded sample dates, selected IDs and complete content before returning a result.
+// Uses the shared ingestion agent with Granola's live MCP tools. Legacy native transport
+// fixtures remain DEBUG-only so parser/session regression tests can still exercise them.
 // Doc: Documentation - Sources - Cloud (Gmail, Calendar).md
 //
 
@@ -16,10 +16,29 @@ enum GranolaSource {
     static let responseByteCap = 400_000
     static let nativeReads = DirectMCPProvider.granola.nativeKnowledgeReads
 
+    static func isGranola(_ slug: String) -> Bool {
+        DirectMCPStore.connection(slug)?.providerSlug == "granola"
+    }
+
+    static func read(connection: DirectMCPConnection, prompt: String, mode: MCPSource.ReadMode,
+                     window: MCPSource.Window, claudeModel: ClaudeCLI.Model?,
+                     onReceipt: MCPSource.ReceiptObserver?) async throws -> MCPSource.ReadOutcome {
+        #if DEBUG
+        if curationTrial {
+            return try await readNativeFixture(connection: connection, prompt: prompt, mode: mode,
+                window: window, claudeModel: claudeModel, onReceipt: onReceipt)
+        }
+        #endif
+        try DirectMCPSession.check(connection)
+        let result = try await MCPSource.readUsingTools(slug: connection.slug, prompt: prompt,
+            claudeModel: claudeModel ?? defaultClaudeModel, onReceipt: onReceipt)
+        try DirectMCPSession.check(connection)
+        return result
+    }
+
     #if DEBUG
     @TaskLocal static var curationTrial = false
     @TaskLocal static var curationNoteIDs: Set<String>? = nil
-    #endif
 
     struct Account: Equatable, Sendable {
         let fingerprint: String
@@ -101,11 +120,7 @@ enum GranolaSource {
         }
     }
 
-    static func isGranola(_ slug: String) -> Bool {
-        DirectMCPStore.connection(slug)?.providerSlug == "granola"
-    }
-
-    static func read(connection: DirectMCPConnection, prompt: String, mode: MCPSource.ReadMode,
+    static func readNativeFixture(connection: DirectMCPConnection, prompt: String, mode: MCPSource.ReadMode,
                      window: MCPSource.Window, claudeModel: ClaudeCLI.Model?,
                      onReceipt: MCPSource.ReceiptObserver?) async throws -> MCPSource.ReadOutcome {
         try await DirectMCPRuntime.executeNative(connection: connection) {
@@ -475,6 +490,8 @@ enum GranolaSource {
         if let other = object["meeting_id"] as? String, UUID(uuidString: other) != id { return nil }
         return id.uuidString.lowercased()
     }
+    #endif
+
     static func date(_ value: String) -> Date? {
         let format = ISO8601DateFormatter(); format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let parsed = format.date(from: value) ?? ISO8601DateFormatter().date(from: value) { return parsed }

@@ -146,6 +146,11 @@ nonisolated enum AppleCalendarSource {
         let coverage: Coverage
         let events: [Event]
 
+        func unchangedEventIDs(comparedTo earlier: Snapshot) -> Set<String> {
+            let previous = Dictionary(earlier.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return Set(events.filter { previous[$0.id] == $0 }.map(\.id))
+        }
+
         /// A changed selection, permission, deletion, edit, or recurrence expansion invalidates
         /// the pending batch. Old checkpoints remain intact; the next run captures fresh state.
         func validate() throws {
@@ -166,6 +171,18 @@ nonisolated enum AppleCalendarSource {
                       Older schedule claims are historical, not current availability. Other calendar sources may
                       describe the same meeting; do not count it twice. Verify the live calendar before any action.
                       """, title: "Apple Calendar schedule coverage", reminderFlagged: false)
+        }
+
+        func partialMarker(pending: Int) -> NoteDraft {
+            NoteDraft(kind: .appleCalendar, sourceID: "apple-calendar:coverage", folder: "Apple Calendar",
+                      itemDate: capturedAt,
+                      text: """
+                      Partial Apple Calendar update as of \(AppleCalendarSource.timestamp(capturedAt)).
+                      \(coverage.scheduleDescription)
+                      \(pending) events are still awaiting analysis. These summaries provide partial context.
+                      Omitted events do not establish free time, deletion, cancellation or attendance.
+                      Older schedule claims are historical. Verify the live calendar before any action.
+                      """, title: "Partial Apple Calendar context", reminderFlagged: false)
         }
     }
 

@@ -38,8 +38,9 @@ enum SlackSource {
 
     static func prompt(mode: MCPSource.ReadMode, window: MCPSource.Window) -> String {
         let bounds = searchBounds(window)
-        let actor = SlackConnector.runIdentity ?? SlackConnector.cachedIdentity()
-        let queries = ["to:me", "from:<@\(actor?.userID ?? "USER_ID")>", broadQuery(window)]
+        let actor = SlackConnector.runIdentity
+        let ownMessages = actor.map { "from:<@\($0.userID)>" } ?? "from:me"
+        let queries = ["to:me", ownMessages, broadQuery(window)]
         let discovery = queries.enumerated().map { index, query in
             let input: [String: Any] = ["query": query, "after": bounds.after, "before": bounds.before,
                 "content_types": "messages", "channel_types": "public_channel,private_channel,mpim,im",
@@ -56,11 +57,11 @@ enum SlackSource {
         WINDOW AND TOOL BUDGET
         Window start inclusive: \(MCPSource.timestamp(window.lower))
         Window end exclusive: \(MCPSource.timestamp(window.upper))
-        Use only slack_search_public_and_private and slack_read_thread. The user has opted
+        Use the available Slack read tools for message search and thread reading. The user has opted
         to this knowledge-source read, including permitted private conversations and DMs.
         If Slack is still connecting, use WaitForMcpServers when available before discovery.
         Search at most \(discoveryCap(mode)) times, counting pagination and repeated searches.
-        Each search must set after="\(bounds.after)" and before="\(bounds.before)" exactly,
+        With slack_search_public_and_private, set after="\(bounds.after)" and before="\(bounds.before)",
         content_types="messages", channel_types="public_channel,private_channel,mpim,im",
         include_bots=false, include_context=false, sort="timestamp", sort_dir="desc",
         response_format="detailed", and limit at most \(pageSize). Detailed metadata is needed
@@ -69,17 +70,17 @@ enum SlackSource {
         Consider at most \(candidateCap(mode)) message matches across those pages.\(mode == .iterative ? " Use at most 10 results for each personal search and 20 for the broad search." : "")
         These are maximums, not targets. Stop when there is enough evidence.
         Use keyword/modifier search; do not rely on semantic search being available.
-        Start with to:me for requests aimed at the user, then from:<@USER_ID> for the verified
-        actor's own commitments. Use the third search with query="\(broadQuery(window))"
+        Start with to:me for requests aimed at the user, then \(ownMessages) for the connected
+        user's own commitments. Use the third search with query="\(broadQuery(window))"
         to sample important shared decisions across the workspace. This broad date term must
-        retain the exact after/before Unix filters above. USER_ID comes
-        only from the app's verified account context below. A quiet result requires checking
+        retain the requested time window. Use the connected-user query when no profile is available.
+        A quiet result requires checking
         all three lanes; finding no direct request alone does not prove the window is quiet.
         Do not search channel by channel or enumerate channels, people, files, or history.
 
-        EXACT DISCOVERY ARGUMENTS
-        Copy these three JSON objects verbatim, one per search in order. Do not replace the
-        actor query with from:me, move dates into query/filters, or add semantic descriptions.
+        DISCOVERY ARGUMENT EXAMPLES
+        These examples match slack_search_public_and_private. Follow the current tool schema
+        if its name or arguments differ, preserving the search intent and requested time window.
         Omit filters, keywords and natural_language_query; if a wrapper requires them, use
         only an empty string, empty array and empty string respectively.
         \(discovery)

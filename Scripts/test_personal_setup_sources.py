@@ -55,7 +55,7 @@ def main() -> int:
         receipt = app.run_stage(executable, root, fixture, runtime, "ui-personal-sources", 90)
         manifest = app.read_json(root / "personal-sources-manifest.json")
         captures = manifest.get("captures", [])
-        app.require(manifest.get("completed") is True and len(captures) == 8, "Incomplete source/timing UI fixture")
+        app.require(manifest.get("completed") is True and len(captures) == 10, "Incomplete source/timing UI fixture")
         app.require(manifest.get("callbacks") == ["now", "now"]
                     and manifest.get("callbacks_after_sheet_dismissal") == [True, True], "Timing callback preceded native dismissal")
         app.require(manifest.get("provider_calls") == 0 and manifest.get("wake_setup_requests") == 0

@@ -119,11 +119,12 @@ enum HealthCaution {
     private static var codexLogin: (verdict: Bool, at: Date)?
 
     /// Optional background requirements follow saved intent, never Home admission. A pending
-    /// scheduled first analysis is an explicit choice even when recurring overnight work is off.
+    /// scheduled first analysis retains legacy intent until the user explicitly switches it off.
     static func overnightRequested(defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: OvernightScheduler.enabledKey)
             || defaults.bool(forKey: OvernightScheduler.prodEnabledKey)
-            || ProcessingPlan.read(defaults).status == .scheduled
+            || (ProcessingPlan.read(defaults).status == .scheduled
+                && (defaults.object(forKey: OvernightScheduler.prodEnabledKey) as? Bool) != false)
     }
 
     /// Read only selected sources, and only after setup or a known successful read. This pure

@@ -214,15 +214,14 @@ final class OpenAIComputerUseRuntime {
             let app = try await start(configuration: configuration, stoppingConflictingHelpers: true)
             taskHelpers[id] = app
             AgentRunDiagnostics.current?.recordHelper(running: !app.isTerminated, atStart: true)
-            let permission = await Permissions.nativeAutomationState()
-            CrashReporting.diagnosticBreadcrumb("computer_use.task_readiness", data: [
+            // The helper cannot open its own setup without Sentient's Automation grant.
+            // Its Accessibility and Screen Recording remain deferred to actual tool use.
+            let automation = await Permissions.nativeAutomationState()
+            try await ComputerUseGate.shared.waitForNativeAutomation(observed: automation)
+            CrashReporting.diagnosticBreadcrumb("computer_use.task_started", data: [
                 "helper_running": String(!app.isTerminated),
-                "automation_granted": String(permission == .granted),
                 "expected_helper_version": CodexRuntime.release.helper.version,
                 "expected_helper_build": String(CodexRuntime.release.helperBuild)])
-            guard permission == .granted else {
-                throw OpenAIComputerUse.RuntimeError.permissionRequired
-            }
             try Task.checkCancellation()
             return id
         } catch { endTask(id); throw error }

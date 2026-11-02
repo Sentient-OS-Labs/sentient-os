@@ -31,6 +31,28 @@ nonisolated enum SidekickActivityPresentation {
         return NotchStatus(text: status.isEmpty ? "Working…" : status, activity: nil)
     }
 
+    /// Fixed-width processing wings use a short action category. Completed tools yield
+    /// back to the model's thinking state, so their app icon cannot linger as live work.
+    static func compactNotchStatus(_ status: String, activity: Step?) -> NotchStatus {
+        let presented = notchStatus(status, activity: activity)
+        if let step = presented.activity, let operation = step.record.event.activity {
+            guard operation.status == .started else { return NotchStatus(text: "Thinking", activity: nil) }
+            let category = label(ToolName(operation.name), arguments: arguments(operation.arguments), app: nil).title
+            let verb = category.split(separator: " ").first.map(String.init) ?? "Working"
+            let short = ["Entering": "Typing", "Looking": "Reading", "Using": "Working",
+                         "Continuing": "Running", "Used": "Working", "Asking": "Waiting"][verb] ?? verb
+            return NotchStatus(text: short, activity: step)
+        }
+        if status.localizedCaseInsensitiveContains("offline") { return NotchStatus(text: "Offline", activity: nil) }
+        let last = presented.text.split(separator: "\n").last?.trimmingCharacters(in: .whitespaces) ?? ""
+        let first = last.split(separator: " ").first.map(String.init)?.trimmingCharacters(in: .punctuationCharacters) ?? ""
+        let short = ["Preparing": "Starting", "Starting": "Starting",
+                     "Stopping": "Stopping", "Waiting": "Waiting", "Retrying": "Retrying",
+                     "Connecting": "Linking", "Reconnecting": "Linking", "Reading": "Reading",
+                     "Running": "Running", "Searching": "Searching", "Working": "Working"][first] ?? "Thinking"
+        return NotchStatus(text: short, activity: nil)
+    }
+
     static func steps(_ records: [SidekickConversationStore.Record]) -> [Step] {
         var grouped: [String: (first: Int64, latest: SidekickConversationStore.Record)] = [:]
         for record in records {

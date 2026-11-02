@@ -167,6 +167,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             VStack(spacing: 18) {
 
                 claudeStates
+                if layout == .settingsGrid { ProviderAccountControls(backend: .claude) }
 
                 if claude.preparing || claude.installing { MonoWaitLine("preparing claude code…") }
                 OnboardingStatusText(claude.installStatus)
@@ -199,6 +200,9 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// out → install failed → the sign-in CTA (which lazily installs the CLI first).
     @ViewBuilder private var claudeStates: some View {
         if claude.loggedIn {
+            if let email = claude.email {
+                Text(email).font(.system(size: 12)).foregroundStyle(Theme.secondary)
+            }
             ModelConnectionLine(text: (backend == .claude ? "In use" : "Connected")
                 + (claude.plan.map { " · \($0) plan" } ?? ""))
             if backend != .claude && layout == .settingsGrid {

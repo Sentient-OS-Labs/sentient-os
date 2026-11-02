@@ -77,6 +77,7 @@ enum PersonalSetupProgress {
 struct RunProgress {}
 final class ProcessingCoordinator {
     static let shared = ProcessingCoordinator()
+    var defaults: UserDefaults { Fixture.defaults }
     enum Timing { case now, overnight }
     enum State { case idle, scheduled }
     enum Block: String { case battery }
@@ -87,7 +88,7 @@ final class ProcessingCoordinator {
     var isBusy = false
     var isSuspended = false
     var paused: Bool { record.status == .paused }
-    var hasPendingFirstNight: Bool { !initialComplete && record.status == .scheduled }
+    // PRODUCTION_PENDING_FIRST_NIGHT
     var requestOverride: ProcessingRequest?
     var carried = RunProgress()
     var task: Task<Void, Never>?
@@ -164,6 +165,11 @@ TESTS = r'''
         let d = Fixture.defaults
         defer { d.removePersistentDomain(forName: Fixture.suite) }
         check(NotchPreferences.clickEnabled(in: d), "existing installs retain clickable notch")
+        check(!NotchPreferences.compactModeEnabled(in: d), "compact notch is opt-in for existing installs")
+        d.set(true, forKey: NotchPreferences.compactModeKey)
+        check(NotchPreferences.compactModeEnabled(in: d), "compact notch preference persists")
+        d.set(false, forKey: NotchPreferences.compactModeKey)
+        check(!NotchPreferences.compactModeEnabled(in: d), "regular notch can be restored")
         d.set(false, forKey: NotchPreferences.clickEnabledKey)
         check(!NotchPreferences.clickEnabled(in: d), "idle notch click opt-out persists")
         d.set(true, forKey: NotchPreferences.clickEnabledKey)
@@ -276,7 +282,7 @@ TESTS = r'''
         d.set(false, forKey: OvernightScheduler.prodEnabledKey); scheduler.reevaluate()
         try await until { helper.effectiveWakes.isEmpty }
 
-        // First analysis cannot be queued or woken by the nightly scheduler.
+        // First analysis starts now, with a recovery wake available if the Mac sleeps.
         processing.initialComplete = false
         CodexAuth.knowledgeBaseOnly = false
         d.set(first, forKey: OvernightScheduler.minutesKey)
@@ -285,9 +291,9 @@ TESTS = r'''
               "legacy initial timing callers start now without scheduling a first-night wake")
         let beforeInitialArms=helper.armed.count
         d.set(true,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
-        try await until {scheduler.statusLine == "Nightly updates start after your first analysis"}
-        check(scheduler.nextWakeAt == nil && helper.armed.count == beforeInitialArms,
-              "actual scheduler loop does not arm a wake during initial creation")
+        try await until { scheduler.nextWakeAt != nil }
+        check(helper.armed.count == beforeInitialArms + 1,
+              "actual scheduler arms a recovery wake during initial creation")
         d.set(false,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
         processing.record.status = .paused
         d.set(true,forKey:OvernightScheduler.prodEnabledKey);scheduler.reevaluate()
@@ -321,6 +327,48 @@ TESTS = r'''
         d.set(false, forKey: OvernightScheduler.prodEnabledKey); running.reevaluate()
         try await until { helper.effectiveWakes.isEmpty }
         check(helper.broadCancels == 0, "rescheduling never clears other applications' wake events")
+
+        // A missed legacy auto-enable timer must not strand a completed installation.
+        d.set(Date().timeIntervalSince1970, forKey: ProcessingPlan.initialCompletedKey)
+        d.removeObject(forKey: OvernightScheduler.prodEnabledKey)
+        d.removeObject(forKey: OvernightScheduler.setupEnabledKey)
+        d.removeObject(forKey: OvernightScheduler.autoEnableFiredKey)
+        let migrated = OvernightScheduler()
+        migrated.reevaluate()
+        try await until { migrated.nextWakeAt != nil }
+        check(d.bool(forKey: OvernightScheduler.prodEnabledKey), "legacy pending automatic scheduling resumes")
+        migrated.setEnabled(false)
+        try await until { helper.effectiveWakes.isEmpty }
+        migrated.reevaluate()
+        check(!migrated.isEnabled, "an explicit off survives migration and reevaluation")
+        migrated.setEnabled(true)
+        try await until { migrated.nextWakeAt != nil }
+        check(migrated.isEnabled, "settings can re-enable an older installation")
+        processing.initialComplete = false
+        processing.record = .init(status: .scheduled, trigger: .overnight, due: Date().addingTimeInterval(3600))
+        migrated.setEnabled(false)
+        try await until { helper.effectiveWakes.isEmpty }
+        check(!migrated.isEnabled && processing.record.status == .idle && processing.record.due == nil,
+              "turning off clears pending first-night intent without leaving an enabled override")
+        processing.record.status = .scheduled
+        check(!processing.hasPendingFirstNight && !migrated.isEnabled,
+              "a late first-run retry cannot override the user's explicit off choice")
+        processing.record.status = .paused
+        migrated.setEnabled(true)
+        try await until { migrated.statusLine == "Analysis paused" }
+        check(helper.effectiveWakes.isEmpty, "turning on scheduling respects explicit analysis pause")
+        migrated.setEnabled(false)
+
+        // Failed initial analysis can retry at night through the same single owner.
+        processing.record = .init(status: .failed, trigger: .onboarding)
+        let initialRuns = processing.runsStarted
+        let retry = Task { await processing.runScheduled() }
+        try await until { processing.finishContinuation != nil }
+        check(processing.runsStarted == initialRuns + 1, "scheduled recovery starts an unfinished first analysis")
+        await processing.runScheduled()
+        check(processing.runsStarted == initialRuns + 1, "scheduled recovery never duplicates active analysis")
+        processing.finishOwnedRun()
+        await retry.value
         print("PASS: \(checks) notch preferences, local/DST time, reschedule race, and active-run checks")
     }
 }
@@ -345,12 +393,13 @@ def main():
     source = source[:source.index("/// Persistent scheduler log")].replace("UserDefaults.standard", "Fixture.defaults")
     plan = (APP / "Ingestion/ProcessingPlan.swift").read_text().replace("= .standard", "= Fixture.defaults")
     owner = (APP / "Ingestion/ProcessingCoordinator.swift").read_text()
-    controls = [method(owner, signature) for signature in ["func choose(", "func runScheduled(", "func deferNight("]]
+    controls = [method(owner, signature) for signature in ["func choose(", "func runScheduled(", "func deferNight(", "func cancelScheduled("]]
     notch = (APP / "Notch Magic/NotchWindowController.swift").read_text()
     methods = [method(notch, signature).replace("private ", "", 1) for signature in [
         "private static func isInteractive(", "private func hoverMouseMoved(", "private func updateMousePassthrough("]]
     support = SUPPORT.replace("// PRODUCTION_POINTER_METHODS", "\n".join(methods))
     support = support.replace("// PRODUCTION_PROCESSING_CONTROL_METHODS", "\n".join(controls))
+    support = support.replace("// PRODUCTION_PENDING_FIRST_NIGHT", method(owner, "var hasPendingFirstNight:"))
     with tempfile.TemporaryDirectory(prefix="sentient-wake-settings-") as temporary:
         root = Path(temporary)
         fixture = root / "SettingsTests.swift"

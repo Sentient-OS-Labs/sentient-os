@@ -59,8 +59,8 @@ enum SlackCurationTests {
               "hosted Apps SDK identity is accepted")
         check(ConnectorRegistry.isValidCodexCatalogID("connector_00000000000000000000000000000001"),
               "legacy hosted identity remains accepted")
-        for invalid in ["asdk_app_bad", "asdk_app_00000000000000000000000000000001\n", "asdk_app_00000000000000000000000000000001.tools", "other_00000000000000000000000000000001"] {
-            check(!ConnectorRegistry.isValidCodexCatalogID(invalid), "malformed catalog identity is refused")
+        for opaque in ["asdk_app_bad", "asdk_app_00000000000000000000000000000001\n", "asdk_app_00000000000000000000000000000001.tools", "other_00000000000000000000000000000001"] {
+            check(ConnectorRegistry.isValidCodexCatalogID(opaque), "provider catalog identity is opaque")
         }
         let tool = "mcp__claude_ai_Fixture__send_message"
         let input: [String: Any] = ["channel": "C_FIXTURE", "text": "Synthetic marker"]

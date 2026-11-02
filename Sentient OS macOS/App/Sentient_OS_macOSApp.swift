@@ -139,7 +139,7 @@ struct SentientOSApp: App {
     }
 }
 
-/// Dock reopen explicitly opens Home or resumes pending setup, even when another window is visible.
+/// Dock reopen restores the current page and its sheets, or resumes pending setup.
 /// Ordinary activation remains separate, so silent launches and permission prompts keep their behavior.
 final class SentientAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -189,7 +189,7 @@ final class SentientAppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         Log("App reopen: visible windows=\(flag), suppressed launch=\(UpdateNotice.suppressHomeThisLaunch)")
         #endif
-        HomeWindowOpening.open()
+        HomeWindowOpening.presentCurrentPage()
         return false
     }
 }

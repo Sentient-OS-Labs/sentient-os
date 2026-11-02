@@ -55,6 +55,19 @@ final class CommandCoordinator {
 
     /// What the notch shows. (Rendering lands later; today this is driven + logged.)
     private(set) var phase: NotchPhase = .hidden
+    enum SetupCaption: String {
+        case sidekick = "Set up Sidekick"
+        case computerUse = "Set up computer use"
+    }
+
+    /// Presentation follows the visible permission UI, independent of agent progress.
+    var setupCaption: SetupCaption? {
+        guard phase == .running, run.isRunning, !run.isDemo else { return nil }
+        if NativeHelperPermissionNote.visibility.isVisible { return .computerUse }
+        let gate = ComputerUseGate.shared
+        if gate.isPresenting, !gate.showingVoiceRepair, !gate.isReadyForTask { return .sidekick }
+        return nil
+    }
     private(set) var notchMessage: SidekickConversationStore.Record?
     private(set) var messageReplyFocused = false
     private var attentionPolicy = SidekickAttentionPolicy(generation: nil, latestSequence: 0)

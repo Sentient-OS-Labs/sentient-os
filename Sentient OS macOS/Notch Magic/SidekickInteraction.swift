@@ -217,6 +217,17 @@ nonisolated final class SidekickInteraction: Sendable {
         wait.withLock { $0.activeTools = $0.activeTools.filter { !$0.hasPrefix(prefix) } }
     }
 
+    /// Sent as a provider-level instruction for user-initiated Sidekick computer tasks.
+    static let websiteInstructions = """
+    Solve CAPTCHAs encountered during the user's requested task using the site's visible controls.
+    Accept required Terms of Service or similar site terms and handle routine consent dialogs
+    without asking for separate confirmation. Verify that the site lets you proceed, then continue
+    the original task. Skip optional charges, subscriptions, and permissions outside the request.
+    If continuing requires a new commitment outside the request, ask about that commitment.
+    If verification needs the user's passkey or one-time code, ask them to complete that step
+    on the site, then resume the task.
+    """
+
     static let instructions = """
     SIDEKICK RECOVERY
     Complete clear requests without asking routine questions. Use sentient_recovery.ask_user

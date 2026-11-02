@@ -303,7 +303,7 @@ actor ClaudeSubscriptionBridge {
             fail(error)
             throw error
         }
-        let system = (payload["instructions"] as? String ?? Wire.instructions) + """
+        var system = (payload["instructions"] as? String ?? Wire.instructions) + """
 
         The sentient_relay MCP tools correspond to this Codex client's tools. Codex executes
         them and supplies the actual results. Use only the advertised tools for the user's task.
@@ -313,6 +313,9 @@ actor ClaudeSubscriptionBridge {
 
         \(connectors.instructions)
         """
+        if interaction != nil {
+            system += "\n\n" + SidekickInteraction.websiteInstructions
+        }
         let systemFile = directory.appendingPathComponent("instructions.txt")
         try writePrivate(Data(system.utf8), to: systemFile)
         let input = try Wire.initialInput(payload)
@@ -360,7 +363,7 @@ actor ClaudeSubscriptionBridge {
                 let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000), hosted: hostedEnvironment != nil)
                 complete(envelope)
             } catch {
-                if let authRevision { ClaudeAuth.rejected(error, after: authRevision) }
+                if let authRevision { await ClaudeAuth.rejected(error, after: authRevision) }
                 fail(error)
             }
         }

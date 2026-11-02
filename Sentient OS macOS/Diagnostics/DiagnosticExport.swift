@@ -244,6 +244,7 @@ enum DiagnosticExport {
                 ?? ["desktop", "documents", "downloads"].contains(source)
         }
         result["customFolders"] = !CustomRoots.urls.isEmpty
+        result["siyuan"] = defaults.bool(forKey: SiYuanSource.enabledKey)
         result["appleMail"] = !AppleMailSelection.accounts.isEmpty
         result["appleCalendar"] = AppleCalendarSource.isEnabled
         return result

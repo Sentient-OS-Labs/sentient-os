@@ -27,7 +27,7 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
 
     /// The plan-aware Codex model and effort, shared by execution and the Settings readout.
     var codexModelAndEffort: (model: CodexCLI.Model, effort: CodexCLI.Effort) {
-        if ModelBackend.current == .chatgpt, CodexAuth.isLimited() {
+        if ModelBackend.current == .chatgpt, CodexAuth.usesLuna {
             let effort: CodexCLI.Effort = switch self {
             case .faster: .low
             case .medium: .medium

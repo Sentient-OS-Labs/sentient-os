@@ -18,6 +18,9 @@ nonisolated enum AppleCalendarSource {
         let capturedAt: Date
         let coverage: Coverage
         var marker: NoteDraft { fatalError("Calendar cannot execute in Gmail fixture") }
+        func partialMarker(pending: Int) -> NoteDraft {
+            fatalError("Calendar cannot execute in Gmail fixture")
+        }
     }
     enum ReadError: Error { case changed }
 }

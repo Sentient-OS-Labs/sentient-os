@@ -28,7 +28,7 @@ private struct ExtractionTimeout: Error { let seconds: Double }
 
 /// The outcome of one item attempt (B10): a survivor draft (or nil), a CONTENT-extraction failure
 /// (the file is bad — engine is fine), or a GENERATE failure (the GPU-wedge path → reload).
-private enum AttemptResult { case ok(NoteDraft?), extractionFailed, generateFailed }
+private enum AttemptResult { case ok(NoteDraft?), extractionFailed, generateFailed, invalidReply }
 
 /// Holds the racing continuation behind a lock so it resumes exactly once, and so the `@Sendable`
 /// dispatch closures capture this (`@unchecked Sendable`) box instead of the continuation directly.
@@ -194,6 +194,13 @@ struct IterativeRun {
                 p.lastPrompt = prompt
                 let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
                 let outcome = Triage.decide(result.text, for: artifact)
+                if outcome.reason == .parseFailed || outcome.reason == .emptySummary {
+                    p.parseFailures += 1
+                    p.lastTitle = "Item skipped"
+                    p.lastSummary = nil
+                    p.lastVerdict = nil
+                    return .invalidReply
+                }
                 var draft: NoteDraft?
                 if outcome.verdict == .survivor {
                     draft = NoteDraft(kind: connector.kind, sourceID: cand.id,
@@ -378,7 +385,7 @@ struct IterativeRun {
                     p.lastFilePath = w.item.metadata["path"]
                     p.lastItemDate = nil
 
-                    var result = await attempt(w.item, connector: connector)
+                    let result = await attempt(w.item, connector: connector)
                     // B10: only a GENERATE failure implicates the engine → the GPU-wedge reload path.
                     // An extraction failure means the file is bad; the engine is fine — never reload for it.
                     if case .generateFailed = result {
@@ -397,7 +404,7 @@ struct IterativeRun {
                                 finished = false; break runLoop
                             }
                             await reloadEngine(reason: "reactive"); reloadsWithoutProgress += 1; consecutiveFailures = 0
-                            result = await attempt(w.item, connector: connector)   // retry once on a fresh engine
+                            // Continue with the next item after recovering the engine.
                         }
                     }
                     // §7.8/B10: for FILE items, extraction succeeded unless it was the extraction that
@@ -413,6 +420,7 @@ struct IterativeRun {
                     case .ok(let d):        consecutiveFailures = 0; reloadsWithoutProgress = 0; draft = d
                     case .extractionFailed: p.failed += 1; p.extractionFailed += 1; draft = nil   // no reload
                     case .generateFailed:   p.failed += 1; draft = nil
+                    case .invalidReply:     p.failed += 1; draft = nil
                     }
 
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
@@ -421,8 +429,8 @@ struct IterativeRun {
                     if Task.isCancelled { break runLoop }
                     switch effective {
                     case .iterative: outcome = await store.advance(bucketKey: bucket.key, note: draft, to: w.key)
-                    case .initial:   outcome = await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
-                    case .auto:      outcome = .saved   // resolved above; never reached
+                    case .initial: outcome = await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
+                    case .auto: outcome = .saved
                     }
                     // A full disk fails every item after this one identically: stop the whole run
                     // here (this item's mark wasn't saved, so it's simply first up next time), and
@@ -435,14 +443,6 @@ struct IterativeRun {
                         break runLoop
                     }
                     if outcome == .failed { p.failed += 1; break runLoop }
-                    if outcome == .saved {
-                        switch result {
-                        case .ok: break
-                        case .extractionFailed, .generateFailed:
-                            Diagnostics.report(.ingestionSkipped, phase: .commit, reason: "failed_item_mark_advanced",
-                                               source: connector.kind.rawValue, flags: [.checkpointAdvanced: true])
-                        }
-                    }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)
                 }

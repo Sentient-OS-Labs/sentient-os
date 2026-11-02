@@ -203,7 +203,11 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
 extension SidekickUpgradeOffer {
     nonisolated static func forProviderFailure(_ error: Error, backend: ModelBackend, planRaw: String?,
                                    assertedPlus: Bool) -> Self? {
-        guard backend == .chatgpt, !assertedPlus,
+        guard backend == .chatgpt else { return nil }
+        if let failure = ChatGPTProviderFailure.classify(error) {
+            return failure == .modelUnavailable ? .modelUnavailable : .loginRequired
+        }
+        guard !assertedPlus,
               let plan = planRaw?.lowercased(), ["free", "go"].contains(plan),
               let providerError = error as? CodexCLI.CLIError else { return nil }
         switch providerError {

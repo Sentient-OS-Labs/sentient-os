@@ -32,8 +32,13 @@ nonisolated enum ModelBackend: String, Sendable {
 }
 nonisolated enum ClaudeCLI { enum Model: Sendable { case sonnet, haiku } }
 nonisolated enum DirectMCPError: Error { case reconnectRequired, registrationExpired, accountSetupRequired, authorizationDenied, noTools, http(Int) }
-nonisolated struct DirectMCPConnection: Sendable { let providerSlug: String }
-nonisolated enum DirectMCPStore { static func connection(_ slug: String) -> DirectMCPConnection? { nil } }
+nonisolated struct DirectMCPConnection: Sendable { let providerSlug: String; let slug: String }
+nonisolated enum DirectMCPStore {
+    static func connection(_ slug: String) -> DirectMCPConnection? {
+        slug == "direct-granola" ? .init(providerSlug: "granola", slug: slug) : nil
+    }
+}
+nonisolated enum DirectMCPSession { static func check(_ connection: DirectMCPConnection) throws {} }
 nonisolated enum CodexCLI {
     enum CLIError: Error { case usageLimit, notAvailable, timedOut(after: TimeInterval), exitFailure(Int32, String) }
     struct Envelope: Sendable {
@@ -116,7 +121,7 @@ TESTS = r'''
         let window = MCPSource.Window(lower: Date(timeIntervalSince1970: 100), upper: Date(timeIntervalSince1970: 200), label: "Synthetic")
         for backend: ModelBackend in [.chatgpt, .claude] {
             try await ModelBackend.$current.withValue(backend) {
-                for slug in ["google-drive", "slack", "outlook-mail", "outlook-calendar", "fixture-generic"] {
+                for slug in ["google-drive", "slack", "outlook-mail", "outlook-calendar", "fixture-generic", "direct-granola"] {
                     for mode: MCPSource.ReadMode in [.initial, .iterative] {
                         for summary in ["", "You have a $500 project to finish."] {
                             await Transport.shared.reset([.output(.init(result: reply(summary), raw: ""))])
@@ -194,14 +199,14 @@ TESTS = r'''
 
 source = (APP / "Sources/MCPSource.swift").read_text()
 markers = ["enum MCPError:", "struct ReadResult:", "enum ReadOutcome:", "enum ReadMode:", "struct Window:",
-           "static func read(slug:", "static func readInvocation(", "static func parse(",
+           "static func read(slug:", "static func readUsingTools(", "static func readInvocation(", "static func parse(",
            "private static func shapeMismatch(", "private static func jsonSpan("]
 body = "\n".join(block(source, marker) for marker in markers)
 body += "\n" + source[source.index("    typealias ReceiptObserver"):source.index("\n", source.index("    typealias ReceiptObserver"))]
 body += '\nstatic let readSchema = "{}"\nstatic let meter = OSAllocatedUnfairLock(initialState: [String: (tokensIn: Int, tokensOut: Int)]())\n'
 granola = (APP / "Sources/GranolaSource.swift").read_text()
 granola_body = block(granola, "struct Meeting:") + "\n" + block(granola, "static func parseSummary(")
-granola_body += "\n" + STUBS[STUBS.index("    static func read(connection:"):STUBS.index("\n}", STUBS.index("    static func read(connection:"))]
+granola_body += "\nstatic let defaultClaudeModel: ClaudeCLI.Model = .haiku\n" + block(granola, "static func read(connection:")
 notion = (APP / "Sources/NotionSource.swift").read_text()
 notion_body = "\n".join(block(notion, marker) for marker in ["struct Page:", "struct Content:", "static func parseSummary("])
 with tempfile.TemporaryDirectory(prefix="sentient-mcp-acceptance-") as folder:

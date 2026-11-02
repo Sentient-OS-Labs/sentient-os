@@ -55,6 +55,17 @@ nonisolated enum PermissionSetupPresentation {
         return !compact || !granted
         #endif
     }
+
+    /// Move setup to the left before opening System Settings for the grant.
+    @MainActor static func moveAsideForSystemPrompt(_ window: NSWindow?) {
+        guard let window else { return }
+        if let screen = window.screen ?? NSScreen.main {
+            let available = screen.visibleFrame.insetBy(dx: 16, dy: 16)
+            let y = min(max(window.frame.minY, available.minY),
+                        max(available.minY, available.maxY - window.frame.height))
+            window.setFrameOrigin(NSPoint(x: available.minX, y: y))
+        }
+    }
 }
 
 struct PermissionSetupGroup<Content: View>: View {
@@ -85,10 +96,20 @@ struct SentientAppPermissionRows: View {
     var accessibilityTip = "Lets Sentient read windows and act inside your apps in the background."
     var compact = false
     var onPermissionChange: (() -> Void)?
+    var onScreenRecordingDrop: (() -> Void)?
+    var automation: Permissions.AutomationState?
+    var requestingAutomation = false
+    var onRequestAutomation: (() -> Void)?
+
+    private var showsAutomation: Bool {
+        guard let automation else { return false }
+        return PermissionSetupPresentation.showsGrant(automation == .granted, compact: compact)
+    }
 
     var body: some View {
         if PermissionSetupPresentation.showsGrant(screen, compact: compact)
-            || accessibility.map({ PermissionSetupPresentation.showsGrant($0, compact: compact) }) == true {
+            || accessibility.map({ PermissionSetupPresentation.showsGrant($0, compact: compact) }) == true
+            || showsAutomation {
             PermissionSetupGroup(label: "Sentient Permissions", compact: compact) {
                 VStack(alignment: .leading, spacing: 2) {
                     if let accessibility, PermissionSetupPresentation.showsGrant(accessibility, compact: compact) {
@@ -98,6 +119,7 @@ struct SentientAppPermissionRows: View {
                                    tip: accessibilityTip,
                                    fixTitle: compact ? "Grant" : "Allow…") {
                             guard !accessibility else { return }
+                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
                             onPermissionChange?()
                             PermissionGuide.shared.guide(.accessibility, dragging: Bundle.main.bundleURL)
                         }
@@ -109,9 +131,26 @@ struct SentientAppPermissionRows: View {
                                    tip: PrivacyCopy.screenCapture,
                                    fixTitle: compact ? "Grant" : "Allow…") {
                             guard !screen else { return }
+                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
                             onPermissionChange?()
                             // Sentient may not be in Tahoe's list yet. The guide carries its app bundle.
-                            PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
+                            PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL,
+                                                         onDrop: onScreenRecordingDrop)
+                        }
+                    }
+                    if showsAutomation, let automation {
+                        StatusLine(title: "Automation",
+                                   health: automation == .granted ? .ok : .bad,
+                                   note: automation == .granted ? "granted" : (compact ? "" : "not granted"),
+                                   tip: "Lets Sentient connect to its computer-use helper.",
+                                   fixTitle: requestingAutomation ? "Opening…" : "Grant") {
+                            guard automation != .granted else { return }
+                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
+                            onRequestAutomation?()
+                        }
+                        .disabled(requestingAutomation)
+                        if automation == .denied {
+                            SettingsProse("In System Settings → Privacy & Security → Automation, enable the computer-use helper under Sentient OS.")
                         }
                     }
                 }

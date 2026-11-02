@@ -45,13 +45,13 @@ nonisolated enum ClaudeAuth {
         static let loggedOut = Status(loggedIn: false, plan: nil, email: nil)
     }
 
-    // UserDefaults cache — written by refresh(), read synchronously by ClaudeCLI's model choke
-    // point (a subprocess per model pick would be absurd). Production keys (the dbg.* law).
+    // Existing on-disk keys seed one in-memory snapshot. Runtime reads use that snapshot.
     static let loggedInKey = "claude.loggedIn"
     static let planKey = "claude.plan"
     static let accountIdentityKey = "claude.accountIdentity.v1"
     private static let legacyConnectorAccountKey = "claude.legacyConnectorAccount.v1"
     private static let readinessRevisionKey = "claude.readinessRevision.v1"
+    static let changed = Notification.Name("ClaudeAuth.changed")
 
     struct ReadinessScope: Equatable, Sendable {
         let accountIdentity: String
@@ -59,54 +59,119 @@ nonisolated enum ClaudeAuth {
     }
     static var cachedAccountIdentity: String? { readinessScope?.accountIdentity }
     static var legacyConnectorAccountIdentity: String? {
-        state.withLock { _ in
-            let value = UserDefaults.standard.string(forKey: legacyConnectorAccountKey)
-            return value?.isEmpty == false ? value : nil
+        state.withLock { current in
+            current.legacyAccountIdentity?.isEmpty == false ? current.legacyAccountIdentity : nil
         }
     }
     static var readinessScope: ReadinessScope? {
         state.withLock { current in
-            guard current.observedIdentity, !UserDefaults.standard.bool(forKey: repairKey),
-                  UserDefaults.standard.bool(forKey: loggedInKey),
-                  let value = UserDefaults.standard.string(forKey: accountIdentityKey),
+            guard current.observedIdentity, !current.requiresVerification, current.loggedIn,
+                  let value = current.accountIdentity,
                   !value.isEmpty else { return nil }
-            return .init(accountIdentity: value,
-                revision: UserDefaults.standard.integer(forKey: readinessRevisionKey))
+            return .init(accountIdentity: value, revision: current.readinessRevision)
         }
     }
 
     /// Explicit login can change the account before a status probe finishes. Retire its proof
     /// immediately; persisted source choices and knowledge remain intact.
-    static func beginAccountChange() {
-        state.withLock { current in
-            let d = UserDefaults.standard
-            d.set(d.integer(forKey: readinessRevisionKey) &+ 1, forKey: readinessRevisionKey)
-            d.removeObject(forKey: accountIdentityKey)
+    @MainActor static func beginAccountChange() {
+        update { current in
+            current.readinessRevision &+= 1
+            current.accountIdentity = nil
             current.observedIdentity = false
             current.revision = UUID()
             // If no old account was observed yet, a deliberate new login must not adopt an
             // unidentified legacy connector cache for the account being signed into.
-            if d.object(forKey: legacyConnectorAccountKey) == nil {
-                d.set("", forKey: legacyConnectorAccountKey)
-            }
+            if current.legacyAccountIdentity == nil { current.legacyAccountIdentity = "" }
+            return true
         }
     }
     private static let repairKey = "claude.loginNeedsVerification"
-    // One lock keeps authentication and account ownership consistent without nested locks.
-    private struct AuthState {
+    /// Synchronous readers only copy memory under this lock. Foundation notifications and
+    /// SwiftUI can reenter them while the main actor publishes preferences.
+    private struct AuthState: Sendable {
         var revision = UUID()
+        var nextRefresh: UInt64 = 0
+        var acceptedRefresh: UInt64 = 0
+        var publication: UInt64 = 0
         var observedIdentity = false
+        var loggedIn: Bool
+        var requiresVerification: Bool
+        var plan: String?
+        var accountIdentity: String?
+        var legacyAccountIdentity: String?
+        var readinessRevision: Int
+
+        init() {
+            // The existing preference format also supports upgrades and process restarts.
+            // Initialization reads it before the state lock exists.
+            let d = UserDefaults.standard
+            loggedIn = d.bool(forKey: loggedInKey)
+            requiresVerification = d.bool(forKey: repairKey)
+            plan = d.string(forKey: planKey)
+            accountIdentity = d.string(forKey: accountIdentityKey)
+            legacyAccountIdentity = d.string(forKey: legacyConnectorAccountKey)
+            readinessRevision = d.integer(forKey: readinessRevisionKey)
+        }
+
+        var cachedStatus: Status {
+            Status(loggedIn: loggedIn && !requiresVerification, plan: plan, email: nil)
+        }
     }
     private static let state = OSAllocatedUnfairLock(initialState: AuthState())
+    @MainActor private static var publishing = false
+
+    /// All auth mutations are ordered by the main actor. Release the state lock before
+    /// writing defaults, whose synchronous observers may read or update auth themselves.
+    @MainActor @discardableResult
+    private static func update(_ change: @Sendable (inout AuthState) -> Bool) -> Bool {
+        let changed = state.withLock { current in
+            guard change(&current) else { return false }
+            current.publication &+= 1
+            return true
+        }
+        if changed {
+            publishLatest()
+            // First observation after launch can change readiness while the saved values
+            // stay identical. Notify consumers explicitly instead of rewriting preferences.
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+        return changed
+    }
+
+    @MainActor private static func publishLatest() {
+        guard !publishing else { return }
+        publishing = true
+        defer { publishing = false }
+        while true {
+            let snapshot = state.withLock { $0 }
+            let d = UserDefaults.standard
+            if d.integer(forKey: readinessRevisionKey) != snapshot.readinessRevision {
+                d.set(snapshot.readinessRevision, forKey: readinessRevisionKey)
+            }
+            for (key, value) in [(accountIdentityKey, snapshot.accountIdentity),
+                                 (legacyConnectorAccountKey, snapshot.legacyAccountIdentity),
+                                 (planKey, snapshot.plan)] where d.string(forKey: key) != value {
+                if let value { d.set(value, forKey: key) } else { d.removeObject(forKey: key) }
+            }
+            for (key, value) in [(repairKey, snapshot.requiresVerification), (loggedInKey, snapshot.loggedIn)]
+                where d.bool(forKey: key) != value {
+                d.set(value, forKey: key)
+            }
+            // A synchronous observer may have performed a newer login/logout. Finish that
+            // publication before returning, so the final disk cache matches the latest state.
+            if state.withLock({ $0.publication == snapshot.publication }) { return }
+        }
+    }
 
     /// A locally present credential is not proof that Claude still accepts it. This latch
     /// survives relaunch and only a successful, tool-free model request can clear it.
-    static var requiresVerification: Bool { state.withLock { _ in UserDefaults.standard.bool(forKey: repairKey) } }
+    static var requiresVerification: Bool { state.withLock { $0.requiresVerification } }
     static var revision: UUID { state.withLock { $0.revision } }
 
     static func usableRevision() throws -> UUID {
         try state.withLock { current in
-            guard !UserDefaults.standard.bool(forKey: repairKey) else { throw LoginRequired() }
+            guard !current.requiresVerification else { throw LoginRequired() }
             return current.revision
         }
     }
@@ -140,39 +205,39 @@ nonisolated enum ClaudeAuth {
 
     /// Called only for Claude's own terminal authentication error, never connector output.
     /// An older request finishing after a repaired login cannot invalidate the new identity.
-    static func rejected(_ error: Error, after revision: UUID) {
+    @MainActor static func rejected(_ error: Error, after revision: UUID) {
         guard error is LoginRequired, !Task.isCancelled else { return }
-        let changed = state.withLock { current in
+        let changed = update { current in
             guard current.revision == revision else { return false }
             current.revision = UUID()
-            UserDefaults.standard.set(true, forKey: repairKey)
-            UserDefaults.standard.set(false, forKey: loggedInKey)
+            current.requiresVerification = true
+            current.loggedIn = false
             return true
         }
-        if changed { Task { @MainActor in ClaudeSetup.shared.authenticationRejected() } }
+        if changed { ClaudeSetup.shared.authenticationRejected() }
     }
 
     @discardableResult
-    static func beginLogin() -> UUID {
-        state.withLock { current in
-            current.revision = UUID()
-            UserDefaults.standard.set(true, forKey: repairKey)
-            UserDefaults.standard.set(false, forKey: loggedInKey)
-            return current.revision
+    @MainActor static func beginLogin() -> UUID {
+        let revision = UUID()
+        update { current in
+            current.revision = revision
+            current.requiresVerification = true
+            current.loggedIn = false
+            return true
         }
+        return revision
     }
 
-    static func cancelLogin(revision: UUID) {
+    @MainActor static func cancelLogin(revision: UUID) {
         state.withLock { current in if current.revision == revision { current.revision = UUID() } }
     }
 
     static var cachedLoggedIn: Bool {
-        state.withLock { _ in
-            !UserDefaults.standard.bool(forKey: repairKey) && UserDefaults.standard.bool(forKey: loggedInKey)
-        }
+        state.withLock { $0.cachedStatus.loggedIn }
     }
     static var cachedPlan: String? {
-        let v = UserDefaults.standard.string(forKey: planKey)
+        let v = state.withLock { $0.plan }
         return (v?.isEmpty == false) ? v : nil
     }
 
@@ -184,9 +249,12 @@ nonisolated enum ClaudeAuth {
     /// Read the local Claude Code login and plan. A runtime rejection remains authoritative
     /// until verifyLogin succeeds, even if this command reports loggedIn: true.
     static func refresh() async -> Status {
-        let snapshot = state.withLock { ($0.revision, UserDefaults.standard.integer(forKey: readinessRevisionKey)) }
+        let (revision, request) = state.withLock { current in
+            current.nextRefresh &+= 1
+            return (current.revision, current.nextRefresh)
+        }
         guard let bin = ClaudeCLI.locateBinary() else {
-            return acceptStatus(.loggedOut, after: snapshot.0, readinessRevision: snapshot.1)
+            return state.withLock { $0.cachedStatus }
         }
         guard let out = try? await CodexCLI.executeAsync(binary: bin, args: ["auth", "status"],
                                                          stdinText: nil, cwd: nil, timeout: 20,
@@ -194,24 +262,31 @@ nonisolated enum ClaudeAuth {
                                                          includeCustomProviderKey: false) else {
             // Couldn't even run the binary — keep the cache as-is (a transient spawn failure
             // must not flip a working setup to "logged out").
-            return Status(loggedIn: cachedLoggedIn, plan: cachedPlan, email: nil)
+            return state.withLock { $0.cachedStatus }
         }
-        guard !Task.isCancelled else { return Status(loggedIn: cachedLoggedIn, plan: cachedPlan, email: nil) }
-        let status = parse(out.stdout) ?? .loggedOut
-        return acceptStatus(status, after: snapshot.0, readinessRevision: snapshot.1)
+        guard !Task.isCancelled, let status = parse(out.stdout) else { return state.withLock { $0.cachedStatus } }
+        return await acceptStatus(status, after: revision, request: request)
     }
 
-    private static func acceptStatus(_ status: Status, after revision: UUID, readinessRevision: Int) -> Status {
-        state.withLock { current in
-            let d = UserDefaults.standard
-            guard current.revision == revision, d.integer(forKey: readinessRevisionKey) == readinessRevision else {
-                return Status(loggedIn: !d.bool(forKey: repairKey) && d.bool(forKey: loggedInKey),
-                              plan: d.string(forKey: planKey), email: nil)
-            }
-            let effective = Status(loggedIn: status.loggedIn && !d.bool(forKey: repairKey),
-                                   plan: status.plan, email: status.email, organizationID: status.organizationID)
-            cacheLocked(status, loggedIn: effective.loggedIn, state: &current)
-            return effective
+    @MainActor private static func acceptStatus(_ status: Status, after revision: UUID, request: UInt64) -> Status {
+        let accepted = update { current in
+            // A failed/unknown newer probe cannot discard useful status from an older one.
+            // A newer accepted status or explicit account change does supersede that result.
+            guard !Task.isCancelled, current.revision == revision, request >= current.acceptedRefresh else { return false }
+            current.acceptedRefresh = request
+            let identity = status.accountIdentity
+            current.observedIdentity = true
+            if current.accountIdentity != identity { current.readinessRevision &+= 1 }
+            current.accountIdentity = identity
+            if let identity, current.legacyAccountIdentity == nil { current.legacyAccountIdentity = identity }
+            current.loggedIn = status.loggedIn && !current.requiresVerification
+            current.plan = status.plan
+            return true
+        }
+        return state.withLock { current in
+            guard accepted, current.revision == revision, current.acceptedRefresh == request else { return current.cachedStatus }
+            return Status(loggedIn: current.cachedStatus.loggedIn, plan: current.plan,
+                          email: status.email, organizationID: status.organizationID)
         }
     }
 
@@ -241,14 +316,17 @@ nonisolated enum ClaudeAuth {
             includeCustomProviderKey: false)
         _ = try ClaudeCLI.parseEnvelope(out, durationMS: 0)
         try Task.checkCancellation()
-        let accepted = state.withLock { current in
-            guard current.revision == revision else { return false }
-            UserDefaults.standard.set(false, forKey: repairKey)
-            UserDefaults.standard.set(true, forKey: loggedInKey)
-            current.revision = UUID()
-            return true
+        let verifiedRevision = UUID()
+        let accepted = await MainActor.run {
+            update { current in
+                guard !Task.isCancelled, current.revision == revision else { return false }
+                current.requiresVerification = false
+                current.loggedIn = true
+                current.revision = verifiedRevision
+                return true
+            }
         }
-        guard accepted else { throw CancellationError() }
+        guard accepted, self.revision == verifiedRevision else { throw CancellationError() }
     }
 
     /// Parse the `auth status` JSON. Tolerant: only `loggedIn` is required.
@@ -263,35 +341,22 @@ nonisolated enum ClaudeAuth {
                       organizationID: obj["orgId"] as? String)
     }
 
-    /// The caller holds state, so identity, login and plan are committed as one snapshot.
-    /// A local credential can identify the account while runtime verification remains pending.
-    private static func cacheLocked(_ status: Status, loggedIn: Bool, state: inout AuthState) {
-        let d = UserDefaults.standard
-        state.observedIdentity = true
-        let identity = status.accountIdentity
-        if d.string(forKey: accountIdentityKey) != identity {
-            d.set(d.integer(forKey: readinessRevisionKey) &+ 1, forKey: readinessRevisionKey)
-        }
-        if let identity { d.set(identity, forKey: accountIdentityKey) }
-        else { d.removeObject(forKey: accountIdentityKey) }
-        if let identity, d.object(forKey: legacyConnectorAccountKey) == nil {
-            d.set(identity, forKey: legacyConnectorAccountKey)
-        }
-        d.set(loggedIn, forKey: loggedInKey)
-        if let plan = status.plan { d.set(plan, forKey: planKey) }
-        else { d.removeObject(forKey: planKey) }
-    }
-
     /// Wipe the cached identity (FactoryReset / Uninstall). The login itself belongs to the
     /// user's Claude Code (shared ~/.claude + Keychain) — never touched from here.
-    static func destroy() {
-        state.withLock { current in
+    @MainActor static func destroy() {
+        for key in [ClaudeCLI.rateLimitResetsAtKey, ClaudeCLI.rateLimitTypeKey] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        update { current in
             current.revision = UUID()
             current.observedIdentity = false
-            let d = UserDefaults.standard
-            d.set(d.integer(forKey: readinessRevisionKey) &+ 1, forKey: readinessRevisionKey)
-            [loggedInKey, planKey, repairKey, accountIdentityKey, legacyConnectorAccountKey,
-             ClaudeCLI.rateLimitResetsAtKey, ClaudeCLI.rateLimitTypeKey].forEach { d.removeObject(forKey: $0) }
+            current.readinessRevision &+= 1
+            current.loggedIn = false
+            current.requiresVerification = false
+            current.plan = nil
+            current.accountIdentity = nil
+            current.legacyAccountIdentity = nil
+            return true
         }
     }
 }

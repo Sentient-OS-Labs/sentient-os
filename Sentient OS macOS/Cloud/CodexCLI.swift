@@ -71,14 +71,14 @@ actor CodexCLI {
     ///    connectors are ChatGPT-only.
     ///  - ChatGPT backend: Free/Go supports Luna only. On a positive limited-plan read, every
     ///    requested tier resolves to Luna while preserving the caller's reasoning effort.
-    ///    Unknown plans keep the requested model (CodexAuth's fail-open policy).
+    ///    Missing plan metadata uses Luna; explicit account choices and provider rejections are respected.
     /// Living here at the spine means every caller — and any future one — is covered without
     /// per-call-site checks.
     private static func backendTuned(model: Model, effort: Effort) -> (modelID: String, effortArg: String) {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard ModelBackend.current == .chatgpt, CodexAuth.isLimited() else {
+        guard ModelBackend.current == .chatgpt, CodexAuth.usesLuna else {
             return (model.rawValue, effort.rawValue)
         }
         return (Model.gpt6luna.rawValue, effort.rawValue)
@@ -427,6 +427,11 @@ actor CodexCLI {
     // MARK: Validation
 
     private var cachedAvailability: Availability?
+    func invalidate() {
+        cachedAvailability = nil
+        cachedAvailabilityFingerprint = nil
+        sessionHadSuccess = false
+    }
     private var cachedAvailabilityFingerprint: String?
 
     // MARK: Diagnostics state (structure-only; see CodexDiagnostics.swift)
@@ -456,7 +461,8 @@ actor CodexCLI {
         (pingsThisRun, firstPingMS, cachedVersion)
     }
 
-    /// Is `codex exec` actually usable (installed AND — on the ChatGPT backend — logged in;
+    /// Normal ChatGPT requests require the installed CLI and discover errors by running.
+    /// Explicit checks still probe the provider. Is `codex exec` actually usable (installed AND — on the ChatGPT backend — logged in;
     /// on a custom backend, the endpoint answering)? Only a GOOD verdict is cached — a failed
     /// probe re-checks on every call, so codex fixed mid-session (re-login, reinstall, an
     /// endpoint coming online) is seen by the very next retry (a cached failure once made the
@@ -465,6 +471,9 @@ actor CodexCLI {
     /// Settings invalidates a stale good verdict. `force: true` re-probes past a good cache too
     /// (e.g. right after the installer flow).
     func validate(force: Bool = false) async -> Availability {
+        if ModelBackend.current == .chatgpt, !force {
+            return Self.locateBinary().map { .available(path: $0) } ?? .notInstalled
+        }
         let fingerprint = Self.backendFingerprint()
         if !force, let cachedAvailability, cachedAvailabilityFingerprint == fingerprint {
             return cachedAvailability
@@ -563,7 +572,7 @@ actor CodexCLI {
                 args += ["-i", made.url.path]      // a flag must follow, so the variadic ends here
                 prompt = "Read the 4 digits in the attached image. Reply with EXACTLY those 4 digits and nothing else."
             }
-        } else if ModelBackend.current == .chatgpt, CodexAuth.isLimited() {
+        } else if ModelBackend.current == .chatgpt, CodexAuth.usesLuna {
             // The background availability check must not inherit an unsupported CLI default.
             args += ["-m", Model.gpt6luna.rawValue,
                      "-c", "model_reasoning_effort=\"low\""]
@@ -677,15 +686,17 @@ actor CodexCLI {
         let stdoutLine: (@Sendable (String) -> Void)? = onLine.map { sink in
             { @Sendable raw in if let s = Self.humanLine(fromJSONL: raw) { sink(s) } }
         }
-        let out = try await Self.executeAsync(binary: bin,
-                                              args: try Self.arguments(for: invocation, modelID: modelID,
-                                                                   effortArg: effortArg,
-                                                                   schemaFile: schemaFile),
+        let arguments = try Self.arguments(for: invocation, modelID: modelID,
+                                           effortArg: effortArg, schemaFile: schemaFile)
+        let out = try await Self.withModelFallback(args: arguments, timeout: invocation.timeout) { args, remaining in
+            try await Self.executeAsync(binary: bin,
+                                              args: args,
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
-                                              timeout: invocation.timeout,
+                                              timeout: remaining,
                                               observeAgentTools: true,
                                               onStdoutLine: stdoutLine)
+        }
         AgentRunDiagnostics.current?.recordProcess(status: out.status)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
             completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
@@ -716,6 +727,9 @@ actor CodexCLI {
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
+        if SidekickInteraction.current != nil, !ModelBackend.hasClaudeRuntime {
+            args += ["-c", "developer_instructions=\(OpenAIComputerUse.tomlString(SidekickInteraction.websiteInstructions))"]
+        }
         let nativeOverrides = try nativeConnection?.codexOverrides ?? (nativeConfiguration ?? .resolve()).codexOverrides
         for override in nativeOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
@@ -726,7 +740,7 @@ actor CodexCLI {
             var hooks: [HostedToolPolicy.Rule] = []
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
-            for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
+            for id in ids { args += ["-c", "apps.\(DirectMCPRuntime.quoted(id)).destructive_enabled=false"] }
             if ConnectorCensus.cached(for: .chatgpt).contains(where: { $0.slug == "slack" }) {
                 if let policy = try? SlackConnector.codexActionPolicy(exclusive: false) { args += ["-c", policy] }
                 hooks.append(SlackToolPolicy.rule(backend: .chatgpt))
@@ -824,8 +838,13 @@ actor CodexCLI {
             let ownedBridge = bridge
             let out = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                return try await ComputerUseStream.run(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
-                    extraEnv: environment, narrate: !backend.hasClaudeRuntime, onLine: onLine)
+                return try await Self.withModelFallback(args: args, timeout: timeout, onFallback: {
+                    onLine("codex")
+                    onLine("Your selected model wasn't available. Using Luna for this task.")
+                }) { arguments, remaining in
+                    try await ComputerUseStream.run(binary: nativeConfiguration.cliURL.path, args: arguments, timeout: remaining,
+                        extraEnv: environment, narrate: !backend.hasClaudeRuntime, onLine: onLine)
+                }
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
@@ -962,7 +981,7 @@ actor CodexCLI {
 
     /// Only paid ChatGPT Sidekick requests fast service. Background work keeps normal service.
     private static func agentExecArguments() -> [String] {
-        execArguments(fastMode: ModelBackend.current == .chatgpt && !CodexAuth.isLimited())
+        execArguments(fastMode: ModelBackend.current == .chatgpt && !CodexAuth.usesLuna)
     }
 
     /// Per-run service selection; never change the user's Codex configuration.
@@ -1093,8 +1112,8 @@ actor CodexCLI {
                     guard let operation = inv.outlookOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
                     args += ["-c", try OutlookMailConnector.codexPolicy(operation: operation)]
                 } else if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
-                    args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
-                             "-c", "apps.\(id).destructive_enabled=false"]
+                    args += ["-c", "apps.\(DirectMCPRuntime.quoted(id)).default_tools_approval_mode=\"approve\"",
+                             "-c", "apps.\(DirectMCPRuntime.quoted(id)).destructive_enabled=false"]
                 } else {
                     // No known id → the shipped id-free preset (approves every connector's
                     // writes for this one app-authored, single-declared-action run).
@@ -1131,29 +1150,35 @@ actor CodexCLI {
 
     /// One complete override replaces inherited app, account and tool approvals. Quoted tool
     /// keys live INSIDE the TOML value: CLI dotted paths cannot safely address dotted names.
-    /// New apps/tools remain disabled. `writes` additionally refuses an allowed tool if its
-    /// read-only annotation disappears or changes. No classifier fallback on unattended runs.
+    /// The selected apps expose their live tools. Codex's `writes` permission mode permits
+    /// read-only operations, including renamed/new reads, while withholding write approval.
+    /// Explicit subsets remain available for source-specific operations and diagnostics.
     private static func connectorReadPolicy(slugs: [String], subset: [String]? = nil) throws -> String {
         var entries = ["_default = { enabled = false }"]
-        var ids = Set<String>()
+        var toolsByID: [String: Set<String>] = [:]
+        var allTools = Set<String>()
         for slug in Set(slugs).sorted() {
             guard let pack = ConnectorRegistry.pack(forSlug: slug), !pack.capturedProvisional,
                   let reads = pack.codexReadTools, !reads.isEmpty,
                   let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
-                  ConnectorRegistry.isValidCodexCatalogID(id),
-                  ids.insert(id).inserted,
-                  reads.allSatisfy({ $0.range(of: "^[A-Za-z_][A-Za-z0-9_./-]*\\z",
-                                              options: .regularExpression) != nil }) else {
+                  ConnectorRegistry.isValidCodexCatalogID(id) else {
                 throw CLIError.notAvailable(.notWorking("connector \(slug) has no verified Codex read policy"))
             }
-            let selected = subset ?? reads
-            guard !selected.isEmpty, Set(selected).isSubset(of: Set(reads)) else {
-                throw CLIError.notAvailable(.notWorking("read-tool narrowing cannot widen the curated policy"))
+            if let selected = subset ?? (Microsoft365Connector.contains(slug) ? reads : nil) {
+                guard !selected.isEmpty, Set(selected).isSubset(of: Set(reads)) else {
+                    throw CLIError.notAvailable(.notWorking("read-tool narrowing cannot widen the curated policy"))
+                }
+                toolsByID[id, default: []].formUnion(selected)
+            } else {
+                allTools.insert(id)
             }
-            let tools = Set(selected).sorted().map {
-                "\"\($0)\" = { enabled = true, approval_mode = \"writes\" }"
+        }
+        for id in Set(toolsByID.keys).union(allTools).sorted() {
+            let tools = (toolsByID[id] ?? []).sorted().map {
+                "\(DirectMCPRuntime.quoted($0)) = { enabled = true, approval_mode = \"writes\" }"
             }.joined(separator: ", ")
-            entries.append("\(id) = { enabled = true, default_tools_enabled = false, "
+            entries.append("\(DirectMCPRuntime.quoted(id)) = { enabled = true, destructive_enabled = false, "
+                + "default_tools_enabled = \(allTools.contains(id)), "
                 + "default_tools_approval_mode = \"writes\", tools = { \(tools) } }")
         }
         return "apps = { \(entries.joined(separator: ", ")) }"
@@ -1424,7 +1449,8 @@ actor CodexCLI {
                                 retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
                                 procHolder: ProcHolder? = nil, interaction: SidekickInteraction? = nil) throws -> ExecResult {
-        let lease = try CodexRuntime.executionLease(for: binary, cancelled: { procHolder?.isCancelled == true })
+        let lease = try CodexRuntime.executionLease(for: binary, exclusive: args == ["logout"],
+                                                   cancelled: { procHolder?.isCancelled == true })
         defer { lease?.unlock() }
         if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         if procHolder?.isCancelled == true { throw CancellationError() }

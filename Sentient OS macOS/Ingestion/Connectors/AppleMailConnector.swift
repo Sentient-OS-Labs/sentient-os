@@ -39,6 +39,7 @@ nonisolated struct AppleMailCheckpoint: Codable, Sendable {
     var backfillBefore: Int64?
     var backfillFloor: Position? = nil
     var deferred: Set<Int64> = []
+    var skippedRows: Set<Int64>? = nil
     /// Applies only to unreadable/unclassified rows. Successful or rejected classification
     /// removes the entry entirely; no sensitive or junk decision is retained.
     var retrySchedule: [String: Retry]? = nil
@@ -68,7 +69,7 @@ nonisolated struct AppleMailCheckpoint: Codable, Sendable {
     }
 
     private func needsBackfill(_ row: AppleMailRow) -> Bool {
-        guard let before = backfillBefore, row.id <= before else { return false }
+        guard skippedRows?.contains(row.id) != true, let before = backfillBefore, row.id <= before else { return false }
         return backfillFloor.map { Position(row) < $0 } ?? true
     }
 
@@ -82,6 +83,7 @@ nonisolated struct AppleMailCheckpoint: Codable, Sendable {
             self = AppleMailCheckpoint(generation: generation, top: top)
             salt = savedSalt
         }
+        let rows = rows.filter { skippedRows?.contains($0.id) != true }
         // An interrupted version-1 run already completed every row above its ceiling.
         // Sort only its remaining history by date, preserving discovery/retry progress.
         version = 2
@@ -113,9 +115,13 @@ nonisolated struct AppleMailCheckpoint: Codable, Sendable {
         return work
     }
 
-    mutating func finish(_ work: Work, retry: Bool, now: Date = Date()) {
+    mutating func finish(_ work: Work, retry: Bool, now: Date = Date(), skipFailure: Bool = false) {
+        if skipFailure {
+            if skippedRows == nil { skippedRows = [] }
+            skippedRows?.insert(work.row.id)
+        }
         let key = String(work.row.id)
-        if retry {
+        if retry && !skipFailure {
             deferred.insert(work.row.id)
             let attempts = min(4, max(0, retrySchedule?[key]?.attempts ?? 0)) + 1
             let delays: [TimeInterval] = [300, 1800, 7200, 43200, 86400]
@@ -137,7 +143,7 @@ nonisolated struct AppleMailCheckpoint: Codable, Sendable {
         if backfillBefore != nil && !rows.contains(where: needsBackfill) {
             backfillBefore = nil; backfillFloor = nil
         }
-        if let before = reconcileBefore, !rows.contains(where: { $0.id <= before && !deferred.contains($0.id) }) {
+        if let before = reconcileBefore, !rows.contains(where: { $0.id <= before && !deferred.contains($0.id) && skippedRows?.contains($0.id) != true }) {
             reconcileBefore = nil; reconciledAt = now
         }
         if rows.isEmpty { backfillBefore = nil; backfillFloor = nil; reconciledAt = now }

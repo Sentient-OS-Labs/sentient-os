@@ -72,7 +72,6 @@ struct HealthPane: View {
             || computerGate.helperPermissionState.screenRecording == .denied
             || computerGate.nativePermissionError != nil
             || NativePermissionSetup.shared.recoveryNeeded
-            || NativePermissionSetup.shared.needsRestart
     }
 
     private var helperVerified: Bool {
@@ -422,7 +421,8 @@ struct HealthPane: View {
         for (source, name, enabled) in [("file", "Files", filesEnabled),
             ("whatsapp", "WhatsApp", defaults.bool(forKey: "dbg.run.whatsapp")),
             ("imessage", "iMessage", defaults.bool(forKey: "dbg.run.imessage")),
-            ("notes", "Notes", defaults.bool(forKey: "dbg.run.notes"))] {
+            ("notes", "Notes", defaults.bool(forKey: "dbg.run.notes")),
+            ("siyuan", "SiYuan", defaults.bool(forKey: SiYuanSource.enabledKey))] {
             guard enabled, let status = statuses[source], status != "ok" else { continue }
             issues.append(status == "time_cap" ? "\(name): more items remain. Run analysis to continue from saved progress."
                 : "\(name): the last analysis did not finish. Check access and run analysis again.")
@@ -518,11 +518,11 @@ struct HealthPane: View {
     }
 
     private var helperAccessStatus: String {
-        if computerGate.checkingCapabilities || computerGate.requestingAutomation || computerGate.checkingAutomation {
-            return "Checking…"
+        if computerGate.checkingCapabilities || computerGate.requestingAutomation {
+            return "Finish setup in the helper’s window"
         }
-        if helperVerified { return "Granted" }
-        return helperProblem ? "Needs attention" : "Not checked yet"
+        if helperVerified { return "Ready" }
+        return helperProblem ? "Needs attention" : "Managed in the computer-use helper"
     }
 
     // MARK: Microphone & Speech (one row — one call asks for both; optional, so yellow, never red)

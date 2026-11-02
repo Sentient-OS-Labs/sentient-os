@@ -119,6 +119,15 @@ Keychain; decided 2026-08-21): a terminal `/logout` breaks Sentient's engine too
 ladder (`.claudeMissing` / `.claudeSignedOut`) and the morning caution both classify, and Uninstall
 never touches `~/.claude` or the Keychain credential. Only a good availability verdict is cached.
 
+`ClaudeAuth` keeps a coherent in-memory snapshot for synchronous readers. Account mutations and
+preference publication run on the main actor. The state lock is released before preference writes,
+so synchronous UI observers can read account state safely. Reentrant changes finish publishing the
+latest snapshot. Existing preference keys remain compatible across app upgrades and restarts.
+`ClaudeAuth.changed` refreshes Home and source consumers even when first observing the account
+changes in-memory readiness while persisted values are identical.
+Malformed or unavailable status responses retain the last known state. Explicit account changes
+invalidate older requests, and a newer accepted status supersedes an older response.
+
 ## Setup (`ClaudeSetup`)
 
 Claude Code remains a two-step, lazy setup: its CLI downloads when the user commits to Claude,

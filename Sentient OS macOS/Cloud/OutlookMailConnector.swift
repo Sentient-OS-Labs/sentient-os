@@ -84,7 +84,7 @@ nonisolated enum OutlookMailConnector {
         }.joined(separator: ", ")
         let entry = "{ enabled = true, default_tools_enabled = false, destructive_enabled = false, "
             + "default_tools_approval_mode = \"prompt\", tools = { \(tools) } }"
-        return exclusive ? "apps = { _default = { enabled = false }, \(id) = \(entry) }" : "apps.\(id) = \(entry)"
+        return exclusive ? "apps = { _default = { enabled = false }, \(DirectMCPRuntime.quoted(id)) = \(entry) }" : "apps.\(DirectMCPRuntime.quoted(id)) = \(entry)"
     }
 
     static func bareName(_ name: String, backend: ModelBackend) -> String? {
@@ -140,7 +140,9 @@ nonisolated enum OutlookMailConnector {
         let id: String
         let email: String
         var fingerprint: String {
-            let data = try! JSONEncoder().encode([id.lowercased(), email.lowercased()])
+            // Keep existing UUID fingerprints stable; other provider identifiers are opaque.
+            let accountID = UUID(uuidString: id) == nil ? id : id.lowercased()
+            let data = try! JSONEncoder().encode([accountID, email.lowercased()])
             return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         }
         var promptContext: String {
@@ -168,16 +170,32 @@ nonisolated enum OutlookMailConnector {
         guard calls.count == 1, let call = calls.first else { throw MCPSource.MCPError.connectionChanged }
         return try profileIdentity(call, backend: backend)
     }
-    static func profileIdentity(_ call: MCPCallEvidence.Receipt, backend: ModelBackend, requiresUUID: Bool = true) throws -> Identity {
-        guard object(call.arguments)?.isEmpty == true,
-              payloads(call).count == 1, let profile = payloads(call).first,
-              let id = profile["id"] as? String, !id.isEmpty, id.utf8.count <= 512,
-              !id.contains(where: \.isWhitespace), (!requiresUUID || UUID(uuidString: id) != nil),
-              let email = (profile[backend == .claude ? "mail" : "email"] as? String),
-              email.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil else {
+    static func profileIdentity(_ call: MCPCallEvidence.Receipt, backend: ModelBackend) throws -> Identity {
+        guard call.status == .succeeded, let output = object(call.output),
+              DirectMCPResult.errorState(output) == false else {
             throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "outlook_identity")
         }
-        return Identity(id: id, email: email.lowercased())
+        let result = output["jsonrpc"] as? String == "2.0" ? (output["result"] as? [String: Any] ?? output) : output
+        guard DirectMCPResult.errorState(result) == false else {
+            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "outlook_identity")
+        }
+        let objects = DirectMCPResult.objects(result)
+        var identities: [String: Identity] = [:]
+        for payload in objects.isEmpty ? [result] : objects {
+            let profile = payload["result"] as? [String: Any] ?? payload
+            guard let id = profile["id"] as? String, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let emailKeys = backend == .claude ? ["mail", "email", "userPrincipalName"] : ["email", "mail", "userPrincipalName"]
+            let emails = emailKeys.compactMap { (profile[$0] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard let email = emails.first(where: {
+                $0.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil
+            }) else { continue }
+            let identity = Identity(id: id, email: email.lowercased())
+            identities[identity.fingerprint] = identity
+        }
+        guard identities.count == 1, let identity = identities.values.first else {
+            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "outlook_identity")
+        }
+        return identity
     }
     @MainActor static func readIdentity(onReceipt: MCPSource.ReceiptObserver? = nil) async throws -> Identity {
         let backend = ModelBackend.current

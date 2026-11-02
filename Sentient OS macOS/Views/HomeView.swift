@@ -27,6 +27,7 @@
 //
 
 import SwiftUI
+import Combine
 import AppKit
 
 /// Lets RootView keep transient status cards clear of the full-width chat composer.
@@ -299,7 +300,8 @@ struct HomeView: View {
                 probeHealth(forceCodexRecheck: true)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: ClaudeAuth.changed))) { _ in
             guard !appState.isUninstalling else { return }
             model.ensureVisit(deck: deck)
         }

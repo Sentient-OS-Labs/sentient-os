@@ -27,7 +27,9 @@ nonisolated enum ModelBackend: String, Sendable {
 nonisolated enum CodexAuth {
     struct Plan { let raw: String }
     static func currentPlan() -> Plan? { nil }
-    static var assertedPlus: Bool { false }
+    enum PlanChoice { case automatic, paid }
+    static let planChoice = PlanChoice.automatic
+    static func useLunaAfterRejection(account: String?) {}
 }
 nonisolated enum AgentMode: Sendable { case computer; var label: String { "computer" }; var promptPhrase: String { "computer tools" } }
 nonisolated struct PreparedAction: Sendable { }
@@ -55,6 +57,8 @@ nonisolated enum OutlookCalendarConnector { static let slug = "outlook-calendar"
 nonisolated enum ClaudeAuth { struct LoginRequired: Error {} }
 nonisolated enum HostedConnectorAuthorization { static func authorize(_ command: String) async throws {} }
 nonisolated enum CodexCLI {
+    enum Model: String { case gpt6luna = "gpt-6-luna" }
+    struct ExecResult { let status: Int32; let stdout: String; let stderr: String }
     enum Effort: Sendable { case medium }
     struct Invocation: Sendable {
         let prompt: String
@@ -156,7 +160,7 @@ nonisolated enum ComputerUseStream { struct WindowUnavailable: Error { } }
 nonisolated enum SlackActionEvidence { struct Failure: Error { } }
 nonisolated enum OutlookActionEvidence { struct Failure: Error { } }
 nonisolated enum OutlookCalendarActionEvidence { struct Failure: Error { } }
-nonisolated enum CodexRuntime { struct Failure: Error { } }
+nonisolated enum CodexRuntime { static var accountIdentity: String? { nil }; struct Failure: Error { } }
 nonisolated enum MCPSource { enum MCPError: Error { case noReadSurface, connectionChanged, invalidResponse, connectorAuth, toolFailure, other } }
 nonisolated enum DirectMCPError: Error, LocalizedError {
     case timedOut, reconnectRequired, registrationExpired, accountSetupRequired, authorizationDenied, keychain, network
@@ -1089,7 +1093,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
     names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
-    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift", ROOT / "Scripts/Fixtures/HostedInferenceStub.swift"]
+    sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/ChatGPTRecovery.swift", APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift", ROOT / "Scripts/Fixtures/HostedInferenceStub.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True, timeout=30, env={**os.environ, "FIXTURE_EMPTY_VAULT": str(tmp / "empty-vault"), "FIXTURE_PERMISSION_SUPPORT": str(tmp / "permission-support")})

@@ -124,6 +124,22 @@ typealias Presentation = SidekickActivityPresentation
         }
         let typed = Presentation.notchStatus("→ sentient_native.type_text", activity: whatsapp)
         check(typed.text == "Entering text in WhatsApp" && typed.activity?.appIdentifier == "net.whatsapp.WhatsApp", "typed activity exposes WhatsApp icon")
+        for (step, expected) in [(safari, "Clicking"), (whatsapp, "Typing"), (spotify, "Reading")] {
+            let compact = Presentation.compactNotchStatus("→ fixture", activity: step)
+            check(compact.text == expected && compact.activity?.appIdentifier == step.appIdentifier,
+                  "compact notch keeps the active app and a short action")
+        }
+        let finished = Presentation.steps([record("sentient_native.click", status: .completed,
+            arguments: #"{"app":"com.apple.Safari"}"#)])[0]
+        let thinking = Presentation.compactNotchStatus("→ sentient_native.click", activity: finished)
+        check(thinking.text == "Thinking" && thinking.activity == nil,
+              "completed activity yields to thinking without a stale app icon")
+        for (line, expected) in [("Starting Sidekick…", "Starting"), ("Preparing Sidekick…", "Starting"),
+                                 ("Stopping…", "Stopping"), ("Thinking through your task", "Thinking"),
+                                 ("You might be offline. Retrying...", "Offline"), ("Reading Gmail", "Reading")] {
+            let compact = Presentation.compactNotchStatus(line, activity: safari)
+            check(compact.text == expected && compact.activity == nil, "compact status preserves lifecycle and connection states")
+        }
         for narration in ["I'll check that for you.", "You might be offline. Retrying..."] {
             let notch = Presentation.notchStatus(narration, activity: spotify)
             check(notch.text == narration && notch.activity == nil, "authored progress and connectivity notice override stale activity")

@@ -802,7 +802,7 @@ final class CommandRunModel {
         if end.outcome == .failed, let error, let recording = conversationTask,
            let backend = ModelBackend(rawValue: recording.backend) {
             upgradeOffer = SidekickUpgradeOffer.forProviderFailure(error, backend: backend,
-                planRaw: CodexAuth.currentPlan()?.raw, assertedPlus: CodexAuth.assertedPlus)
+                planRaw: CodexAuth.currentPlan()?.raw, assertedPlus: CodexAuth.planChoice == .paid)
         } else { upgradeOffer = nil }
         finish(end, line: line, upgradeOffer: upgradeOffer)
     }

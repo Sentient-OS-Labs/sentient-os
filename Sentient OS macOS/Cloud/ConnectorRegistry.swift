@@ -221,12 +221,13 @@ nonisolated enum ConnectorRegistry {
             ?? ConnectorCensus.listCodex().first { $0.slug == slug }
         guard pack != nil || claude != nil || codex != nil else { return nil }
         let name = pack?.claudeName ?? claude?.displayName
+        let live = ConnectorReadDiscovery.current[slug]
         return ResolvedServer(slug: slug,
                               claudeName: name,
                               claudeServerURL: pack?.claudeServerURL ?? claude?.serverURL,
-                              claudeToolPrefix: pack?.claudeToolPrefix
+                              claudeToolPrefix: live?.claudePrefix ?? pack?.claudeToolPrefix
                                   ?? name.map(derivedClaudePrefix(from:)),
-                              codexCatalogID: pack?.codexCatalogID ?? codex?.catalogID)
+                              codexCatalogID: live?.catalogID ?? pack?.codexCatalogID ?? codex?.catalogID)
     }
 
     /// The Claude-side identity the classifier needs to wall a connector in alone: display
@@ -497,10 +498,9 @@ nonisolated enum ConnectorRegistry {
         }
     }
 
-    /// Hosted account apps use either legacy connector IDs or Apps SDK IDs. Accept only
-    /// these observed, non-interpretable key forms; eligibility still requires a reviewed pack.
+    /// Provider-owned identifiers are opaque. Callers must quote them when constructing TOML.
     static func isValidCodexCatalogID(_ id: String) -> Bool {
-        id.range(of: "^(?:connector_|asdk_app_)[0-9a-f]{32}\\z", options: .regularExpression) != nil
+        !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// A service identity is not an account identity. Track the engine and observed relinks;
@@ -579,6 +579,10 @@ nonisolated enum ConnectorRegistry {
     /// kbEligible; the classifier fallback serves the lab's trial reads). Empty = NO read
     /// allows anywhere: fail closed.
     static func readToolNames(slug: String) -> [String] {
+        if let live = ConnectorReadDiscovery.current[slug], let reads = live.readTools,
+           let prefix = live.claudePrefix {
+            return reads.map { prefix + $0 }
+        }
         if let direct = DirectMCPStore.connection(slug) {
             return Array((direct.provider?.reviewedReads ?? []).intersection(Set(direct.readNames)))
                 .sorted().map { direct.toolPrefix + $0 }
