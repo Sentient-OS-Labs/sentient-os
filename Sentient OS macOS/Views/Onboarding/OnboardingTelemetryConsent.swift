@@ -14,6 +14,9 @@
 import SwiftUI
 
 struct OnboardingTelemetryConsent: View {
+    @Environment(\.onboardingBottomOverlayInset) private var bottomOverlayInset
+    @Environment(\.onboardingCanvasScale) private var canvasScale
+
     /// Same keys as Settings → System (SystemPane) — the original `diagnosticsEnabled` name
     /// carries existing installs' crash-reports choice; analytics has its own key.
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
@@ -42,7 +45,9 @@ struct OnboardingTelemetryConsent: View {
                 pillBlock
             }
             .padding(.leading, 36)
-            .padding(.bottom, 28)
+            // RootView's download/setup cards are outside the scaled onboarding canvas.
+            // Clear their measured height, retaining the original position when absent.
+            .padding(.bottom, max(28, bottomOverlayInset / canvasScale + 16))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .onChange(of: crashReportsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
@@ -95,6 +100,18 @@ struct OnboardingTelemetryConsent: View {
 
     private func setOpen(_ value: Bool) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { open = value }
+    }
+}
+
+private struct OnboardingBottomOverlayInsetKey: EnvironmentKey {
+    nonisolated static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    /// Height occupied by RootView's bottom-left status cards, in window points.
+    var onboardingBottomOverlayInset: CGFloat {
+        get { self[OnboardingBottomOverlayInsetKey.self] }
+        set { self[OnboardingBottomOverlayInsetKey.self] = newValue }
     }
 }
 

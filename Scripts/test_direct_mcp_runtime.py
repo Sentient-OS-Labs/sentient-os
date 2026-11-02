@@ -257,7 +257,9 @@ def main():
                 settings = json.loads(args[index])
                 settings["hooks"] = {}
                 args[index] = json.dumps(settings)
-        cli = str(Path.home() / ".local/bin" / ("codex" if engine == "codex" else "claude"))
+        cli = recipes[f"{engine}_binary"]
+        if not cli or not Path(cli).is_file():
+            raise RuntimeError(f"The app could not locate its {engine} runtime")
         try:
             process = subprocess.run([cli, *args], input="Perform the synthetic fixture operation.", text=True,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=child_env, cwd=options.output, timeout=60)
@@ -279,7 +281,7 @@ def main():
             run(engine, "read", "read_item", ["read_item"])
             run(engine, "read", "create_item", [])
             run(engine, "action", "create_item", ["create_item"])
-            run(engine, "action", "delete_item", [])
+            run(engine, "action", "delete_item", ["delete_item"])
             run(engine, "action", "surprise_write", [])
             run(engine, "read", "read_item", ["read_item"], renewal=True)
             run(engine, "multiple", "read_item", ["first:read_item", "second:read_item"])

@@ -28,7 +28,7 @@ struct OnboardingReadyView: View {
                     stageRaw = PersonalSetupProgress.Stage.sources.rawValue
                     timingHandoff.sheetDidDismiss()
                 }) {
-                    AnalysisTimingSheet(viewportHeight: max(420, min(620, geometry.size.height - 16))) { timing in
+                    AnalysisTimingSheet(viewportHeight: max(420, min(540, geometry.size.height - 16))) { timing in
                         if timingHandoff.choose(timing, onStart: onStart) { showTiming = false }
                     }
                 }
@@ -81,7 +81,7 @@ struct OnboardingReadyView: View {
                          size: 8.5, tracking: 1.6,
                          color: canStart ? Theme.faint : Theme.Ink.amber)
 
-                GlowButton(title: "Start Analysis", active: canStart) {
+                GlowButton(title: "Continue", active: canStart) {
                     // Recheck the persisted selection in case a connection changed this turn.
                     guard SourceSelection.selectionCount >= SourceSelection.minimumSelections else { return }
                     stageRaw = PersonalSetupProgress.Stage.timing.rawValue
@@ -92,7 +92,7 @@ struct OnboardingReadyView: View {
 
                 VStack(spacing: 6) {
                     if CodexAuth.knowledgeBaseOnly {
-                        Text("Choose when to build your knowledge.")
+                        Text("Set up background access, then start your first analysis.")
                             .font(.system(size: 13)).foregroundStyle(Theme.secondary)
                     } else {
                         Text("Keep using Sidekick while your Mac learns.")

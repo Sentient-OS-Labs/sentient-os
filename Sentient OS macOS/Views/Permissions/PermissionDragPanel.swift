@@ -243,10 +243,12 @@ struct PermissionPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            if let appURL = guide.job?.appURL {
-                AppDragItemView(url: appURL) { dragging in
+            if let job = guide.job, let appURL = job.appURL {
+                AppDragItemView(url: appURL, onDragStateChange: { dragging in
                     guide.setDragging(dragging)
-                }
+                }, onDrop: { point, operation in
+                    guide.finishedDrag(jobID: job.id, at: point, operation: operation)
+                })
                 .frame(maxWidth: .infinity)
             }
         }
@@ -339,16 +341,19 @@ private struct GuideDirectionIcon: View {
 private struct AppDragItemView: NSViewRepresentable {
     let url: URL
     let onDragStateChange: (Bool) -> Void
+    let onDrop: (NSPoint, NSDragOperation) -> Void
 
     func makeNSView(context: Context) -> AppDragSourceView {
         let view = AppDragSourceView(url: url)
         view.onDragStateChange = onDragStateChange
+        view.onDrop = onDrop
         return view
     }
 
     func updateNSView(_ nsView: AppDragSourceView, context: Context) {
         nsView.update(url: url)
         nsView.onDragStateChange = onDragStateChange
+        nsView.onDrop = onDrop
     }
 }
 
@@ -363,6 +368,8 @@ final class AppDragSourceView: NSView, NSDraggingSource {
 
     /// Tells the panel to become mouse-transparent for the drag's duration.
     var onDragStateChange: ((Bool) -> Void)?
+    var onDrop: ((NSPoint, NSDragOperation) -> Void)?
+    private var activeDrop: ((NSPoint, NSDragOperation) -> Void)?
 
     init(url: URL) {
         self.url = url
@@ -426,11 +433,15 @@ final class AppDragSourceView: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         onDragStateChange?(false)
+        let completed = activeDrop
+        activeDrop = nil
+        completed?(screenPoint, operation)
         mouseDownPoint = nil
         hasBegunDragging = false
     }
 
     private func beginAppDrag(with event: NSEvent) {
+        activeDrop = onDrop
         let writer = AppBundlePasteboardWriter(url: url)
         let draggingItem = NSDraggingItem(pasteboardWriter: writer)
         let icon = NSWorkspace.shared.icon(forFile: url.path)

@@ -41,7 +41,7 @@ nonisolated enum SlackConnector {
         }.joined(separator: ", ")
         let entry = "{ enabled = true, default_tools_enabled = false, destructive_enabled = false, "
             + "default_tools_approval_mode = \"prompt\", tools = { \(tools) } }"
-        return exclusive ? "apps = { _default = { enabled = false }, \(id) = \(entry) }" : "apps.\(id) = \(entry)"
+        return exclusive ? "apps = { _default = { enabled = false }, \(DirectMCPRuntime.quoted(id)) = \(entry) }" : "apps.\(DirectMCPRuntime.quoted(id)) = \(entry)"
     }
 
     static let actionInstructions = """
@@ -90,7 +90,7 @@ nonisolated enum SlackConnector {
     """
 
     static func categories(backend: ModelBackend) -> [String: ConnectorRegistry.ToolCategory] {
-        guard backend != .custom else { return [:] }
+        guard backend.hasSubscriptionConnectors else { return [:] }
         var reads = reviewedReads, writes = reviewedWrites, destructive = reviewedDestructive
         if backend == .claude {
             writes.insert("slack_add_list_record")
@@ -119,7 +119,7 @@ nonisolated enum SlackConnector {
         case .chatgpt:
             guard call.server == "codex_apps", call.tool.hasPrefix("slack.slack_") else { return nil }
             return String(call.tool.dropFirst("slack.".count))
-        case .custom: return nil
+        case .custom, .sentient: return nil
         }
     }
 
@@ -193,7 +193,7 @@ nonisolated enum SlackConnector {
     /// by this installation. Claude exposes the profile's workspace label, not its stable team ID.
     static func readIdentity(onReceipt: MCPSource.ReceiptObserver? = nil) async throws -> Identity {
         let backend = ModelBackend.current
-        guard backend != .custom else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+        guard backend.hasSubscriptionConnectors else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
         let prompt = """
         Verify the authenticated Slack account using only the permitted identity tools.
         If Slack is still connecting, use WaitForMcpServers when available and then perform the read.
@@ -212,7 +212,10 @@ nonisolated enum SlackConnector {
                 invocation.mcpReadToolNames = [profileTool] + (backend == .chatgpt ? [workspaceTool] : [])
                 invocation.effort = .low
                 invocation.timeout = 90
-                let result = try await FrontierRun.run(invocation)
+                let request = invocation
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 MCPSource.meter.withLock { totals in
                     var total = totals[slug] ?? (0, 0)

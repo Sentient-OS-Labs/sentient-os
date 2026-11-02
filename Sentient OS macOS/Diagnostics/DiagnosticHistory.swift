@@ -128,9 +128,9 @@ nonisolated enum DiagnosticHistory {
     static func recordAgentFailure(_ event: String, fields supplied: [String: String], defaults: UserDefaults = .standard) {
         guard ["agent.tool_failed", "agent.run_diagnostic"].contains(event) else { return }
         let categories: Set<String> = ["reason", "tool", "tool_family", "backend", "feature", "outcome",
-            "model_outcome", "runtime_outcome", "process_outcome", "error_type", "error_domain", "error_case", "tool_recovery"]
+            "model_outcome", "runtime_outcome", "process_outcome", "error_type", "error_domain", "error_case", "tool_recovery", "provider_error_code"]
         let numbers: Set<String> = ["call_index", "duration_ms", "error_code", "process_exit_code", "tool_calls",
-            "tool_completed", "tool_failed", "tool_incomplete", "tool_omitted", "tool_unknown"]
+            "tool_completed", "tool_failed", "tool_incomplete", "tool_omitted", "tool_unknown", "http_status", "rpc_error_code"]
         let booleans: Set<String> = ["helper_running_at_start", "helper_running_at_end"]
         var fields: [String: String] = [:]
         for (key, value) in supplied {

@@ -2,8 +2,7 @@
 //  ProactivePane.swift
 //  Sentient OS macOS
 //
-//  Settings → Proactive & Sidekick: the user's standing instructions for the proactive
-//  suggestion writer, Sidekick's shortcut key + standing context, and the speed-vs-intelligence
+//  Settings → Sidekick: activation, standing instructions, and the speed-vs-intelligence
 //  slider (ComputerUseSpeed — the model/effort EVERY computer-use run rides, per engine). The strings
 //  persist and autosave. ShortcutSetting edits the shared Sidekick and Double Tap binding live. The
 //  Sidekick editor writes SidekickMemory.md; its defaults mirror refreshes the editor after
@@ -13,49 +12,55 @@
 import SwiftUI
 
 struct ProactivePane: View {
-    @AppStorage(CustomInstructions.proactiveKey) private var proactiveInstructions = ""
     @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
     @AppStorage(NotchPreferences.clickEnabledKey) private var notchClickEnabled = true
+    @AppStorage(NotchPreferences.compactModeKey) private var compactNotchMode = false
     @State private var memoryText = ""
     @State private var memoryError: String?
     @State private var hasUnsavedMemoryEdit = false
     @AppStorage(ComputerUseSpeed.key) private var speedRaw = ComputerUseSpeed.faster.rawValue
     /// The slider drives the subscription engines (ChatGPT and Claude); a custom frontier model
-    /// carries ONE reasoning level set in Frontier Model Choice (provider quirks make per-run
-    /// tuning unsafe there), so only .custom locks it.
+    /// carries ONE reasoning level set in AI Models & Accounts (provider quirks make per-run
+    /// tuning unsafe there). Sentient's hosted service manages its own model and effort.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
-    private var sliderLive: Bool { (ModelBackend(rawValue: backendRaw) ?? .chatgpt) != .custom }
+    private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
+    private var sliderLive: Bool { backend == .chatgpt || backend == .claude }
 
     var body: some View {
-        SettingsPane(title: "Proactive & Sidekick",
+        SettingsPane(title: "Sidekick",
                      whisper: "Make everyday help feel like your own.") {
             VStack(alignment: .leading, spacing: 32) {
-                SettingsGroup(label: "Sidekick", inset: 0) {
+                SettingsGroup(label: "Activation and notch", inset: 0) {
                     VStack(spacing: 0) {
                         ShortcutSetting()
                         SettingsHairline(opacity: 0.10)
                         SettingToggleLine(title: "Open Sidekick by clicking the notch",
-                            sub: "Turn off to leave the idle notch to apps like Alcove or Droppy. Your keyboard shortcut still works.",
+                            sub: "Turn off to leave notch clicks to other apps. You can still open Sidekick with your shortcut key.",
                             isOn: $notchClickEnabled)
                             .accessibilityIdentifier("settings.notchClickEnabled")
                         SettingsHairline(opacity: 0.10)
-                        VStack(alignment: .leading, spacing: 12) {
-                            instructionLabel("Custom instructions", detail: "Sidekick learns your preferences as you work. Edit its instructions anytime.")
-                            SettingsTextBox(placeholder: "Use WhatsApp for messages and Safari for browsing.", text: Binding(
-                                get: { memoryText }, set: saveMemory))
-                                .frame(height: 104)
-                                .accessibilityLabel("Sidekick custom instructions")
-                            if let memoryError {
-                                Text(memoryError).font(.system(size: 12)).foregroundStyle(.red)
-                                    .accessibilityLabel("Sidekick memory error: " + memoryError)
-                                if hasUnsavedMemoryEdit {
-                                    Button("Retry saving") { saveMemory(memoryText) }
-                                        .buttonStyle(.plain)
-                                }
+                        SettingToggleLine(title: "Compact notch mode",
+                            sub: "Keep the app icon and short status beside the camera while Sidekick works.",
+                            isOn: $compactNotchMode)
+                            .accessibilityIdentifier("settings.compactNotchMode")
+                    }
+                }
+                SettingsGroup(label: "Custom instructions") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingsProse("Sidekick learns your preferences as you work. Edit its instructions anytime.")
+                        SettingsTextBox(placeholder: "Use WhatsApp for messages and Safari for browsing.", text: Binding(
+                            get: { memoryText }, set: saveMemory))
+                            .frame(height: 104)
+                            .accessibilityLabel("Sidekick custom instructions")
+                        if let memoryError {
+                            Text(memoryError).font(.system(size: 12)).foregroundStyle(.red)
+                                .accessibilityLabel("Sidekick memory error: " + memoryError)
+                            if hasUnsavedMemoryEdit {
+                                Button("Retry saving") { saveMemory(memoryText) }
+                                    .buttonStyle(.plain)
                             }
                         }
-                        .padding(20)
                     }
                 }
 
@@ -70,16 +75,12 @@ struct ProactivePane: View {
                             .opacity(sliderLive ? 1 : 0.4)
                         SettingsProse(sliderLive
                             ? "Faster for everyday tasks. Smarter for the tricky ones."
-                            : "Your custom model uses the reasoning level set in Frontier Model Choice.")
+                            : backend == .sentient
+                                ? "Sentient selects the supported model for covered inference. View your allowance in AI Models & Accounts."
+                                : "Your custom model uses the reasoning level set in AI Models & Accounts.")
                     }
                 }
 
-                SettingsGroup(label: "Morning suggestions",
-                              description: "Tell Sentient what to focus on, and what to skip.") {
-                    SettingsTextBox(placeholder: "Focus on work follow-ups. Skip shopping and bank alerts.", text: $proactiveInstructions)
-                        .frame(height: 104)
-                        .accessibilityLabel("Morning suggestion instructions")
-                }
                 Text("Instructions and preferences save automatically.")
                     .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
             }
@@ -87,6 +88,9 @@ struct ProactivePane: View {
         .onAppear(perform: refreshMemory)
         .onChange(of: notchClickEnabled) { _, _ in
             NotificationCenter.default.post(name: .notchInteractionChanged, object: nil)
+        }
+        .onChange(of: compactNotchMode) { _, _ in
+            NotificationCenter.default.post(name: .notchAppearanceChanged, object: nil)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshMemory()
@@ -121,12 +125,7 @@ struct ProactivePane: View {
         }
     }
 
-    private func instructionLabel(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
-            SettingsProse(detail)
-        }
-    }
+
 }
 
 // MARK: - The speed-vs-intelligence slider
@@ -246,7 +245,7 @@ private struct SpeedIntelligenceSlider: View {
     }
 }
 
-#Preview("Proactive & Sidekick pane") {
+#Preview("Sidekick pane") {
     ProactivePane()
         .background(Theme.bg)
         .frame(width: 720, height: 760)

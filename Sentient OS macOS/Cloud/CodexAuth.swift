@@ -17,9 +17,8 @@
 //   - knowledgeBaseOnly      → the persisted "free user chose to continue anyway" mode flag
 //   - assertedPlus           → the persisted "user says they upgraded, we believed them" flag
 //
-//  Fail-open policy: no file / no tokens / unknown plan string → treated as full. Worst case a
-//  limited account hits codex usage-limit errors, which every caller already survives (typed
-//  errors + resume handles). Only a POSITIVE free/go read gates anything.
+//  Missing plan metadata uses Luna. Account-scoped Settings overrides select paid models explicitly.
+//  Actual model rejection can select Luna for later requests; plan detection never gates a task.
 //
 
 import Foundation
@@ -54,7 +53,7 @@ enum CodexAuth {
     /// (knowledge-base-only mode), or a custom frontier model (hosted connectors ride
     /// subscription-account auth — ChatGPT's or Claude's — and don't exist on a custom endpoint).
     static var connectorLockedTip: String {
-        ModelBackend.current == .custom
+        !ModelBackend.connectorsAvailable
             ? "Available with a ChatGPT or Claude subscription"
             : "Only supported on ChatGPT Plus"
     }
@@ -62,7 +61,7 @@ enum CodexAuth {
     /// Should the Gmail/Calendar chips render locked? Either lock reason (free/go plan, or a
     /// custom frontier model) — the one predicate every chip surface uses.
     static var connectorsLocked: Bool {
-        knowledgeBaseOnly || !ModelBackend.connectorsAvailable
+        knowledgeBaseOnly || (!ModelBackend.connectorsAvailable && ModelBackend.current != .sentient)
     }
 
     // MARK: Persisted state
@@ -81,11 +80,8 @@ enum CodexAuth {
         set { UserDefaults.standard.set(newValue, forKey: kbOnlyKey) }
     }
 
-    /// The user told us they upgraded, and we took their word for it (the crossroads' "I've
-    /// upgraded to ChatGPT Plus" + its confirm). Needed because a just-paid upgrade can still
-    /// read free/go on disk — the claim lags, and the refresh POST can be throttled — so the
-    /// honest check has no way to say yes yet. Sticky: if the claim never catches up, the only
-    /// cost is codex usage-limit errors, which every caller already survives. Reset clears it.
+    /// Legacy onboarding state. Model selection uses the account-scoped plan choice below.
+    /// Explicit account reset removes this flag, so it cannot outlive a deliberate logout.
     static let assertedPlusKey = "plan.assertedPlus"
     static var assertedPlus: Bool {
         get { UserDefaults.standard.bool(forKey: assertedPlusKey) }
@@ -103,10 +99,8 @@ enum CodexAuth {
         CodexRuntime.auth
     }
 
-    /// Decode the plan from auth.json's JWT claims. Pure file read — safe to call every launch,
-    /// every cycle. Returns nil when it can't know (no file, API-key-only auth, undecodable) —
-    /// callers treat nil as full (fail open). nonisolated: a pure file read, safe from any executor
-    /// (CodexAuthSnapshot reads it off the CodexCLI actor).
+    /// Decode the private login claims. Unavailable metadata returns nil; model selection
+    /// handles that with Luna. Reading metadata does not make a network request.
     nonisolated static func currentPlan() -> Plan? {
         guard let data = try? CodexRuntime.readAuthData(),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -119,11 +113,70 @@ enum CodexAuth {
         return nil
     }
 
-    /// True only on a POSITIVE free/go read — the convenience most gates want. A user who told
-    /// us they upgraded is never limited: the whole point of trusting them is that the claim on
-    /// disk is the thing we've decided not to believe (chiefly CodexCLI.planTuned, which would
-    /// otherwise keep downshifting them off gpt-6-sol).
-    static func isLimited() -> Bool { !assertedPlus && currentPlan()?.tier == .limited }
+    /// Effective Free/Go choice for informational UI and plan-specific recovery.
+    static func isLimited() -> Bool {
+        switch planChoice {
+        case .automatic: currentPlan()?.tier == .limited
+        case .free: true
+        case .paid: false
+        }
+    }
+
+    enum PlanChoice: String, CaseIterable {
+        case automatic, free, paid
+        var title: String {
+            switch self {
+            case .automatic: "Automatic"
+            case .free: "Free / Go"
+            case .paid: "Plus or above"
+            }
+        }
+    }
+    static let planChoicesKey = "chatgpt.planChoices.v1"
+    static let modelFallbackKey = "chatgpt.lunaFallbackAccount.v1"
+    private static var preferenceScope: String { CodexRuntime.accountIdentity ?? "unidentified" }
+    static var planChoice: PlanChoice {
+        get {
+            let choices = UserDefaults.standard.dictionary(forKey: planChoicesKey) as? [String: String] ?? [:]
+            return PlanChoice(rawValue: choices[preferenceScope] ?? "") ?? .automatic
+        }
+        set {
+            var choices = UserDefaults.standard.dictionary(forKey: planChoicesKey) as? [String: String] ?? [:]
+            choices[preferenceScope] = newValue.rawValue
+            UserDefaults.standard.set(choices, forKey: planChoicesKey)
+            retrySelectedModel()
+        }
+    }
+    static var usingModelFallback: Bool {
+        UserDefaults.standard.string(forKey: modelFallbackKey) == preferenceScope
+    }
+    /// Missing metadata uses Luna. A present, unfamiliar plan can try the selected model.
+    static var usesLuna: Bool {
+        if usingModelFallback { return true }
+        switch planChoice {
+        case .free: return true
+        case .paid: return false
+        case .automatic:
+            guard let plan = currentPlan(), !plan.raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+            return plan.tier == .limited
+        }
+    }
+    static func useLunaAfterRejection(account: String?) {
+        guard account == CodexRuntime.accountIdentity else { return }
+        UserDefaults.standard.set(preferenceScope, forKey: modelFallbackKey)
+    }
+    static func retrySelectedModel() {
+        UserDefaults.standard.removeObject(forKey: modelFallbackKey)
+    }
+    static func clearAccountPreferences() {
+        var choices = UserDefaults.standard.dictionary(forKey: planChoicesKey) as? [String: String] ?? [:]
+        choices.removeValue(forKey: preferenceScope)
+        choices.removeValue(forKey: "unidentified")
+        UserDefaults.standard.set(choices, forKey: planChoicesKey)
+        retrySelectedModel()
+        UserDefaults.standard.removeObject(forKey: assertedPlusKey)
+        UserDefaults.standard.removeObject(forKey: earliestRefreshKey)
+    }
 
     /// Extract `chatgpt_plan_type` from a JWT's payload segment (base64url, no signature check —
     /// we're reading our own user's token off their own disk, not authenticating anyone).

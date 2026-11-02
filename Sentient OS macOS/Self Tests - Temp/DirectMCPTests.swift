@@ -215,7 +215,9 @@ enum DirectMCPTests {
                 refreshToken: "synthetic-refresh-0", expiresAt: Date().addingTimeInterval(300), issuedAt: Date(), scopes: ["mcp"])
             try DirectMCPStore.saveGrant(grant)
             var payload: [String: Any] = ["connection_id": id.uuidString, "server_name": connection.serverName,
-                                         "app": Bundle.main.executableURL!.path]
+                                         "app": Bundle.main.executableURL!.path,
+                                         "codex_binary": CodexCLI.locateBinary() ?? "",
+                                         "claude_binary": ClaudeCLI.locateBinary() ?? ""]
             for mode in ["read", "action"] {
                 let attachment = DirectMCPRuntime.Attachment(connection: connection,
                     allowed: mode == "read" ? ["read_item"] : connection.actionNames, deadline: Date().addingTimeInterval(3600))
@@ -278,27 +280,27 @@ enum DirectMCPTests {
             guard let value = ProcessInfo.processInfo.environment["LAB_DIRECT_ID"], let id = UUID(uuidString: value),
                   try DirectMCPStore.readGrant(id).providerSlug == "fixture" else { throw Failure("fixture cleanup refused") }
             try DirectMCPStore.deleteGrant(id)
+            DirectMCPStore.removeIndex(id: id)
             Log("DIRECT FIXTURE: removed synthetic Keychain item")
         } catch { Log("DIRECT FIXTURE: cleanup failed \(ErrorLabel(error))"); exit(1) }
     }
 
     static func protocolFixture() async {
         let id = UUID()
+        let label = "Synthetic \(id.uuidString)"
         defer { try? DirectMCPStore.deleteGrant(id); DirectMCPStore.removeIndex(id: id) }
         do {
             guard let provider = DirectMCPProvider.find("fixture") else { throw Failure("fixture setup") }
             let phases = OSAllocatedUnfairLock(initialState: [DirectMCPConnectPhase]())
             let report: @Sendable (DirectMCPConnectPhase) async -> Void = { phase in
                 phases.withLock { $0.append(phase) }
-                // A classification regression stops before any real model can be called.
-                if phase == .checkingTools { withUnsafeCurrentTask { $0?.cancel() } }
             }
             let browser: @Sendable (URL) async -> Bool = { url in
                 // A local synthetic authorization page redirects to the real native callback.
                 guard url.host == "127.0.0.1" else { return false }
                 return (try? await URLSession.shared.data(from: url)) != nil
             }
-            _ = try await DirectMCPConnections.shared.connect(provider: provider, label: "Synthetic", replacing: id,
+            _ = try await DirectMCPConnections.shared.connect(provider: provider, label: label, replacing: id,
                 onProgress: report, openBrowser: browser)
             guard let connection = DirectMCPStore.connection(id: id), connection.connected, !connection.usable,
                   connection.tools.isEmpty, connection.detected.healthy,
@@ -313,12 +315,12 @@ enum DirectMCPTests {
             guard notion.kbEligible, !notion.kbPolicyReady, notion.readNames.isEmpty, notion.actionNames.isEmpty else {
                 throw Failure("KB opt-in granted unchecked tool access")
             }
-            let firstUse = Task { try await DirectMCPConnections.verify(connection, onProgress: report) }
-            do { _ = try await firstUse.value; throw Failure("first use skipped missing classification") }
-            catch is CancellationError { }
-            guard phases.withLock({ $0.last }) == .checkingTools,
-                  DirectMCPStore.connection(id: id)?.usable == false else { throw Failure("unclassified tools became usable") }
-            Log("DIRECT PROTOCOL: login skips classification; first use requires it")
+            let firstUse = try await DirectMCPConnections.verify(connection, onProgress: report)
+            guard firstUse.usable, firstUse.readNames == ["read_item"], firstUse.actionNames.count == 4,
+                  !phases.withLock({ $0.contains(.checkingTools) }) else {
+                throw Failure("first use did not accept live inventory without classification")
+            }
+            Log("DIRECT PROTOCOL: login and first use work without a classifier")
             let grant = try DirectMCPStore.readGrant(id)
             guard grant.accessToken.hasPrefix("synthetic-access-"), grant.refreshToken != nil else { throw Failure("exchange") }
             let tools = try await DirectMCPProbe.tools(connection: connection)
@@ -335,21 +337,21 @@ enum DirectMCPTests {
             guard (renewedInventory["tools"] as? [Any])?.count == 4,
                   try DirectMCPStore.readGrant(id).accessToken != expiring.accessToken else { throw Failure("native session renewal") }
             Log("DIRECT PROTOCOL: native read renewed expired synthetic grant")
-            var connected = connection
+            var connected = firstUse
             connected.tools = tools
             connected.policy = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.name == "read_item" ? DirectMCPTool.Category.read : .destructive) })
             connected.policyFingerprint = DirectMCPTool.fingerprint(tools)
             connected.state = .ready
             try DirectMCPStore.save(connected)
             do {
-                _ = try await DirectMCPConnections.shared.connect(provider: provider, label: "Synthetic", replacing: id, openBrowser: { _ in false })
+                _ = try await DirectMCPConnections.shared.connect(provider: provider, label: label, replacing: id, openBrowser: { _ in false })
                 throw Failure("failed browser unexpectedly connected")
             } catch DirectMCPError.network { }
             guard DirectMCPStore.connection(id: id)?.generation == grant.generation,
                   try !DirectMCPStore.readGrant(id).revoked else { throw Failure("failed reconnect did not restore existing grant") }
             let opened = OSAllocatedUnfairLock(initialState: false)
             let pending = Task {
-                try await DirectMCPConnections.shared.connect(provider: provider, label: "Synthetic", replacing: id, openBrowser: { _ in
+                try await DirectMCPConnections.shared.connect(provider: provider, label: label, replacing: id, openBrowser: { _ in
                     opened.withLock { $0 = true }; return true
                 })
             }
@@ -361,7 +363,7 @@ enum DirectMCPTests {
             guard DirectMCPStore.connection(id: id)?.generation == grant.generation,
                   try !DirectMCPStore.readGrant(id).revoked else { throw Failure("cancelled reconnect did not restore existing grant") }
             phases.withLock { $0 = [] }
-            _ = try await DirectMCPConnections.shared.connect(provider: provider, label: "Synthetic", replacing: id,
+            _ = try await DirectMCPConnections.shared.connect(provider: provider, label: label, replacing: id,
                 onProgress: report, openBrowser: browser)
             guard let reconnected = DirectMCPStore.connection(id: id), reconnected.connected, !reconnected.usable,
                   reconnected.generation != grant.generation, reconnected.policy == connected.policy,
@@ -371,10 +373,10 @@ enum DirectMCPTests {
             let verified = try await DirectMCPConnections.verify(reconnected, onProgress: report)
             guard verified.usable else { throw Failure("cached first-use policy was not prepared") }
             let attachments = try await DirectMCPRuntime.prepare(slugs: [verified.taskTarget], mode: .action, timeout: 30)
-            guard attachments.count == 1, attachments[0].allowed == ["read_item"] else {
-                throw Failure("prepared task did not enforce the cached allowed tools")
+            guard attachments.count == 1, attachments[0].allowed == verified.actionNames else {
+                throw Failure("prepared task did not expose the current advertised tools")
             }
-            Log("DIRECT PROTOCOL: first use reuses unchanged policy and prepares only permitted tools")
+            Log("DIRECT PROTOCOL: first use prepares current advertised tools")
 
             for invalidateRevision in [false, true] {
                 guard var cached = DirectMCPStore.connection(id: id) else { throw Failure("missing reconnect fixture") }
@@ -390,21 +392,17 @@ enum DirectMCPTests {
                 }
                 try DirectMCPStore.save(cached)
                 phases.withLock { $0 = [] }
-                _ = try await DirectMCPConnections.shared.connect(provider: provider, label: "Synthetic", replacing: id,
+                _ = try await DirectMCPConnections.shared.connect(provider: provider, label: label, replacing: id,
                     onProgress: report, openBrowser: browser)
                 guard let deferred = DirectMCPStore.connection(id: id), deferred.connected, !deferred.usable,
                       !phases.withLock({ $0.contains(.checkingTools) }) else { throw Failure("reconnect classified tools eagerly") }
-                let attempt = Task {
-                    try await DirectMCPConnections.verify(deferred, onProgress: report)
-                }
-                do { _ = try await attempt.value; throw Failure("stale policy skipped classification") }
-                catch is CancellationError { }
-                guard phases.withLock({ $0.last }) == .checkingTools,
-                      DirectMCPStore.connection(id: id)?.usable == false else {
-                    throw Failure("stale policy became usable before classification")
+                let refreshed = try await DirectMCPConnections.verify(deferred, onProgress: report)
+                guard refreshed.usable, refreshed.actionNames.count == 4,
+                      !phases.withLock({ $0.contains(.checkingTools) }) else {
+                    throw Failure("stale policy blocked live inventory")
                 }
             }
-            Log("DIRECT PROTOCOL: changed definitions and policy revisions require classification")
+            Log("DIRECT PROTOCOL: changed definitions and policy revisions refresh without classification")
             _ = try await DirectMCPConnections.shared.disconnect(id)
             guard DirectMCPStore.connection(id: id) == nil else { throw Failure("disconnect index survived") }
             do { _ = try await DirectMCPProbe.tools(connection: connection); throw Failure("disconnected probe continued") }
@@ -412,7 +410,12 @@ enum DirectMCPTests {
             do { _ = try DirectMCPStore.readGrant(id); throw Failure("deleted record readable") }
             catch DirectMCPError.reconnectRequired { }
             Log("DIRECT PROTOCOL: PASS")
-        } catch { Log("DIRECT PROTOCOL: failed \(ErrorLabel(error))"); exit(1) }
+        } catch {
+            Log("DIRECT PROTOCOL: failed \(ErrorLabel(error))")
+            try? DirectMCPStore.deleteGrant(id)
+            DirectMCPStore.removeIndex(id: id)
+            exit(1)
+        }
     }
 
     static func inspectConnection() async {
@@ -458,9 +461,8 @@ enum DirectMCPTests {
             inv.webSearch = false; inv.connectorOnlyRead = true; inv.mcpReadConnectors = [connection.slug]
             inv.mcpReadToolNames = [tool]
             let envelope = try await FrontierRun.run(inv)
-            guard envelope.result.trimmingCharacters(in: .whitespacesAndNewlines) == "READ_OK",
-                  MCPSource.hasDirectReadEvidence(raw: envelope.raw, connection: connection, backend: ModelBackend.current, requiredNames: [tool]) else {
-                throw Failure("real read lacks successful tool evidence")
+            guard envelope.result.trimmingCharacters(in: .whitespacesAndNewlines) == "READ_OK" else {
+                throw Failure("source reported an unsuccessful read")
             }
             Log("DIRECT READ: PASS provider=\(connection.providerSlug) backend=\(ModelBackend.current.rawValue)")
         } catch { Log("DIRECT READ: failed \(ErrorLabel(error))"); exit(1) }

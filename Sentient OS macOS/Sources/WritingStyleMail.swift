@@ -43,10 +43,8 @@ enum WritingStyleMail {
         invocation.outputSchema = #"{"type":"object","additionalProperties":false,"properties":{"tool_failure":{"type":"string","enum":["","auth","other"]}},"required":["tool_failure"]}"#
         invocation.timeout = 600
         invocation.mcpReadToolNames = tools(slug: slug, backend: backend)
-        // On Claude the Gmail connector has no message-level search: the model itself must pick
-        // the newest 15 sent messages out of 50 threads, and the light tier missed one in field
-        // testing. The same reliability pin the other connector reads use.
-        if backend == .claude { invocation.claudeModel = .sonnet }
+        // Writing-style samples use the same Haiku/medium ingestion policy as other reads.
+        if backend == .claude { invocation.claudeModel = .haiku }
         for attempt in 1...2 {
             do {
                 let result = try await FrontierRun.run(invocation)
@@ -55,7 +53,7 @@ enum WritingStyleMail {
                       ConnectorRegistry.readOrigin(slug: slug, backend: backend) == origin else {
                     throw MCPSource.MCPError.connectionChanged
                 }
-                try ConnectorReadFailure.validateTools(result, slug: slug)
+                try ConnectorReadFailure.validate(result, slug: slug)
                 let samples = try validate(result, slug: slug, backend: backend)
                 Log("WritingStyleMail: verified \(samples.count) sent emails from \(slug)")
                 return samples
@@ -139,8 +137,14 @@ enum WritingStyleMail {
             let upper = Set(labels.map { $0.uppercased() })
             return upper.contains("SENT") && !upper.contains("DRAFT")
         }
-        var candidateIDs = metadata.compactMap(identifier)
-        candidateIDs += discoveredPayloads.flatMap { ids(in: $0, keys: ["email_ids", "message_ids", "ids"]) }
+        // Outlook can return only IDs/previews in its list. These are still required reads,
+        // including records with neither a body nor a timestamp.
+        let idKeys: Set<String> = slug == "gmail" ? ["email_ids", "message_ids", "ids"]
+            : ["email_ids", "message_ids", "ids", "messages", "value"]
+        let listedIDs = discoveredPayloads.flatMap { ids(in: $0, keys: idKeys) }
+        // Keep Outlook's requested newest-first list order when some dates are absent.
+        var candidateIDs = slug == "gmail" ? metadata.compactMap(identifier) + listedIDs
+            : listedIDs + metadata.compactMap(identifier)
         let threadIDs = Set(discoveredPayloads.flatMap { ids(in: $0, keys: ["threads"]) })
         var seen = Set<String>()
         candidateIDs = candidateIDs.filter { seen.insert($0).inserted }
@@ -152,25 +156,37 @@ enum WritingStyleMail {
 
         var byID: [String: Read] = [:]
         var readThreadIDs = Set<String>()
-        for record in content.flatMap(payloads).flatMap(records) {
+        let contentRecords = content.flatMap { call in
+            payloads(call).flatMap(records).map { (record: $0, listing: bareName(call, slug: slug, backend: backend) == "list_messages") }
+        }
+        for (record, listing) in contentRecords {
             if slug == "gmail" {
                 let labels = (record["label_ids"] ?? record["labelIds"] ?? record["labels"]) as? [String]
                 guard let labels else { throw refused(slug, "labels_missing") }
                 let upper = Set(labels.map { $0.uppercased() })
                 if !upper.contains("SENT") || upper.contains("DRAFT") { continue }
             }
-            guard !isIncomplete(record), let id = identifier(record), let stamp = sentDates(in: record).first,
+            guard !isIncomplete(record) else { throw refused(slug, "incomplete_payload") }
+            if slug != "gmail" {
+                guard backend == .chatgpt ? record["isDraft"] as? Bool != true : record["isDraft"] as? Bool == false else {
+                    throw refused(slug, "draft")
+                }
+            }
+            guard let id = identifier(record), let stamp = sentDates(in: record).first,
                   let date = parseDate(stamp), date <= Date().addingTimeInterval(300),
-                  let body = body(in: record) else { throw refused(slug, "record_fields") }
+                  let body = body(in: record, allowAbsentBody: !listing) else {
+                // A list is discovery evidence, not proof of an empty or fully read message.
+                // Resolve it from fetch_message below; newest/unread coverage is checked after
+                // every receipt has been considered, regardless of arrival order.
+                if listing { continue }
+                throw refused(slug, "record_fields")
+            }
             let thread = (record["thread_id"] ?? record["threadId"]) as? String
             if let thread { readThreadIDs.insert(thread) }
             guard candidateSet.contains(id) || (thread.map(threadIDs.contains) ?? false) else {
                 throw refused(slug, "unlisted_message")
             }
             if slug != "gmail" {
-                guard backend == .chatgpt ? record["isDraft"] as? Bool != true : record["isDraft"] as? Bool == false else {
-                    throw refused(slug, "draft")
-                }
                 if backend == .claude, let identity = outlookIdentity {
                     let sender = (record["from"] ?? record["sender"]) as? [String: Any]
                     let address = (sender?["emailAddress"] as? [String: Any])?["address"] as? String
@@ -257,7 +273,9 @@ enum WritingStyleMail {
     private static func records(_ value: Any) -> [[String: Any]] {
         if let object = value as? [String: Any] {
             if let messages = object["messages"] as? [Any] { return messages.flatMap(records) }
-            if identifier(object) != nil, object["payload"] != nil || object["body"] != nil || !sentDates(in: object).isEmpty { return [object] }
+            if identifier(object) != nil,
+               object["payload"] != nil || object["body"] != nil || object["bodyPreview"] != nil
+                || object["isDraft"] != nil || isIncomplete(object) || !sentDates(in: object).isEmpty { return [object] }
             return ["emails", "messages", "responses", "value", "data", "thread", "threads", "result"]
                 .compactMap { object[$0] }.flatMap(records)
         }
@@ -323,7 +341,7 @@ enum WritingStyleMail {
 
     /// Only the observed provider shapes are decoded: flat text fields (typed Outlook bodies,
     /// Gmail's plaintextBody), then HTML-only fields, then Gmail's MIME parts without attachments.
-    private static func body(in message: [String: Any]) -> Body? {
+    private static func body(in message: [String: Any], allowAbsentBody: Bool = true) -> Body? {
         for key in ["body", "plaintextBody", "plaintext_body", "text_body", "body_text", "plain_text", "text"] {
             if let text = message[key] as? String { return looksLikeHTML(text) ? .html(text) : .plain(text) }
             if let body = message[key] as? [String: Any], let text = body["content"] as? String {
@@ -355,6 +373,7 @@ enum WritingStyleMail {
             return result
         }
         guard let payload = message["payload"] else {
+            guard allowAbsentBody else { return nil }
             // A complete read of an empty message (an attachment sent alone) carries no body field
             // at all, whereas a preview-only record still shows its snippet: only that is incomplete.
             let previewed = ["snippet", "bodyPreview", "preview"].contains { key in
@@ -478,7 +497,8 @@ enum WritingStyleMail {
             source = """
             Call list_messages with folder_id="sentitems", order_by="sentDateTime desc", top=15,
             filter="isDraft eq false". Resolve Sent Items with find_mail_folder only if a concrete ID
-            is required. The list contains full bodies; fetch_message is needed only if one is missing.
+            is required. The list may contain only IDs or previews. Use fetch_message for every
+            selected message missing a complete body or sentDateTime, even if its preview is empty.
             Do not repeat a completed list or fetch. Use only the authenticated primary mailbox.
             """
         }

@@ -25,6 +25,7 @@ nonisolated enum SidekickContext {
         var text: String
         let outcome: String?
         let replyTo: String?
+        var selectedCard: String?
         var choices: [String]?
         var truncated: Bool
         init(_ record: Record, cap: Int = Int.max) {
@@ -33,8 +34,10 @@ nonisolated enum SidekickContext {
             at = event.createdAt.ISO8601Format()
             text = prefix(event.text, bytes: cap); outcome = event.outcome?.rawValue
             replyTo = event.reply?.messageID
+            selectedCard = event.reply?.card.map { prefix($0.actionJSON, bytes: cap) }
             choices = event.choices?.map { prefix($0, bytes: cap) }
             truncated = text != event.text || choices != event.choices
+                || selectedCard != event.reply?.card?.actionJSON
         }
     }
     private struct Segment: Encodable {

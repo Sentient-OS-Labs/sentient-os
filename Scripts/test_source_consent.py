@@ -74,9 +74,10 @@ enum ConnectorCensus {
         let slug: String
         var displayName: String { slug }
         let healthy: Bool
+        var origin: Origin = .chatgpt
+        var directRecordExists = true
         var readinessVerified: Bool? = true
-        var isReady: Bool { healthy && readinessVerified == true }
-        func canAttempt(legacyCompleted: Bool) -> Bool { isReady || (healthy && readinessVerified == nil && legacyCompleted) }
+        var canAttempt: Bool { origin != .direct || directRecordExists }
     }
     static var records: [DetectedConnector] = []
     static func cached(for origin: DetectedConnector.Origin) -> [DetectedConnector] { records }
@@ -169,31 +170,37 @@ checks = r'''
         flags["dbg.run.gmail"] = true; apply()
         check(SourceSelection.selectionCount == 0, "selected disconnected hosted source is not ready")
         flags["dbg.gmail.connected"] = true; apply()
-        check(SourceSelection.selectionCount == 0, "global connected flag cannot prove a current-provider connection")
+        check(SourceSelection.selectionCount == 1, "saved hosted selection and Done count without census metadata")
         ConnectorCensus.records = [.init(slug: "gmail", healthy: false)]
-        check(SourceSelection.selectionCount == 0, "cached disconnection overrides old connected flag")
-        check(SourceSelection.unavailableSourceMessages["Gmail"] != nil
-            && SourceSelection.unavailableConnectorSlugs.contains("gmail"), "disconnected selected mail is reported and excluded from downstream fetches")
+        check(SourceSelection.selectionCount == 1, "cached disconnection cannot override an explicit hosted selection")
+        check(SourceSelection.unavailableSourceMessages["Gmail"] == nil
+            && !SourceSelection.unavailableConnectorSlugs.contains("gmail"), "selected hosted mail remains eligible for its next actual read")
         ConnectorCensus.records = [.init(slug: "gmail", healthy: true), .init(slug: "google-calendar", healthy: true)]
         flags["dbg.run.calendar"] = true; flags["dbg.calendar.connected"] = true; apply()
-        ConnectorRegistry.selected = [.init(slug: "drive", healthy: true), .init(slug: "missing", healthy: false)]
+        ConnectorRegistry.selected = [.init(slug: "drive", healthy: true), .init(slug: "missing", healthy: false, origin: .direct, directRecordExists: false)]
         check(SourceSelection.selectionCount == 3 && SourceSelection.current().isEmpty, "three cloud sources complete selection without FDA or local data")
         ConnectorCensus.records = [.init(slug: "gmail", healthy: true, readinessVerified: nil), .init(slug: "google-calendar", healthy: true, readinessVerified: nil)]
         ConnectorRegistry.selected = [.init(slug: "drive", healthy: true, readinessVerified: nil)]
-        check(SourceSelection.selectionCount == 0 && !SourceSelection.hostedSourceCanAttempt("gmail"), "three unverified declarations cannot admit a new first analysis")
+        check(SourceSelection.selectionCount == 3 && SourceSelection.hostedSourceCanAttempt("gmail")
+            && SourceSelection.connectorsToAttempt.count == 1, "three explicit declarations admit first analysis without metadata verification")
+        ConnectorCensus.records = [.init(slug: "gmail", healthy: true, readinessVerified: false), .init(slug: "google-calendar", healthy: true, readinessVerified: false)]
+        ConnectorRegistry.selected = [.init(slug: "drive", healthy: true, readinessVerified: false)]
+        check(SourceSelection.selectionCount == 3 && SourceSelection.hostedSourceCanAttempt("gmail")
+            && !SourceSelection.unavailableConnectorSlugs.contains("gmail"), "new Done selections count and run without pretending OAuth was verified")
         ProcessingPlan.completed = true
         check(SourceSelection.hostedSourceCanAttempt("gmail") && SourceSelection.connectorsToAttempt.count == 1,
               "completed legacy users still attempt healthy opted-in sources without a new marker")
         ConnectorCensus.records = [.init(slug: "gmail", healthy: false, readinessVerified: nil)]
-        check(!SourceSelection.hostedSourceCanAttempt("gmail"), "known disconnected legacy sources do not become ready")
+        check(SourceSelection.hostedSourceCanAttempt("gmail"), "known hosted failure remains retryable without another Done")
         ProcessingPlan.completed = false
         ConnectorCensus.records = [.init(slug: "gmail", healthy: true), .init(slug: "google-calendar", healthy: true)]
-        ConnectorRegistry.selected = [.init(slug: "drive", healthy: true), .init(slug: "missing", healthy: false)]
+        ConnectorRegistry.selected = [.init(slug: "drive", healthy: true), .init(slug: "missing", healthy: false, origin: .direct, directRecordExists: false)]
         let enabled = WritingStyle.Selection()
         check(enabled.mail == ["gmail"] && !enabled.imessage && !enabled.whatsapp, "writing sources use enabled connected accounts only")
         flags["dbg.run.gmail"] = false; flags["dbg.run.imessage"] = false; apply()
         check(WritingStyle.Selection().mail.isEmpty, "saved mail opt-out excludes writing samples")
         ModelBackend.current = .custom
+        ConnectorRegistry.selected = [.init(slug: "direct-fixture", healthy: true, origin: .direct)]
         check(SourceSelection.selectionCount == 1, "custom backend excludes hosted sources and retains direct readiness")
         ModelBackend.current = .chatgpt
         var db: OpaquePointer?

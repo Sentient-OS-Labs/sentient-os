@@ -26,7 +26,7 @@ import CryptoKit
 
 /// One download target. A struct (not constants) so a self-test can run the same machinery
 /// against a small file; production values are the only ones the app ever uses.
-struct ModelDownloadJob {
+nonisolated struct ModelDownloadJob: Sendable {
     let url: URL
     let sha256: String     // lowercase hex — HF's published LFS hash for the file
     let bytes: Int64
@@ -176,7 +176,7 @@ extension ModelDownload {
 
 // MARK: - Errors
 
-enum ModelFetchError: Error {
+nonisolated enum ModelFetchError: Error {
     case upstreamChanged(String)   // server file no longer matches our pinned size/hash
     case checksumMismatch
     case badResponse(Int)
@@ -219,7 +219,7 @@ enum ModelFetchError: Error {
 
 // MARK: - The machinery (HEAD → 8 range chunks → assemble → SHA-256)
 
-enum ModelFetch {
+nonisolated enum ModelFetch {
 
     private static let connections = 8      // measured sweet spot; macOS default is 6
 

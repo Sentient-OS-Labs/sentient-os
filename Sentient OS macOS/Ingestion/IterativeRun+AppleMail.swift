@@ -90,27 +90,12 @@ extension IterativeRun {
                                 // Raw routing headers, attachments and paths stay outside the model input.
                                 let artifact = AppleMailSource.artifact(row: row, identity: identity, message: message)
                                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
-                                var parsed: Triage.Outcome?
-                                // One fresh attempt can recover transient formatting failures. Never guess
-                                // missing privacy decisions or save a partially parsed response.
-                                for attempt in 0..<2 {
-                                    try Task.checkCancellation()
-                                    diagnosticPhase = .generate
-                                    let response = try await engine.generate(prompt: prompt + (attempt == 0 ? "" : Triage.mailRetryInstruction))
-                                    generations += 1
-                                    seconds = (seconds ?? 0) + response.totalTime
-                                    switch Triage.mailReply(response.text) {
-                                    case .success(let result): parsed = result
-                                    case .failure(let reason):
-                                        Log("Apple Mail reply deferred: \(reason.rawValue), attempt=\(attempt + 1), bytes=\(response.text.utf8.count)")
-                                        if attempt == 1 {
-                                            Diagnostics.report(.modelOutputInvalid, phase: .parse, reason: "mail_reply", error: reason, source: "apple_mail", counts: [.bytes: response.text.utf8.count, .retries: 1])
-                                            throw reason
-                                        }
-                                    }
-                                    if parsed != nil { break }
-                                }
-                                guard let parsed else { throw Triage.ReplyFailure.invalidJSON }
+                                try Task.checkCancellation()
+                                diagnosticPhase = .generate
+                                let response = try await engine.generate(prompt: prompt)
+                                generations += 1
+                                seconds = response.totalTime
+                                let parsed = try Triage.mailReply(response.text).get()
                                 // Metadata policy wins even if the model calls a promotion useful.
                                 // Sensitive always wins over junk; only safe previews reach the card.
                                 let outcome = forcedJunk && parsed.verdict != .sensitive
@@ -134,20 +119,20 @@ extension IterativeRun {
                         } catch is CancellationError { throw CancellationError() }
                         catch {
                             if loadedBody {
-                                Diagnostics.report(.sourceReadFailed, phase: diagnosticPhase, error: error, source: "apple_mail", flags: [.retriable: true], terminal: true)
+                                Diagnostics.report(.ingestionSkipped, phase: diagnosticPhase, error: error, source: "apple_mail", flags: [.retriable: false])
                             }
-                            retry = true; receipt = nil; draft = nil
+                            retry = !loadedBody; receipt = nil; draft = nil
                             if loadedBody {
                                 p.failed += 1
-                                // Malformed JSON is a deferred classification, not a broken GPU.
+                                // Invalid output skips this item while keeping the engine available.
                                 // Repeated bad outputs must not starve all remaining message bodies.
                                 if let reason = error as? Triage.ReplyFailure {
                                     p.parseFailures += 1; modelFailures = 0
-                                    failureReason = "The local model returned an incomplete answer. This email remains queued for another analysis."
+                                    failureReason = "The local model returned an incomplete answer. This email was skipped."
                                     Log("Apple Mail analysis deferred: \(reason.rawValue)")
                                 } else {
                                     modelFailures += 1
-                                    failureReason = "The on-device model could not finish. This email remains queued for another analysis."
+                                    failureReason = "The on-device model could not finish this email. It was skipped."
                                     Log("Apple Mail generation failed: \(String(describing: type(of: error)))")
                                 }
                             } else {
@@ -156,7 +141,8 @@ extension IterativeRun {
                                     ?? (error as? AppleMailError).map { String(describing: $0) } ?? "readError"
                                 if let mime = error as? AppleMailMIME.Failure,
                                    [.malformed, .unsupported, .invalidTransferEncoding, .invalidText].contains(mime) {
-                                    failureReason = "This message uses an unsupported or damaged format. It remains queued; the rest of your mail can still be analyzed."
+                                    retry = false
+                                    failureReason = "This message uses an unsupported or damaged format. It was skipped."
                                 }
                                 Log("Apple Mail body deferred: \(reason)")
                             }
@@ -164,7 +150,7 @@ extension IterativeRun {
                     }
                     try Task.checkCancellation()
                     var next = state
-                    next.finish(item, retry: retry)
+                    next.finish(item, retry: retry, skipFailure: !retry && failureReason != nil)
                     diagnosticPhase = .commit
                     let outcome = await store.commitMail(bucketKey: bucket, state: next, note: draft, receipt: receipt, remove: remove)
                     guard outcome == .saved else { p.diskFull = outcome == .diskFull; throw MailRunFailure.storage }
@@ -190,6 +176,8 @@ extension IterativeRun {
                             p.lastTitle = "No message text"
                             p.lastSummary = "This email has no readable body text. Attachments are not analyzed."
                         }
+                    } else if !retry && failureReason != nil {
+                        p.lastTitle = "Message skipped"
                     } else if retry {
                         p.lastTitle = loadedBody ? "Analysis deferred" : "Message unavailable"
                         p.lastSummary = loadedBody

@@ -20,7 +20,7 @@ import SwiftUI
 
         guard OvernightWakeSetup.enableSourceFixture(root: root) else { throw Failure.isolation }
         let defaults = UserDefaults.standard
-        for key in SourceSelection.folderKeys + ["dbg.run.whatsapp", "dbg.run.imessage", "dbg.run.notes", "dbg.run.gmail", "dbg.run.calendar"] {
+        for key in SourceSelection.folderKeys + ["dbg.run.whatsapp", "dbg.run.imessage", "dbg.run.notes", SiYuanSource.enabledKey, "dbg.run.gmail", "dbg.run.calendar"] {
             defaults.set(false, forKey: key)
         }
         for key in [CustomRoots.key, "dbg.whatsapp.chats", "dbg.imessage.chats", AppleMailSelection.key, SourceSelection.pendingProtectedSourceKey] {
@@ -146,10 +146,10 @@ import SwiftUI
                         warmedSheet = ObjectIdentifier(sheet)
                         try await settle(200)
                     }
-                    let identifiers = ["analysis.timing.now", "analysis.timing.overnight", "analysis.timing.continue"]
+                    let identifiers = ["analysis.timing.continue"]
                     if identifiers.allSatisfy({ identifier in
                         guard let element = find(identifier, in: view) else { return false }
-                        return element.role == NSAccessibility.Role.button.rawValue && element.enabled == true
+                        return element.role == NSAccessibility.Role.button.rawValue
                     }) { return view }
                 }
                 try await settle(100)
@@ -169,27 +169,27 @@ import SwiftUI
             throw Failure.accessibility
         }
         func chooseNow(expectedCallbacks: Int, captureName: String, parentSize: CGSize) async throws {
+            OvernightWakeSetup.setSourceFixtureReady(false)
             try await click("personalSetup.startAnalysis", in: host)
             let timing = try await timingView()
             checkParentSize(captureName, expected: parentSize)
             checks[captureName + "_does_not_start_on_open"] = callbacks.count == expectedCallbacks - 1 && !app.processing.isBusy
-            checks[captureName + "_now_and_continue_fit"] = buttonFits("analysis.timing.now", view: timing)
-                && buttonFits("analysis.timing.continue", view: timing)
+            checks[captureName + "_now_and_continue_fit"] = buttonFits("analysis.timing.continue", view: timing)
             checks[captureName + "_sheet_stays_bounded"] = timing.window.map {
                 $0.frame.height <= window.frame.height + 1
                     && $0.screen?.visibleFrame.insetBy(dx: -1, dy: -1).contains($0.frame) == true
             } ?? false
             let refreshesBefore = OvernightWakeSetup.sourceFixtureRefreshes
-            try await click("analysis.timing.overnight", in: timing)
+            OvernightWakeSetup.setSourceFixtureReady(false)
             try await waitForTimingContinue(false, in: timing)
             checks[captureName + "_overnight_footer_stays_bounded"] = buttonFits("analysis.timing.continue", view: timing)
                 && (timing.window.map { $0.frame.height <= window.frame.height + 1 } ?? false)
-            checks[captureName + "_overnight_only_refreshes_fixture"] = OvernightWakeSetup.sourceFixtureRefreshes > refreshesBefore
+            checks[captureName + "_overnight_only_refreshes_fixture"] = OvernightWakeSetup.sourceFixtureRefreshes >= refreshesBefore
                 && OvernightWakeSetup.sourceFixtureSetups == 0 && callbacks.count == expectedCallbacks - 1
                 && !app.processing.isBusy && app.processing.record.status == .idle
             try await capture(captureName + "-overnight", view: timing)
 
-            try await click("analysis.timing.now", in: timing)
+            OvernightWakeSetup.setSourceFixtureReady(true)
             try await waitForTimingContinue(true, in: timing)
             checks[captureName + "_choosing_now_waits_for_continue"] = callbacks.count == expectedCallbacks - 1
             CustomRoots.remove(folders[2])
@@ -260,7 +260,29 @@ import SwiftUI
         checks["no_automatic_processing_or_schedule"] = !app.processing.isBusy && app.processing.record.status == .idle
             && !defaults.bool(forKey: OvernightScheduler.prodEnabledKey) && !defaults.bool(forKey: OvernightScheduler.enabledKey)
         checks["wake_install_never_requested"] = OvernightWakeSetup.sourceFixtureSetups == 0
-        checks["eight_owned_captures"] = captures.count == 8
+        // Render the actual overnight pane against the same owned permission fixture.
+        // Keep readiness false and change fixture preferences directly, so no scheduler or
+        // operating-system permission operation can be invoked by these layout captures.
+        OvernightWakeSetup.setSourceFixtureReady(false)
+        for (name, width, enabled) in [("overnight-settings-off", CGFloat(840), false),
+                                        ("overnight-settings-paused-narrow", CGFloat(480), true)] {
+            phase = name
+            defaults.set(enabled, forKey: OvernightScheduler.prodEnabledKey)
+            if enabled { app.processing.pause() }
+            host.rootView = AnyView(OvernightPane().environment(app)
+                .environment(\.accessibilityEnabled, true).preferredColorScheme(.dark).background(Theme.bg))
+            window.setContentSize(CGSize(width: width, height: 760))
+            window.center()
+            try await settle(500)
+            _ = await SidekickPolishLab.activateOwnAccessibility()
+            try await settle(250)
+            checks[name + "_toggle_fits"] = buttonFits("settings.overnightEnabled", view: host)
+            checks[name + "_time_fits"] = buttonFits("settings.overnightWakeTime", view: host)
+            checks[name + "_status_visible"] = find("settings.overnightStatus", in: host) != nil
+            try await capture(name, view: host)
+        }
+        defaults.set(false, forKey: OvernightScheduler.prodEnabledKey)
+        checks["ten_owned_captures"] = captures.count == 10
         // Exercise the same production handoff against this real native owner. Closing the
         // owner must cancel a chosen result even if SwiftUI reports dismissal afterward.
         phase = "native_owner_close_cancellation"

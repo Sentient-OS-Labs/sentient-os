@@ -217,11 +217,12 @@ final class AppState {
     @discardableResult
     func finishPersonalSetup(_ timing: ProcessingCoordinator.Timing) -> Bool {
         guard hasCompletedOnboarding, !isUninstalling, !processing.isBusy, !processing.isSuspended,
-              SourceSelection.selectionCount >= SourceSelection.minimumSelections else { return false }
-        processing.choose(timing)
+              SourceSelection.selectionCount >= SourceSelection.minimumSelections,
+              WakeHelperClient.shared.isReady, LoginItem.isEnabled else { return false }
+        processing.choose(.now)
         PersonalSetupProgress.finish()
         hasCompletedPersonalSetup = true
-        if timing == .overnight { scheduler.enableAfterSetup() }
+        scheduler.enableAfterSetup()
         processing.resumeMonitoring()
         scheduler.reevaluate()
         return true

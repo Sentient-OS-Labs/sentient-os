@@ -25,7 +25,7 @@ UI work; these backend seams already survive provider-process and Home-view life
 |---|---|
 | `CommandCoordinator.swift` | The app-lifetime brain: owns the one shared run, the hotkey, and voice; drives `phase` (`NotchPhase`), the press → voice or type flow, `submit()`, STOP and cancel, adopted card runs, the notch-as-a-button seams, the onboarding notch demo, and the display anchor. |
 | `SidekickDiscovery.swift` | Local ready-hint acknowledgement keys and a bounded count of accepted notch/voice submissions, used to retire Home's learning cue. No task content or telemetry. |
-| `CommandRunModel.swift` | Routes ONE task through the connector leg or `FrontierRun.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
+| `CommandRunModel.swift` | Sends ONE user task directly through `FrontierRun.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
 | `SidekickHotkeyMonitor.swift` | The zero-permission global hotkey: NSEvent `flagsChanged` monitors (global + local) reading the right-key device bit. Press / hold-confirmed / release. |
 | `VoiceCapture.swift` · `QuickTranscriptionEngine.swift` · `SpeechAnalyzerEngine.swift` · `SFSpeechRecognizerEngine.swift` | Voice: permissions, engine selection (SpeechAnalyzer on macOS 26+, SFSpeechRecognizer on 15), start / stop-and-transcribe / cancel. |
 | `ScreenCapture.swift` | A still of EVERY display at fire time (main first), attached to the codex run so "finish this" resolves against real pixels. |
@@ -39,7 +39,7 @@ UI work; these backend seams already survive provider-process and Home-view life
 
 ```
 hotkey hold / tap ─► SidekickHotkeyMonitor ─┐
-notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► router / connector leg / FrontierRun.runAgentCommand
+notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► FrontierRun.runAgentCommand
 home PromptBar ─────────────────────────────┘        │ owns phase (NotchPhase) + VoiceCapture
 card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run and transfers its Task to the app)
                                                      ▼
@@ -121,21 +121,20 @@ Browser-specific problems and routine interrupted actions keep using normal reco
 
 ## The run model (`CommandRunModel`)
 
-`start(text, mode, source)` owns one Task through routing, connector execution, any computer-use
-fallback, cancellation, and completion. Screen stills and knowledge/history context feed that same
-lifecycle. With no detected connectors, routing is skipped. A task entirely covered by one connector
-uses the structured connector leg (Sol/medium on ChatGPT); otherwise it builds the computer-use prompt
-after routing and invokes `FrontierRun.runAgentCommand`. STOP checks remain around routing and fallback,
-and routing outcome telemetry records the executed route.
+`start(text, mode, source)` owns one Task through permission readiness, screen/context capture,
+main-agent execution, cancellation, and completion. Every submission goes directly to
+`FrontierRun.runAgentCommand`, including tasks that fit one connector. The main agent selects
+connected-service, web, and computer tools itself. No preliminary model routing or connector-only
+Sidekick executor runs. Historical router evaluations remain DEBUG-only lab fixtures.
 
-Computer use reads the current speed preference at fire time: Codex Sol/low, Astra/low, or Astra/medium,
-then plan/custom-provider tuning. Claude keeps Sonnet/low, Sonnet/medium, or Opus/medium with its Pro
-downshift. MCP-only tasks and connector cards retain their existing structured model choices. The
-agent-launch log is generic and remains after routing; prompt construction and DEBUG content logs occur
-only once in the computer-use leg.
+The main agent reads the current speed preference at fire time. Paid ChatGPT uses GPT-6.1 Terra/low,
+GPT-6.1 Sol/low, or GPT-6 Astra/low; Free/Go uses GPT-6 Luna at low/medium/high. Claude uses
+Sonnet 5.5/low, Opus 5.5/low, or Opus 5.5/medium on both Pro and Max. Custom providers keep their own
+model/reasoning choice. Proactive card buttons submit a durable card reply through this same main-agent
+path; they have no separate model selection or executor. Screenshots, history, saved instructions, cancellation and the one-task lock remain shared.
 
 Completion parses `AgentStatus`, records the existing scoreboard and analytics outcome, and reaches
-the shared finish epilogue. Card runs continue to use the same adoption and STOP mechanisms.
+the shared finish epilogue. Card runs use ordinary submission and Stop. Explicit external-run adoption remains for diagnostic callers.
 
 The stream cleaner (`push`): strip the `stderr:` channel tag; track codex's bare section headers
 (`user` / `codex` / `exec` / `thinking` / `tokens used`) and never show them; in the `exec` section
@@ -198,6 +197,9 @@ At dispatch, `FrontierRun` appends the selected runtime's manual once. Every act
 `OpenAIComputerUse.promptRules`; custom models also receive `CustomProvider.computerUsePromptRules`.
 Prepared direct connector attachments and their account-specific guidance follow the same dispatch.
 The native computer-use guide describes the shared snapshot → act → verify contract.
+For user-initiated computer tasks, `SidekickInteraction.websiteInstructions` covers CAPTCHAs,
+required site terms, and consent dialogs. Codex receives it as a developer instruction, and
+the Claude bridge appends the same text to its system prompt.
 
 ## The hotkey (`SidekickHotkeyMonitor`)
 

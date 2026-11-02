@@ -18,12 +18,25 @@ enum Diagnostics {
     static func report(_ kind: Kind, phase: Phase, error: Error) {}
 }
 final class AgentRunDiagnostics {
-    static var current: AgentRunDiagnostics?
-    func recordHelper(running: Bool, atStart: Bool) {}
+    static var current: AgentRunDiagnostics? = AgentRunDiagnostics()
+    var samples: [(running: Bool, atStart: Bool)] = []
+    func recordHelper(running: Bool, atStart: Bool) { samples.append((running, atStart)) }
 }
 enum Permissions {
-    enum State { case granted }
-    static func nativeAutomationState() async -> State { .granted }
+    enum State { case granted, notAsked, denied, unavailable }
+    static var state: State = .granted
+    static var reads = 0
+    static func nativeAutomationState() async -> State { reads += 1; return state }
+}
+@MainActor final class ComputerUseGate {
+    static let shared = ComputerUseGate()
+    var observed: [Permissions.State] = []
+    var hold = false
+    func waitForNativeAutomation(observed state: Permissions.State) async throws {
+        observed.append(state)
+        while hold { try await Task.sleep(for: .milliseconds(5)) }
+        try Task.checkCancellation()
+    }
 }
 enum CodexRuntime {
     enum Failure: Error { case busy }
@@ -98,6 +111,10 @@ enum OpenAIComputerUse {
         takeovers += 1
         for app in NSRunningApplication.apps where app.bundleURL != configuration.appURL { app.isTerminated = true }
     }
+    static func stopOwnedHelper(allowForce: Bool) async throws {
+        precondition(!allowForce)
+        for app in NSRunningApplication.apps where app.bundleURL == Configuration().appURL { _ = app.terminate() }
+    }
 }
 enum OpenAIComputerUseProbe { static func check(_ configuration: OpenAIComputerUse.Configuration) async throws {} }
 '''
@@ -162,9 +179,42 @@ extension OpenAIComputerUseRuntime {
         } catch OpenAIComputerUse.RuntimeError.launchFailed {}
         check(NSWorkspace.shared.launches == 3, "startup retry budget is bounded")
 
+        for permission in [Permissions.State.notAsked, .denied, .unavailable] {
+            let unconfigured = fresh()
+            Permissions.state = permission; Permissions.reads = 0
+            let task = try await unconfigured.beginTask(configuration: configuration)
+            check(Permissions.reads == 1 && ComputerUseGate.shared.observed.last == permission,
+                  "runtime passes the real Automation result to host setup after starting the helper")
+            unconfigured.endTask(task)
+        }
+        Permissions.state = .granted
+        let cancelledSetup = fresh()
+        ComputerUseGate.shared.hold = true
+        let waitingForGrant = Task { try await cancelledSetup.beginTask(configuration: configuration) }
+        try await Task.sleep(for: .milliseconds(50))
+        waitingForGrant.cancel()
+        do { _ = try await waitingForGrant.value; fatalError("Cancelled grant wait resumed") } catch is CancellationError {}
+        ComputerUseGate.shared.hold = false
+        let afterCancellation = try await cancelledSetup.beginTask(configuration: configuration)
+        cancelledSetup.endTask(afterCancellation)
+
+        let observed = fresh()
+        let observedTask = try await observed.beginTask(configuration: configuration)
+        NSRunningApplication.apps[0].isTerminated = true
+        let recoveredHelper = NSRunningApplication(configuration.appURL)
+        NSRunningApplication.apps.append(recoveredHelper)
+        observed.recordHelperBeforeCleanup(observedTask)
+        check(AgentRunDiagnostics.current!.samples.last!.running, "End evidence samples the recovered helper, not the dead initial process")
+        let sampled = AgentRunDiagnostics.current!.samples.count
+        recoveredHelper.isTerminated = true // normal last-client cleanup
+        observed.endTask(observedTask)
+        check(AgentRunDiagnostics.current!.samples.count == sampled, "Cleanup cannot overwrite observed liveness as a false crash")
+
         let leased = fresh()
         let lease = try await leased.beginTask(configuration: configuration)
         do { try await leased.restart(configuration: configuration); fatalError("Active task was restarted") }
+        catch OpenAIComputerUse.RuntimeError.helperRunning {}
+        do { try await leased.prepareForPermissionRestart(configuration: configuration); fatalError("Permission restart stopped active work") }
         catch OpenAIComputerUse.RuntimeError.helperRunning {}
         check(!NSRunningApplication.apps[0].isTerminated, "repair preserves active Sentient task")
         check(leased.reserveDiagnostic() == nil, "a separate diagnostic cannot take over an active agent")
@@ -200,6 +250,17 @@ extension OpenAIComputerUseRuntime {
         CodexRuntime.exclusiveBusy = false
         try await repair.prepareForReinstall(configuration: configuration)
         check(repairOwn.isTerminated && !repairForeign.isTerminated, "reinstall teardown stops only the private helper")
+        let permissionRestart = fresh()
+        let permissionOwn = try await permissionRestart.start(configuration: configuration)
+        let permissionForeign = NSRunningApplication(URL(fileURLWithPath: "/permission-foreign.app"))
+        NSRunningApplication.apps.append(permissionForeign)
+        try await permissionRestart.prepareForPermissionRestart(configuration: configuration)
+        check(permissionOwn.isTerminated && !permissionForeign.isTerminated && OpenAIComputerUse.takeovers == 0,
+              "permission relaunch stops only the owned helper without taking over foreign sessions")
+        permissionForeign.isTerminated = true
+        let permissionFresh = try await permissionRestart.start(configuration: configuration)
+        check(permissionFresh.processIdentifier != permissionOwn.processIdentifier && !permissionFresh.isTerminated,
+              "post-restart startup creates a new helper process rather than reusing stale cached state")
         print("PASS: \(checks) native startup race, retry and ownership checks")
     }
 }

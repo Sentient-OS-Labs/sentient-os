@@ -1,3 +1,5 @@
+#if DEBUG
+// Historical classification fixtures only. Not invoked by connector setup or Sidekick.
 //
 //  ConnectorClassifier.swift
 //  Sentient OS macOS
@@ -490,3 +492,5 @@ nonisolated enum ConnectorClassifier {
         Log("classifier: \(ConnectorRegistry.telemetrySlug(slug)) ok tools=\(tools.count) reads=\(reads) writes=\(writes) destructive=\(destructive)")
     }
 }
+
+#endif

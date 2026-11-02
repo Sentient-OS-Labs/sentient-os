@@ -1,73 +1,92 @@
-//
-//  FrontierModelPane.swift
-//  Sentient OS macOS
-//
-//  Settings → Frontier Model Choice: which frontier engine powers the cloud ~10% of Sentient
-//  (the on-device model does the rest). A thin wrapper over the SHARED FrontierEnginePicker
-//  (the pills + per-engine panels onboarding's choose-your-frontier-model step renders too);
-//  what's Settings' own here is the pane chrome and the ChatGPT panel — activate directly with
-//  Use ChatGPT, and point at Permissions & Health for login/plan (onboarding embeds the live
-//  login instead). Writes ModelBackend/CustomProvider (the one source of truth); everything
-//  applies to the very next run, no restart.
-//
-
+// AI model choices and provider accounts. Reuses the same setup and credential stores
+// as onboarding; merely browsing a provider never selects or signs in to it.
 import SwiftUI
+import AppKit
 
 struct FrontierModelPane: View {
+    typealias Section = MainNavigation.ModelSettingsSection
 
+    @Bindable private var navigation = MainNavigation.shared
     @State private var tab: FrontierEngineTab = .chatgpt
-
-    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
-
-    private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
+    @State private var codex = CodexSetup.shared
 
     var body: some View {
-        SettingsPane(title: "Frontier Model Choice",
-                     whisper: "Choose the AI behind your knowledge, suggestions, and Sidekick.") {
-            VStack(alignment: .leading, spacing: 26) {
-                FrontierEnginePicker(tab: $tab) {
-                    chatgptPanel
+        ScrollView {
+            VStack(spacing: 30) {
+                onDeviceModelCard
+                ModelSelectionHeading(title: "Choose your frontier model",
+                                      subtitle: "Your most intelligent AI clicks around for Sidekick and other frontier work.")
+                ModelChoiceBar(items: [
+                    ModelChoiceItem(id: Section.main.rawValue, title: "Main AI", symbol: "sparkles"),
+                    ModelChoiceItem(id: Section.doubleTap.rawValue, title: "Double Tap", symbol: "hand.tap")
+                ], selection: navigation.modelSettingsSection.rawValue) { raw in
+                    if let section = Section(rawValue: raw) { navigation.modelSettingsSection = section }
                 }
-                SettingsDetails(title: "How your models work together") {
-                    SettingsProse(PrivacyCopy.frontierDetail)
-                    SettingsProse(PrivacyCopy.customProvider)
+                if navigation.modelSettingsSection == .main {
+                    FrontierEnginePicker(tab: $tab, chatgptHealthy: codex.loggedIn) {
+                        OnboardingCodexLoginPanel(settingsStyle: true)
+                    }
+                    SettingsDetails(title: "How your models work together") {
+                        SettingsProse(PrivacyCopy.frontierDetail)
+                        SettingsProse(PrivacyCopy.customProvider)
+                    }
+                } else {
+                    SettingsProse("This model drafts your Double Tap replies. Changing it does not change the main AI.")
+                    DoubleTapModelSettings()
                 }
             }
+            .frame(maxWidth: 680)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 40)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Theme.bg)
+        .environment(\.settingsFormStyle, true)
+        .task(id: tab == .chatgpt && navigation.modelSettingsSection == .main) { await refreshChatGPT() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refreshChatGPT() }
         }
     }
 
-    // MARK: - ChatGPT (Settings' own panel — login honesty lives in Permissions & Health)
-
-    private var chatgptPanel: some View {
-        SettingsGroup(label: "ChatGPT") {
-            VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Use your ChatGPT subscription for knowledge, morning suggestions, and Sidekick.")
-                if backend == .chatgpt {
-                    HStack {
-                        FrontierActiveLine("Using ChatGPT")
-                        Spacer()
-                        SettingsPillButton(title: "Manage account") {
-                            MainNavigation.shared.show(.settings, settingsPane: .health)
-                        }
-                    }
-                } else {
-                    SettingsPillButton(title: "Use ChatGPT") {
-                        backendRaw = ModelBackend.chatgpt.rawValue
-                        // The commitment moment — the lazy codex install fires here (a
-                        // detection-first no-op when the CLI already exists).
-                        Task {
-                            await CodexSetup.shared.ensureInstalled()
-                            guard backendRaw == ModelBackend.chatgpt.rawValue else { return }
-                            await ComputerUseSetup.instance(for: .openAI).install()
-                        }
-                    }
+    private var onDeviceModelCard: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "cpu")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(Theme.Ink.bright)
+                .frame(width: 48, height: 48)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    Text("Gemma 4 E4B")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Theme.Ink.statusInk)
+                    Spacer(minLength: 0)
+                    Label("On this Mac", systemImage: "lock.shield")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.Ink.body)
                 }
+                Text("Your on-device model understands your life locally.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Ink.body)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+    }
+
+    private func refreshChatGPT() async {
+        guard tab == .chatgpt, navigation.modelSettingsSection == .main else { return }
+        await codex.refreshInstalled()
+        await codex.refreshLoginStatus()
     }
 }
 
-#Preview("Frontier Model Choice") {
+#Preview("AI Models & Accounts") {
     FrontierModelPane()
         .background(Theme.bg)
         .frame(width: 720, height: 820)

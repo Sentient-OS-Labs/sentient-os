@@ -24,6 +24,33 @@ enum FrontierRun {
     /// The structured spine — vault, judge, research, connectors, gift letter.
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            if backend == .sentient {
+                let targets = invocation.mcpReadConnectors + [invocation.mcpActionServer, invocation.mcpAttachServer].compactMap { $0 }
+                guard targets.allSatisfy({ $0.hasPrefix("direct-") || $0.hasPrefix("hosted-") }), invocation.mcpAttachServer == nil,
+                      invocation.configOverrides != CodexCLI.Invocation.approveConnectorWrites else {
+                    throw CodexCLI.CLIError.notAvailable(.notWorking("This connected account is unavailable with Sentient hosted inference."))
+                }
+                return try await HostedInference.withRun(purpose: .background) {
+                    try await HostedConnectorToolServer.withConnection(targets: targets,
+                        mode: invocation.mcpActionServer == nil ? "read" : invocation.hostedConnectorMode,
+                        requireCall: invocation.mcpActionServer?.hasPrefix("hosted-") == true) {
+                        var prepared = invocation
+                        if HostedConnectorToolServer.connection != nil { prepared.prompt += "\n\n" + HostedConnectorToolServer.instructions + "\n" + HostedConnectorToolServer.clockContext }
+                        return try await runPrepared(prepared, onLine: onLine)
+                    }
+                }
+            }
+            return try await ConnectorReadDiscovery.withTools(slugs: invocation.mcpReadConnectors) {
+                try Task.checkCancellation()
+                return try await runPrepared(invocation, onLine: onLine)
+            }
+        }
+    }
+
+    private static func runPrepared(_ invocation: CodexCLI.Invocation,
+                                    onLine: (@Sendable (String) -> Void)?) async throws -> CodexCLI.Envelope {
         return try await Diagnostics.withOperation("frontier_run") {
           try await AgentRunDiagnostics.withRun(action: invocation.mcpActionServer != nil, feature: invocation.feature, result: { $0.result }) {
             return try await Diagnostics.boundary(.connectorFailed, phase: .identity, reason: "frontier_setup") {
@@ -90,7 +117,6 @@ enum FrontierRun {
                 let expectedOutlookIdentity = outlookIdentity
                 let expectedCalendarIdentity = calendarIdentity
                 return try await ModelBackend.$runOverride.withValue(backend) {
-                    if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
                     let slugs = prepared.mcpActionServer.map { [$0] } ?? prepared.mcpReadConnectors
                     Diagnostics.step(.setup)
                     let direct = try await DirectMCPRuntime.prepare(slugs: slugs,
@@ -99,16 +125,27 @@ enum FrontierRun {
                     return try await DirectMCPRuntime.execute(direct) {
                         Diagnostics.step(.request)
                         let result: CodexCLI.Envelope
-                        result = try await ResearchToolServer.withConnection(mail: prepared.appleMailResearch, vault: prepared.cwd) {
-                            try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
-                                var interactive = prepared
-                                if let connection = SidekickToolServer.connection {
-                                    interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
-                                    interactive.configOverrides += connection.codexOverrides
-                                }
-                                switch backend {
-                                case .claude: return try await ClaudeCLI.shared.run(interactive, onLine: onLine)
-                                case .chatgpt, .custom: return try await CodexCLI.shared.run(interactive, onLine: onLine)
+                        result = try await HostedVaultToolServer.withConnection(root: prepared.hostedVaultRoot ?? prepared.hostedVaultReadRoot,
+                            readOnly: prepared.hostedVaultReadRoot != nil) {
+                            try await ResearchToolServer.withConnection(mail: prepared.appleMailResearch, vault: prepared.cwd) {
+                                try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
+                                    var interactive = prepared
+                                    if HostedVaultToolServer.connection != nil {
+                                        interactive.prompt += "\n\n" + (prepared.hostedVaultReadRoot == nil ? HostedVaultToolServer.instructions
+                                            : "Use sentient_vault.vault_list and vault_read to inspect this task's knowledge folder. This is a read-only capability; no file writes or shell are available.")
+                                    }
+                                    if backend == .sentient, interactive.webSearch {
+                                        interactive.webSearch = false
+                                        interactive.prompt += "\n\nThis hosted background run has no web search or page-fetch tools. Use only the supplied evidence and explicitly connected local tools. Do not claim current external facts were verified; omit recommendations that require unavailable external verification."
+                                    }
+                                    if let connection = SidekickToolServer.connection {
+                                        interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
+                                        interactive.configOverrides += connection.codexOverrides
+                                    }
+                                    switch backend {
+                                    case .claude, .sentient: return try await ClaudeCLI.shared.run(interactive, onLine: onLine)
+                                    case .chatgpt, .custom: return try await CodexCLI.shared.run(interactive, onLine: onLine)
+                                    }
                                 }
                             }
                         }
@@ -167,6 +204,23 @@ enum FrontierRun {
     static func runAgentCommand(_ prompt: String, imagePaths: [String] = [],
                                 timeout: TimeInterval = 0,
                                 onLine: @escaping @Sendable (String) -> Void) async throws -> String {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            if backend == .sentient {
+                return try await HostedInference.withRun(purpose: .sidekick) {
+                    try await HostedConnectorToolServer.withConnection(
+                        targets: HostedConnectorStore.accounts().filter(\.connected).map(\.taskTarget), mode: "task", optional: true) {
+                        try await runAgentPrepared(prompt + "\n\n" + HostedConnectorToolServer.instructions + "\n" + HostedConnectorToolServer.clockContext,
+                            imagePaths: imagePaths, timeout: timeout, onLine: onLine)
+                    }
+                }
+            }
+            return try await runAgentPrepared(prompt, imagePaths: imagePaths, timeout: timeout, onLine: onLine)
+        }
+    }
+
+    private static func runAgentPrepared(_ prompt: String, imagePaths: [String], timeout: TimeInterval,
+                                         onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         return try await Diagnostics.withOperation("computer_run") {
           try await AgentRunDiagnostics.withRun(action: true, computer: true, result: { $0 }) {
             let backend = ModelBackend.current
@@ -191,7 +245,7 @@ enum FrontierRun {
                     let guidance = Set(attachments.map { ConnectorRegistry.actionInstructions(slug: $0.connection.slug) }.filter { !$0.isEmpty }).sorted().joined(separator: "\n\n")
                     // The selected runtime's manual belongs at the dispatch seam. Every caller,
                     // including cards and Sidekick, gets exactly one matching tool contract.
-                    let researchTools = backend == .custom
+                    let researchTools = backend == .custom || backend == .sentient
                         ? "Use the browser through your computer-use tools to search the web and read sources."
                         : "Web search is available throughout this task. Use your web search and page-reading tools whenever external information would help; you do not need the user to explicitly ask you to search."
                     let researchInstructions = """
@@ -221,7 +275,7 @@ enum FrontierRun {
     /// Is the ACTIVE engine usable right now? (The availability probe behind health surfaces.)
     static func validate(force: Bool = false) async -> CodexCLI.Availability {
         switch ModelBackend.current {
-        case .claude:           return await ClaudeCLI.shared.validate(force: force)
+        case .claude, .sentient: return await ClaudeCLI.shared.validate(force: force)
         case .chatgpt, .custom: return await CodexCLI.shared.validate(force: force)
         }
     }

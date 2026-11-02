@@ -40,7 +40,7 @@ import Foundation
 /// For You UI + PART 3 (the executor) consume.
 struct PreparedAction: Sendable, Identifiable, Codable {
     let title: String
-    let method: Method             // the ONE channel PART 3 fires this through (model-picked)
+    let method: Method             // suggested channel from research; the main Sidekick agent chooses execution tools
     let target: String             // the app/site this acts in, for the card kicker ("LinkedIn",
                                    // "Notion"); "" for gmail/calendar/research (the method names itself)
     var methodTarget: String? = nil // .mcp ONLY: the canonical slug of the connected service the
@@ -169,7 +169,7 @@ actor ProactiveResearch {
         // The card channels this run may teach (the .mcp method): the live detected connectors.
         // Zero detected = the shipped four methods and the shipped schema, byte-identical.
         let channels = ConnectorRegistry.cardChannels().filter {
-            !unavailableConnectors.contains(DirectMCPStore.connection($0.slug)?.slug ?? $0.slug)
+            !unavailableConnectors.contains(HostedConnectorStore.account($0.slug)?.slug ?? DirectMCPStore.connection($0.slug)?.slug ?? $0.slug)
         }
         let slackIdentity = SlackConnector.cachedIdentity()?.fingerprint
         let outlookIdentity = OutlookMailConnector.cachedFingerprint()
@@ -245,11 +245,13 @@ actor ProactiveResearch {
         inv.includeUserConfig = true        // the recipes need the connector fetch (walled to the listed servers on Claude)
         inv.bypassApprovals = false         // unattended: only curated connector reads may execute
         let scopedReads = calendarContextScoped || mailReader != nil
-        let chipReads: [String] = ModelBackend.current == .custom ? [] : scopedReads
+        let chipReads: [String] = !ModelBackend.current.hasSubscriptionConnectors ? [] : scopedReads
             ? [UserDefaults.standard.bool(forKey: "dbg.gmail.connected") ? "gmail" : nil,
                UserDefaults.standard.bool(forKey: "dbg.calendar.connected") ? "google-calendar" : nil].compactMap { $0 }
             : ["gmail", "google-calendar"]
         inv.mcpReadConnectors = (chipReads + kbReads).filter { !unavailableConnectors.contains($0) }
+            .map { HostedConnectorStore.account($0)?.taskTarget ?? $0 }
+        if ModelBackend.current == .sentient { inv.hostedVaultReadRoot = vault.path; inv.webSearch = false }
         // With every connector skipped, keep this run hermetic instead of loading user servers.
         if inv.mcpReadConnectors.isEmpty { inv.includeUserConfig = false }
         inv.outputSchema = Self.schema(channels: channels, mailResearch: mailReader != nil)

@@ -27,10 +27,12 @@ nonisolated struct SidekickQuestion: Sendable, Equatable {
 /// A plan offer is derived only from a failed ChatGPT provider operation. Model-written
 /// explanations, unrelated connector quotas, and unknown account tiers cannot create it.
 nonisolated enum SidekickUpgradeOffer: String, Sendable, Equatable {
-    case usageLimit, planDenied
+    case usageLimit, planDenied, modelUnavailable, loginRequired
 
     var explanation: String {
         switch self {
+        case .modelUnavailable: "ChatGPT couldn't use this model. Check for a Sentient update, or contact us and tell us which ChatGPT plan you use."
+        case .loginRequired: "Your ChatGPT connection needs refreshing. Sign in again, then try your task again."
         case .usageLimit: "Your ChatGPT plan reached a usage limit. You can upgrade to Plus, try again later, or choose another AI."
         case .planDenied: "ChatGPT declined this request because of your plan. You can upgrade to Plus or choose another AI."
         }

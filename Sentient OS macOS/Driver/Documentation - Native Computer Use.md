@@ -110,14 +110,28 @@ The native path needs Sentient's Apple Events entitlement plus user-granted Auto
 OpenAI's helper. The helper has its own Accessibility and Screen Recording grants; Sentient retains
 Screen Recording for Sidekick's screen context. This applies to Claude, ChatGPT and custom models.
 Sentient's old CUA Accessibility grant is not needed for native actions. Microphone and Speech remain optional.
-Full Disk Access is not needed for native setup or Sidekick. Effective helper readiness uses
-`NativePermissionCheck` and `NativePermissionReadiness`: an explicit, model-free `get_app_state`
-against a temporary Sentient-owned window must return its unique AX marker and a valid screenshot.
-A `list_apps` service check alone never grants admission. No probe response is stored or sent to a
-model; the read performs no actions. The tested helper's PID/configuration and a live model-free
-connection scope the in-memory proof. Helper exit/change, dead connection and native permission
-errors invalidate it. Background Health checks observe the proof without opening the window.
-Unknown readiness offers Check computer use, not a claim that permission was denied.
+Full Disk Access is not needed for native setup or Sidekick. First use keeps Sentient's own permission
+screen and drag guides; accepted drops show Restart to finish without fabricating grant evidence.
+A confirmed relaunch admits real tasks through `isReadyForTask`, while `allRequiredGranted` remains
+reserved for actual proof. No synthetic permission test runs before normal work. The real helper
+enforces its own grants.
+
+Confirmed native permission failures can open the official helper setup once per task via the
+existing authenticated MCP connection. This starts a fresh five-minute setup budget even if the
+failed action used nearly all its time. The inner native MCP ceiling is 310 seconds; the outer
+Sentient tool ceiling covers the 120-second request plus 300-second setup and 10 seconds of grace.
+Ordinary actions and queued calls retain their original shorter deadlines. Setup stays owned by
+the pending call: Stop cancels it, closes its session, and cannot mark recovery complete. A dismissed
+or timed-out setup leaves recovery required. The browser extension is not used by Sentient. Ordinary window, capture, policy,
+authentication and timeout errors do not open setup. Recovery never replays an action; the failed
+tool remains an error and the agent must read current state before continuing. Dismissal, cancellation
+and timeout keep recovery available in Permissions & Health. The custom marker/screenshot test is
+retained for explicit diagnostics, with its existing lifetime and cancellation guards.
+
+Settings uses the same five-minute permission budget. After a confirmed native denial, a new
+user task opens native setup again. A failed or dismissed attempt leaves an enabled repair action.
+Successful setup resumes only the currently waiting task; closing setup or pressing Stop discards
+that waiter. Ordinary capability-check failures do not reset the recorded setup workflow.
 
 
 Automation checks use Apple's asynchronous permission API after starting the helper through
@@ -134,6 +148,11 @@ window closure and relaunch until installation and required grants are ready. Na
 its own persistent latch, separate from old CUA history, and Factory Reset clears both readiness and
 migration state. Fresh onboarding and later repairs of an already-migrated installation retain their
 existing flows.
+
+
+The companion permission note follows only the native helper's floating setup window while that
+helper is active. It hides when System Settings becomes active and ignores the helper's layer-zero
+drag overlay; the separate System Settings permission drag guide retains its original tracking.
 
 ## Validation boundary
 
@@ -154,31 +173,36 @@ additional displays and Safari need their own coverage. Treat the extracted bund
 native MCP interface as compatibility boundaries, not as a promise that every future OpenAI build
 will have the same shape.
 
-## App-window startup grace
+## Native request transport
 
-`NativeComputerUseServer` quietly retries only `get_app_state` for recognized transient window,
-read-timeout and capture failures. It makes the initial read plus at most three re-reads, waiting
-2, 3 and 5 seconds. All attempts share a 90-second monotonic deadline inside the 130-second MCP
-call timeout; each native session request receives the remaining budget. A client request timeout
-closes the broken session, but its tool error still reaches the agent so it can explain or choose
-another available route. It does not terminate the model process.
+`NativeComputerUseServer` forwards each model-requested native call once. It does not retry app
+reads or maintain a second app-state permission gate. The helper owns app selection, element
+validity and native interaction state. Local NSWorkspace lookup is best-effort diagnostic attribution
+only; failure to resolve an app name never prevents a request reaching the helper.
 
-If the agent next requests `get_app_state` or `list_apps`, the broker replaces a dead model-free
-session before that read. It clears verified app state and never replays the failed call. A new
-mutation still requires a successful fresh state read. Ordinary tool errors do not restart healthy
-sessions. STOP cancels and drains a connection being opened. Reconnection is recorded as
-`recovery_decision=reopen_on_read`, independently of the task's outcome.
+The live helper catalog supplies the exposed native tools; a changed or additional tool name does
+not fail startup. The local diagnostic tool is added separately. Tool arguments and native failure
+results, including structured details and metadata, pass through without rewriting.
 
-The same pending model tool call spans these attempts, so recoverable startup failures do not
-become failed chat steps, final responses or recovery prompts. Success after a retry records
-`recovered`; intermediate attempts record content-free `skipped` capture evidence with
-`recovery_decision=wait_and_reread`. Only the final failure emits the warning event. STOP cancels
-backoff immediately, and the actor’s closed guard prevents another read after shutdown.
+Overlapping calls wait in FIFO order. Each ordinary request has a 120-second budget including queue time;
+queued cancellation or expiry removes the request without dispatching it. Native reads retain a
+90-second maximum and actions receive the remaining budget. STOP drains waiters and closes the
+active connection. Identical request IDs share cached results, while reused IDs with changed payloads
+or evicted results are rejected as duplicate requests rather than misreported as stale app state.
 
-Click/send/type/like and other actions are never automatically replayed. Permission/auth denials,
-malformed replies and transport failures remain honest failed tool results. No helper restart,
-window activation/restoration or permission change is added. Shared model guidance separately
-asks the agent to wait and re-read visible splash/loading screens before escalating to the user.
+After a dead transport, a new model-requested read (`get_app_state` or `list_apps`) opens a replacement
+session. An action against that dead transport returns a connection error without replay. Ordinary
+native app/element errors do not restart healthy sessions. A native connection, timeout or capture
+failure can leave the RPC process alive but its session broken. In that case the next explicit read
+reopens the session once, with no replay of the failed operation. A successful state read resets
+that recovery allowance. ScreenCaptureKit -3811 is a capture failure; -3801 remains a permission
+denial. Both retain the original native error for the model and local log.
+
+Helper liveness is sampled before task cleanup, against the current helper process. Closing the
+last client can normally terminate the helper, so that later state must not be recorded as the
+cause of a failed task. A failed self-check with multiple copies of the same Sentient app running
+explains the potential wrong-window target. The live diagnostic test runner uses a distinct,
+unchanged signed app copy so its own fixture cannot create that ambiguity.
 
 ## Agent-owned recovery
 
@@ -188,17 +212,14 @@ that blocks all subsequent calls. After a failed read, permission denial or stal
 the next explicit model request can inspect state again. A dead transport is replaced on a new
 read; a failed replacement remains a tool error for the agent to assess.
 
-The `structuredContent.sentient_native_failure` contract carries diagnostic evidence, not a
-termination decision. Failed operations invalidate verified app state, and another mutation needs
-a successful `get_app_state` first. The model receives useful bounded error detail, fresh-read
-guidance and an explicit warning when an action's effects may be unknown. No mutation is replayed.
+Native failed results reach the agent unchanged. Locally generated transport errors include
+`structuredContent.sentient_native_failure` metadata and the original RPC error when available.
+Classification supports diagnostics and explicit permission recovery; it does not rewrite native
+results or create another app-state action veto. No mutation is automatically replayed.
 
 Codex's CLI error events can contain `status: failed`, `error: null`, and a `result` with
 `structured_content` but no `isError` flag. The failed event itself supplies the classification
-context; a null error field must not erase it. Recovery text is a single MCP text block containing
-the error, original bounded detail and next-step guidance, because Codex's model-facing executor
-can retain only the first text block from an error. An unsupported `set_value` on a text input
-requires fresh state and a suitable typing/focus method, not a permissions repair.
+context; a null error field must not erase it.
 
 Chromium guidance recommends one focused re-read/retry, then reassessing the method or asking
 the user when needed. There is no browser-specific counter or automatic task termination in code.
@@ -223,13 +244,12 @@ notch and Home show "You might be offline. Retrying..." without cancelling or re
 Reconnection reveals the latest retained progress. A real final provider failure still ends the
 attempt with its actual error; an offline hint never overwrites a successful result.
 
-`Scripts/test_native_read_retry.py` compiles the actual server/policy/classifier/validator with
-inert peers, checking recovery and exhaustion, real delays, deadline accounting, cached request
-IDs, action exclusions and cancellation. `test_native_capture.py` also checks the real session’s
-per-request timeout/cleanup contract. These fixtures never operate real apps or call a model.
-`test_native_session_recovery.py` exercises real local RPC subprocess exits, fresh-read recovery,
-uncertain actions, long tasks, nullable errors and Stop during reconnection. Capture diagnostics
-also record a best-effort cached Stage Manager flag; that flag never gates or terminates a task.
+`Scripts/test_native_read_retry.py` compiles the actual boundary with inert peers and verifies
+single-attempt reads, exact error passthrough, FIFO ordering, queued cancellation/expiry, deduplication,
+dynamic catalogs and text-only state. `test_native_session_recovery.py` exercises real local RPC
+subprocess exits, fresh-read recovery, uncertain actions, long tasks and Stop during reconnection.
+`test_native_error_log.py` verifies complete local error records, rotation and filesystem permissions.
+These fixtures never operate real apps or call a model.
 
 ## Explicit check and repair
 

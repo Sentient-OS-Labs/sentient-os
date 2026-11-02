@@ -36,6 +36,8 @@ production += "\n".join(declaration(cli, name) for name in [
     "private final class ProcHolder:", "private final class LineSink:",
     "static func executeAsync(", "private static func execute(", "static func executeStreaming(",
 ]) + "\n}\n"
+hosted = (APP / "Cloud/HostedClaudeRuntime.swift").read_text()
+production += "nonisolated enum HostedClaudeRuntime {\n" + declaration(hosted, "static func executorEnvironment(") + "\n}\n"
 direct = (APP / "Connectors/DirectMCPRuntime.swift").read_text()
 production += "nonisolated enum DirectMCPRuntime {\n" + declaration(direct, "static func authorizationLeaseDuration(") + "\n}\n"
 
@@ -43,13 +45,19 @@ SUPPORT = r'''
 import Foundation
 import os
 
+nonisolated enum ModelBackend {
+    case chatgpt, sentient
+    @TaskLocal static var override: ModelBackend = .chatgpt
+    static var current: Self { override }
+}
 nonisolated enum CustomProvider {
     static let apiKeyEnvName = "FIXTURE_KEY", apiKeyEnvValue = "unused"
 }
 nonisolated enum CodexRuntime {
     final class FileLock: Sendable { func unlock() { } }
     static let executable = URL(fileURLWithPath: "/fixture-no-real-codex")
-    static func executionLease(for binary: String, cancelled: @Sendable () -> Bool) throws -> FileLock? {
+    static func executionLease(for binary: String, exclusive: Bool = false,
+                               cancelled: @Sendable () -> Bool) throws -> FileLock? {
         if cancelled() { throw CancellationError() }; return nil
     }
     static func verifyCLIForLaunch() throws { fatalError("No real CLI should launch") }
@@ -171,6 +179,12 @@ import os
         paused.cancel()
 
         let python = ProcessInfo.processInfo.environment["FIXTURE_PYTHON"]!
+        let isolated = try await ModelBackend.$override.withValue(.sentient) {
+            try await CodexCLI.executeStreaming(binary: python,
+                args: ["-c", "import os; assert not any(k in os.environ for k in ['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','SENTIENT_HOSTED_API_TOKEN','FIXTURE_KEY']); assert os.environ.get('SENTIENT_CLAUDE_BRIDGE_TOKEN') == 'explicit-local'; assert os.environ.get('HOME'); print('isolated')"],
+                timeout: 5, extraEnv: ["SENTIENT_CLAUDE_BRIDGE_TOKEN":"explicit-local"]) { _ in }
+        }
+        check(isolated.status == 0 && isolated.stdout.contains("isolated"), "actual hosted native child receives only explicit local relay capability, no provider/custom/identity tokens")
         let finite = ["-c", "import time; print('ready', flush=True); time.sleep(0.3); print('completed café', flush=True)"]
         let slow = ["-c", "import time; print('ready', flush=True); time.sleep(60)"]
         for streaming in [false, true] {
@@ -203,9 +217,14 @@ import os
             await started.wait()
             let began = ContinuousClock.now
             run.cancel()
-            let stopped = try await run.value
-            check(stopped.status != 0, "\(label) still terminates the actual child on explicit cancellation")
+            do { _ = try await run.value; preconditionFailure("\(label) returned a process exit for cancellation") }
+            catch is CancellationError { checks += 1 }
             check(began.duration(to: .now) < .seconds(4), "\(label) cancellation drains without awaiting the fixture's 60 seconds")
+            let failed: CodexCLI.ExecResult
+            let exit = ["-c", "import sys; sys.exit(15)"]
+            if streaming { failed = try await CodexCLI.executeStreaming(binary: python, args: exit, timeout: 0) { _ in } }
+            else { failed = try await CodexCLI.executeAsync(binary: python, args: exit, stdinText: nil, cwd: nil, timeout: 0) }
+            check(failed.status == 15, "\(label) does not mistake an uncancelled exit 15 for task cancellation")
         }
         print("Run watchdog and shared process execution: \(checks) assertions passed")
     }
@@ -226,4 +245,6 @@ with tempfile.TemporaryDirectory(prefix="sentient-watchdog-tests-") as directory
         "-o", str(binary),
     ], check=True, timeout=60)
     subprocess.run([str(binary)], check=True, timeout=30,
-                   env={**os.environ, "FIXTURE_PYTHON": sys.executable})
+                   env={**os.environ, "FIXTURE_PYTHON": sys.executable, "ANTHROPIC_API_KEY":"synthetic-provider",
+                        "ANTHROPIC_AUTH_TOKEN":"synthetic-run", "CLAUDE_CODE_OAUTH_TOKEN":"synthetic-consumer",
+                        "SENTIENT_HOSTED_API_TOKEN":"synthetic-identity"})

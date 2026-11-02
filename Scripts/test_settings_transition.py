@@ -11,17 +11,29 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "Sentient OS macOS"
+app_source = (APP / "App/Sentient_OS_macOSApp.swift").read_text()
+reopen_start = app_source.index("    func applicationShouldHandleReopen(")
+reopen_end = app_source.index("\n    }", reopen_start) + len("\n    }")
+reopen_handler = app_source[reopen_start:reopen_end]
 FIXTURE = r'''
 import Foundation
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
-    enum Pane: Equatable { case sources, frontierModel, doubleTap, proactive, shareKnowledge, system, health }
+    enum Pane: Equatable { case sources, frontierModel, doubleTap, proactive, overnight, shareKnowledge, system, health }
     var body: some View { Color.clear }
 }
 enum Theme { enum Ink { static let bright = Color.white } }
 extension EnvironmentValues { @Entry var sidekickReduceMotionOverride: Bool? = nil }
-enum HomeWindowOpening { static func open() {} }
+enum HomeWindowOpening {
+    static var presentations = 0
+    static func open() { MainNavigation.shared.show(.home) }
+    static func presentCurrentPage() { presentations += 1 }
+}
+final class ReopenDelegate: NSObject, NSApplicationDelegate {
+__REOPEN_HANDLER__
+}
 struct BackButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
@@ -223,6 +235,15 @@ struct BackButtonStyle: ButtonStyle {
         check(nav.page == .knowledge && nav.previousPage == .home && !nav.animatesSettingsTransition,
               "explicit Knowledge entrance acquired Settings animation")
         nav.reset()
+        nav.show(.settings, settingsPane: .frontierModel)
+        nav.modelSettingsSection = .doubleTap
+        nav.show(.settings, settingsPane: .overnight)
+        check(nav.settingsPane == .overnight, "overnight deep link lost its dedicated page")
+        nav.show(.settings, settingsPane: .frontierModel)
+        check(nav.modelSettingsSection == .main, "Main AI repair link retained the Double Tap editor")
+        nav.modelSettingsSection = .doubleTap
+        nav.reset()
+        check(nav.modelSettingsSection == .main, "reset retained the old model-settings section")
         nav.show(.settings, settingsPane: .health)
         nav.show(.settings)
         check(nav.page == .settings && nav.settingsPane == .health && nav.previousPage == .home,
@@ -255,6 +276,15 @@ struct BackButtonStyle: ButtonStyle {
     }
 
     static func entranceChecks() async {
+        let shared = MainNavigation.shared
+        for page in [MainNavigation.Page.home, .settings, .knowledge] {
+            shared.reset(); shared.show(page)
+            let before = HomeWindowOpening.presentations
+            let handled = ReopenDelegate().applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true)
+            check(!handled && shared.page == page && HomeWindowOpening.presentations == before + 1,
+                  "Dock reopen must restore the existing page without navigating")
+        }
+        shared.reset()
         let direct = await HomePageEntrance.wait(animate: false, reducedMotion: false)
         check(direct, "direct route incorrectly delayed/cancelled constellation")
         let reduced = await HomePageEntrance.wait(animate: true, reducedMotion: true)
@@ -287,7 +317,7 @@ struct BackButtonStyle: ButtonStyle {
 with tempfile.TemporaryDirectory(prefix="sentient-settings-transition-") as temporary:
     root = Path(temporary)
     source = root / "SettingsTransitionChecks.swift"
-    source.write_text(FIXTURE)
+    source.write_text(FIXTURE.replace("__REOPEN_HANDLER__", reopen_handler))
     binary = root / "checks"
     subprocess.run([
         "xcrun", "swiftc", *platform_plugin_flags(), "-swift-version", "5", "-default-isolation", "MainActor",

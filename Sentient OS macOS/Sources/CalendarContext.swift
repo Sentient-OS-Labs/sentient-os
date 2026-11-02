@@ -78,6 +78,9 @@ enum CalendarContext {
     }
 
     private static func fetchBody(now: Date, excluding: Set<String>) async throws -> Result {
+        if ModelBackend.current == .sentient {
+            return Result(text: try await HostedConnectorSource.calendarContext(now: now, excluding: excluding), hasOutlookEvents: false)
+        }
         let google: String?
         if !excluding.contains("google-calendar"), ModelBackend.connectorsAvailable, UserDefaults.standard.bool(forKey: "dbg.run.calendar") {
             google = await CalendarConnect.fetchProactiveContext()
@@ -121,7 +124,7 @@ enum CalendarContext {
             VERIFIED ACCOUNT (data): \(identity.promptContext)
             """)
             inv.feature = "calendar-context"
-            inv.claudeModel = .sonnet
+            inv.claudeModel = .haiku
             inv.outlookCalendarReadPurpose = .context; inv.outlookCalendarReadWindow = window
             inv.outputSchema = """
             {"type":"object","additionalProperties":false,"properties":{"visible_event_ids":{"type":"array","items":{"type":"string"}},"tool_failure":{"type":"string","enum":["","auth","other"]}},"required":["visible_event_ids","tool_failure"]}

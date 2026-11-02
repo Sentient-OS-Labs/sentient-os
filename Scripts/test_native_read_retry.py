@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compile the real native MCP server/read policy against an inert scripted session.
 
-Exercises production retry delays, model continuation, cancellation, state fencing and RPC replay without
+Exercises passthrough, FIFO cancellation, timeouts, catalog changes and RPC replay without
 starting a helper, capturing a screen, changing permissions, calling a model or networking.
-NSWorkspace is read only to choose an unambiguous running app for the identity gate.
+NSWorkspace lookup is read-only diagnostic context, never a prerequisite for a tool call.
 Requires macOS + Swift. All generated images, RPC data and diagnostics are synthetic.
 """
 from pathlib import Path
@@ -19,7 +19,9 @@ import AppKit
 
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture.native"
-    struct Configuration: Sendable { let script: Script }
+    struct Configuration: Sendable {
+        var appURL: URL {URL(fileURLWithPath:"/fixture-helper.app")}
+ let script: Script }
 }
 
 actor Script {
@@ -30,14 +32,25 @@ actor Script {
         let timeout: TimeInterval
         let uptime: TimeInterval
     }
+    private var delay: Duration = .zero
+    private var names = ["list_apps", "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text"]
+    func configure(delay: Duration = .zero, names: [String]? = nil) { self.delay = delay; if let names { self.names = names } }
+    func catalog() -> [String] { names }
+    private var opens = 0
+    private var closes = 0
+    func opened() { opens += 1 }
+    func closed() { closes += 1 }
+    func lifecycle() -> (opens: Int, closes: Int) { (opens, closes) }
     private var remaining: [Reply]
     private var observed: [Call] = []
     init(_ replies: [Reply]) { remaining = replies }
-    func call(_ tool: String, arguments: Data, timeout: TimeInterval) throws -> Data {
+    func call(_ tool: String, arguments: Data, timeout: TimeInterval) async throws -> Data {
         observed.append(Call(tool: tool, arguments: arguments, timeout: timeout,
                              uptime: ProcessInfo.processInfo.systemUptime))
         guard !remaining.isEmpty else { fatalError("Unexpected extra native call: \(tool)") }
-        switch remaining.removeFirst() {
+        let next = remaining.removeFirst()
+        try await Task.sleep(for: delay)
+        switch next {
         case .data(let data): return data
         case .failure(let failure): throw failure
         }
@@ -46,21 +59,22 @@ actor Script {
 }
 
 actor OpenAIComputerUseSession {
+    static let permissionSetupTimeout: TimeInterval = 300
     let script: Script
     init(script: Script) { self.script = script }
     static func open(_ configuration: OpenAIComputerUse.Configuration) async throws -> OpenAIComputerUseSession {
-        OpenAIComputerUseSession(script: configuration.script)
+        await configuration.script.opened()
+        return OpenAIComputerUseSession(script: configuration.script)
     }
-    func catalog() throws -> Data {
-        let names = ["list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
-                     "select_text", "scroll", "drag", "press_key", "type_text"]
+    func catalog() async throws -> Data {
+        let names = await script.catalog()
         return try JSONSerialization.data(withJSONObject: ["data": [["name": "sentient_native",
             "tools": Dictionary(uniqueKeysWithValues: names.map { ($0, ["name": $0]) })]]])
     }
     func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         try await script.call(tool, arguments: arguments, timeout: timeout)
     }
-    func close() {}
+    func close() async { await script.closed() }
     func isUsable() -> Bool { true }
 }
 
@@ -172,8 +186,15 @@ nonisolated enum Permissions {
 }
 '''
 SUPPORT += r'''
+@MainActor final class NativePermissionSetup {
+    var canAttemptTask = false
+    static let shared=NativePermissionSetup()
+    func permissionFailed()->UUID {UUID()}
+    func recovered(ifCurrent token:UUID) {}
+}
 @MainActor final class NativePermissionCheck {
     static let shared = NativePermissionCheck()
+    var isTearingDown = false
     var snapshot = NativePermissionReadiness.Snapshot(accessibility: .verified, screenRecording: .verified)
     var invalidations = 0
     func refresh() {}
@@ -182,29 +203,42 @@ SUPPORT += r'''
     }
 }
 '''
+SUPPORT += r'''
+nonisolated enum NativeComputerUseErrorLog { static func record(tool: String, failure: NativeComputerUseFailure) {} }
+'''
 TESTS = r'''
 import Foundation
 import AppKit
-import ImageIO
-import UniformTypeIdentifiers
 
 @main struct Tests {
     static var count = 0
-    static let app = "/Applications/Synthetic.app"
-    static func check(_ value: Bool, _ label: String) { guard value else { fatalError(label) }; count += 1 }
-    static func json(_ value: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: .sortedKeys) }
-    static func request(_ id: Int, _ tool: String = "get_app_state") throws -> Data {
-        try json(["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": tool,
-            "arguments": ["app": app, "synthetic_marker": "same-read", "element_index": 2]]])
+    static func check(_ value: Bool, _ name: String) { guard value else { fatalError(name) }; count += 1 }
+    static func json(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) }
+    static func request(_ id: Int, _ tool: String = "get_app_state", app: String = "Unresolvable fixture") throws -> Data {
+        try json(["jsonrpc":"2.0", "id":id, "method":"tools/call", "params":["name":tool, "arguments":["app":app]]])
     }
-    static func error(_ detail: NativeComputerUseFailure.Detail, code: Int = -10005) throws -> Script.Reply {
-        try errorText("Computer Use server error \(code): \(detail.rawValue)")
+    static func result(_ data: Data) throws -> [String: Any] {
+        (try JSONSerialization.jsonObject(with: data) as! [String: Any])["result"] as! [String: Any]
     }
-    static func errorText(_ value: String) throws -> Script.Reply {
-        .data(try json(["isError": true, "content": [["type": "text", "text": value]]]))
+    static func successful(_ data: Data) throws -> Bool { !NativeComputerUseFailure.isError(try result(data)) }
+    static func open(_ replies: [Script.Reply], delay: Duration = .zero, timeout: TimeInterval = 120,
+                     names: [String]? = nil) async throws -> (NativeComputerUseServer, Script) {
+        let script = Script(replies)
+        await script.configure(delay: delay, names: names)
+        let server = NativeComputerUseServer(configuration: .init(script: script), requestTimeout: timeout, resolveTarget: { _ in nil })
+        _ = try await server.start()
+        return (server, script)
     }
-    static func result(_ reply: Data) throws -> [String: Any] {
-        (try JSONSerialization.jsonObject(with: reply) as! [String: Any])["result"] as! [String: Any]
+    static func started(_ script: Script, count: Int = 1) async throws {
+        for _ in 0..<500 {
+            if await script.calls().count >= count { return }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        fatalError("call never started")
+    }
+    static func cancelled(_ task: Task<Data, Error>) async throws {
+        do { _ = try await task.value; fatalError("cancel ignored") }
+        catch is CancellationError { count += 1 }
     }
     static func item(_ reply: Data, tool: String = "get_app_state", encoding: Int = 0) throws -> [String: Any] {
         var payload = try result(reply)
@@ -231,13 +265,6 @@ import UniformTypeIdentifiers
         }
         return failure
     }
-    static func open(_ replies: [Script.Reply]) async throws -> (NativeComputerUseServer, Script) {
-        CaptureDiagnostics.log.reset()
-        let script = Script(replies)
-        let server = NativeComputerUseServer(configuration: .init(script: script), resolveTarget: { _ in app })
-        _ = try await server.start()
-        return (server, script)
-    }
     static func stream(_ reply: Data, tool: String = "get_app_state", expectedStage: NativeComputerUseFailure.Stage? = nil) async throws {
         for encoding in 0...3 {
             let native = try item(reply, tool: tool, encoding: encoding)
@@ -256,17 +283,6 @@ import UniformTypeIdentifiers
             check(after == before, "Tool-result failure does not invalidate native runtime")
         }
     }
-    static func assertReads(_ calls: [Script.Call], _ expected: Int) {
-        check(calls.count == expected && calls.allSatisfy { $0.tool == "get_app_state" }, "Only bounded reads retried")
-        check(calls.allSatisfy { $0.arguments == calls.first?.arguments }, "Automatic read arguments unchanged")
-        check(calls.allSatisfy { $0.timeout.isFinite && $0.timeout > 0 && $0.timeout <= 90 }, "Each read shares finite deadline")
-        for index in 1..<calls.count {
-            let delay = NativeAppStateRetry.delays[index - 1]
-            check(calls[index].uptime - calls[index - 1].uptime >= delay - 0.05, "Actual delay precedes native retry")
-            check(calls[index].timeout < calls[index - 1].timeout - delay + 0.05, "Read deadline is not reset per attempt")
-        }
-    }
-
     static func progressModes() async throws {
         let items: [(String, [String: Any])] = [
             ("item.started", ["id": "native", "type": "mcp_tool_call", "server": "sentient_native", "tool": "get_app_state", "arguments": ["app": "com.spotify.client"]]),
@@ -294,243 +310,150 @@ import UniformTypeIdentifiers
         check(toolOutputs[0] == toolOutputs[1], "Actual executor tool progress is identical with ChatGPT and Claude narration modes")
     }
 
-    static func policy() {
-        check(NativeAppStateRetry.delays == [2, 3, 5] && NativeAppStateRetry.timeout == 90, "Existing read grace retained")
-        let eligible: Set<NativeComputerUseFailure.Detail> = [.timeoutReached, .noWindowsAvailable, .windowNotFoundForID,
-            .windowNotFoundAtPosition, .failedToGetWindowIDForElement, .screenshotCaptureFailed, .screenCaptureFailed, .unknownCaptureFailed]
-        let stages: [NativeComputerUseFailure.Stage] = [.initialize, .thread, .catalog, .transport, .appState, .imageDecode, .action, .recovery, .probe]
-        for stage in stages {
-            for detail in NativeComputerUseFailure.Detail.allCases {
-                let failure = NativeComputerUseFailure.classify(detail.rawValue, stage: stage)
-                let permitted = eligible.contains(detail) && [.appState, .imageDecode].contains(stage)
-                check(NativeAppStateRetry.delay(afterAttempt: 1, failure: failure, elapsed: 0) == (permitted ? 2 : nil), "Automatic retries remain strictly read-only")
-            }
-        }
-        let transient = NativeComputerUseFailure(kind: .timeout, code: nil, detail: .timeoutReached)
-        for attempt in 1...3 {
-            let delay = NativeAppStateRetry.delays[attempt - 1]
-            check(NativeAppStateRetry.delay(afterAttempt: attempt, failure: transient, elapsed: 0) == delay, "Backoff attempt mapping")
-            check(NativeAppStateRetry.delay(afterAttempt: attempt, failure: transient, elapsed: 90 - delay) == nil, "Exhausted request budget cannot retry")
-        }
-        for attempt in [Int.min, -1, 0, 4, Int.max] {
-            check(NativeAppStateRetry.delay(afterAttempt: attempt, failure: transient, elapsed: 0) == nil, "Invalid attempt rejected")
-        }
-        for elapsed in [-1.0, .nan, .infinity, -.infinity, 90, 100] {
-            check(NativeAppStateRetry.delay(afterAttempt: 1, failure: transient, elapsed: elapsed) == nil, "Invalid elapsed time rejected")
-        }
-    }
     static func main() async throws {
-        policy()
         try await progressModes()
-        let context = CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 16,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        let bytes = NSMutableData()
-        let destination = CGImageDestinationCreateWithData(bytes, UTType.png.identifier as CFString, 1, nil)!
-        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
-        check(CGImageDestinationFinalize(destination), "Synthetic image generated")
-        let image = Script.Reply.data(try json(["content": [["type": "image", "data": (bytes as Data).base64EncodedString()]]]))
-        let text = Script.Reply.data(try json(["content": [["type": "text", "text": "synthetic app accessibility state"]]]))
-        let empty = Script.Reply.data(try json(["content": []]))
-        let invalidImage = Script.Reply.data(try json(["content": [["type": "image", "data": "invalid"]]]))
-
+        let ok = try json(["content":[["type":"text", "text":"synthetic native state"]]])
+        let reply = Script.Reply.data(ok)
+        // Name resolution and locally remembered reads cannot veto the actual helper.
         do {
-            let (server, script) = try await open([try error(.timeoutReached), image])
+            let (server,script) = try await open(Array(repeating: reply, count: 5))
+            for (id,tool) in ["click","get_app_state","type_text","press_key","get_app_state"].enumerated() {
+                check(try successful(await server.respond(request(id,tool,app: "WhatsApp"))), "Unknown local identity reaches helper")
+            }
+            check(await script.calls().count == 5, "Each explicit request executes once")
+            await server.stop()
+        }
+        // Native errors of every class are exact passthroughs, never retried or rewritten.
+        for message in ["timeoutReached", "screenCaptureFailed", "permissionDenied", "focusChanged", "newErrorName"] {
+            let raw = try json(["isError":true,"content":[["type":"text","text":message],["type":"text","text":"Exact second detail: α\\nß"]],
+                "structuredContent":["vendor":["code":42]],"_meta":["future_field":true]])
+            let (server,script) = try await open([.data(raw),reply])
             let rpc = try request(1)
-            let reply = try await server.respond(rpc)
-            check(!NativeComputerUseFailure.isError(try result(reply)), "Cold-start read recovers")
-            assertReads(await script.calls(), 2)
-            check(CaptureDiagnostics.log.entries().map(\.outcome) == [.skipped, .recovered], "Read recovery diagnostics")
-            let cached = try await server.respond(rpc)
-            check(cached == reply, "Same request ID returns cached reply")
-            let calls = await script.calls()
-            check(calls.count == 2, "Cached request never repeats native calls")
+            let failed = try await server.respond(rpc)
+            try await stream(failed)
+            check(try json(result(failed)) == raw, "Entire native error stays intact")
+            check(await script.calls().count == 1, "One read attempt even for transient failure")
+            check(try await server.respond(rpc) == failed, "Error duplicate is cached")
+            check(try successful(await server.respond(request(2,"click"))), "Error does not create a local action veto")
+            check(await script.calls().count == 2, "No automatic retry")
+            await server.stop()
+        }
+        // Native capture failures can strand an otherwise live RPC session. Only a new
+        // model-requested read resets it, once until a successful state read proves recovery.
+        do {
+            let raw = try json(["isError": true, "content": [["type": "text",
+                "text": "Computer Use server error -10005: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3811 \"Failed to start due to video/audio capture failure\""]]])
+            let (server, script) = try await open([.data(raw), .data(raw), reply, .data(raw), reply])
+            let first = try await server.respond(request(200))
+            check(try json(result(first)) == raw, "Original capture error is preserved")
+            check(await script.lifecycle().opens == 1, "Error alone cannot open a replacement session")
+            _ = try await server.respond(request(201))
+            check(await script.lifecycle().opens == 2, "Next explicit read reopens the failed native session")
+            _ = try await server.respond(request(202))
+            check(await script.lifecycle().opens == 2, "Persistent failure cannot restart on every read")
+            _ = try await server.respond(request(203))
+            check(await script.lifecycle().opens == 2, "No hidden retry after later error")
+            check(try successful(await server.respond(request(204))), "Later explicit read can recover")
+            check(await script.lifecycle().opens == 3, "A successful state read permits a future independent recovery")
+            check(await script.calls().count == 5, "Recovery never injects extra native actions or reads")
             await server.stop()
         }
         do {
-            let (server, script) = try await open([try error(.timeoutReached), try error(.noWindowsAvailable),
-                try error(.screenshotCaptureFailed), try error(.windowNotFoundForID, code: -12345), image])
-            let reply = try await server.respond(request(2))
-            check(try failure(reply).detail == .windowNotFoundForID && failure(reply).code == -12345, "Exhausted request preserves final native error")
-            assertReads(await script.calls(), 4)
-            try await stream(reply, expectedStage: .appState)
-            let next = try await server.respond(request(3))
-            check(!NativeComputerUseFailure.isError(try result(next)), "Exhausted read does not poison later model request")
-            let calls = await script.calls()
-            check(calls.count == 5, "New explicit request may read again")
+            let error = try json(["isError": true, "content": [["type": "text", "text": "disconnected"]]])
+            let (server, script) = try await open([.data(error), reply, reply])
+            _ = try await server.respond(request(210, "click"))
+            _ = try await server.respond(request(211, "press_key"))
+            check(await script.lifecycle().opens == 1, "An action never triggers connection replacement or replay")
+            _ = try await server.respond(request(212))
+            check(await script.lifecycle().opens == 2, "Agent-requested state read recovers after action failure")
+            check(await script.calls().map(\.tool) == ["click", "press_key", "get_app_state"], "Only explicitly requested actions reach native tools")
             await server.stop()
         }
+        // FIFO, including simultaneous identical IDs: only one physical action per request.
         do {
-            let (server, script) = try await open([try error(.noWindowsAvailable), try error(.windowNotFoundAtPosition),
-                try error(.screenCaptureFailed), image])
-            let reply = try await server.respond(request(4))
-            check(!NativeComputerUseFailure.isError(try result(reply)), "Fourth read may succeed")
-            assertReads(await script.calls(), 4)
-            check(CaptureDiagnostics.log.entries().last?.attempt == 4, "Final recovery attempt recorded")
+            let (server,script) = try await open([reply,reply], delay: .milliseconds(80))
+            let first = Task { try await server.respond(request(10,"click")) }
+            try await started(script)
+            let duplicate = Task { try await server.respond(request(10,"click")) }
+            try await Task.sleep(for: .milliseconds(10))
+            let second = Task { try await server.respond(request(11,"press_key")) }
+            let one = try await first.value
+            check(try await duplicate.value == one, "In-flight duplicate receives original result")
+            check(try successful(await second.value), "Next queued request executes")
+            check(await script.calls().map(\.tool) == ["click","press_key"], "FIFO never overlaps or duplicates native work")
+            let collision = try await server.respond(request(10,"type_text"))
+            check(!successfulUnchecked(collision), "Same ID different payload remains rejected")
+            check(await script.calls().count == 2, "Collision never executes")
             await server.stop()
         }
-
-        // All failed actions return useful errors without ending the agent or poisoning later calls.
-        let failures: [(Script.Reply, NativeComputerUseFailure.Detail, NativeComputerUseFailure.Stage)] = [
-            (try errorText("Computer Use server error -10005: Cannot set a value for an element that is not settable"), .unspecified, .action),
-            (try error(.permissionDenied), .permissionDenied, .action),
-            (try error(.senderNotAuthenticated), .senderNotAuthenticated, .action),
-            (try error(.approvalDenied), .approvalDenied, .action),
-            (try error(.blockedByPolicy), .blockedByPolicy, .action),
-            (try error(.staleState), .staleState, .action),
-            (try error(.invalidArguments), .invalidArguments, .action),
-            (try error(.noWindowsAvailable), .noWindowsAvailable, .action),
-            (try error(.timeoutReached), .timeoutReached, .action),
-            (.failure(.init(kind: .timeout, code: nil, detail: .requestTimedOut, stage: .transport)), .requestTimedOut, .transport),
-            (.failure(.init(kind: .connection, code: nil, detail: .disconnected, stage: .transport)), .disconnected, .transport),
-            (.data(Data("not-json".utf8)), .malformedResponse, .transport)]
-        for (nativeError, expected, stage) in failures {
-            let (server, script) = try await open([image, nativeError, text, text])
-            _ = try await server.respond(request(10))
-            let rpc = try request(11, "set_value")
-            let reply = try await server.respond(rpc)
-            check(try failure(reply, tool: "set_value", encoding: 2).detail == expected, "Original action diagnostic retained")
-            check(try result(reply)["isError"] as? Bool == true, "Failed action honestly marked failed")
-            let blocks = try result(reply)["content"] as! [[String: Any]]
-            let first = blocks.first!["text"] as! String
-            check(blocks.count == 1 && first.contains("get_app_state"), "Model sees complete error and fresh-state guidance in first block")
-            check(first.contains("effects may be unknown"), "Unknown action effects explained")
-            if expected == .unspecified {
-                check(first.contains("Cannot set a value for an element that is not settable"), "Actionable unsupported-set_value reason retained")
-                if let path = ProcessInfo.processInfo.environment["TEST_NATIVE_ERROR_FIXTURE"] {
-                    try json(result(reply)).write(to: URL(fileURLWithPath: path), options: .atomic)
-                }
-            }
-            try await stream(reply, tool: "set_value", expectedStage: stage)
-            let cached = try await server.respond(rpc)
-            check(cached == reply, "Failed action deduplicated by request ID")
-            let stale = try await server.respond(request(12, "type_text"))
-            check(try failure(stale, tool: "type_text").detail == .staleState, "Failure clears state before another mutation")
-            let beforeRead = await script.calls()
-            check(beforeRead.count == 2, "No automatic mutation replay or stale mutation")
-            let state = try await server.respond(request(13))
-            check(!NativeComputerUseFailure.isError(try result(state)), "Later explicit read can recover after every error class")
-            let corrected = try await server.respond(request(14, "type_text"))
-            check(!NativeComputerUseFailure.isError(try result(corrected)), "Model can select fallback after fresh state")
-            let calls = await script.calls()
-            check(calls.map(\.tool) == ["get_app_state", "set_value", "get_app_state", "type_text"], "Each mutation requires an explicit model request")
-            await server.stop()
-        }
-
-        // A failed read also leaves the model alive, including access and malformed-state errors.
-        let reads: [(Script.Reply, NativeComputerUseFailure.Detail)] = [
-            (try errorText("The app has not finished constructing its view."), .unspecified),
-            (try error(.permissionDenied), .permissionDenied),
-            (try error(.senderNotAuthenticated), .senderNotAuthenticated),
-            (empty, .missingImage), (invalidImage, .invalidImage),
-            (.data(Data("not-json".utf8)), .malformedResponse)]
-        for (nativeError, expected) in reads {
-            let (server, script) = try await open([nativeError, text, text])
-            let reply = try await server.respond(request(20))
-            check(try failure(reply).detail == expected, "Read diagnostic retained")
-            try await stream(reply)
-            let state = try await server.respond(request(21))
-            check(!NativeComputerUseFailure.isError(try result(state)), "New read allowed after earlier failed read")
-            let action = try await server.respond(request(22, "click"))
-            check(!NativeComputerUseFailure.isError(try result(action)), "Usable accessibility-only state permits action")
-            let calls = await script.calls()
-            check(calls.count == 3, "Permission/unknown/protocol errors not automatically retried")
-            await server.stop()
-        }
-
-        // Chromium errors have no hidden hard budget; the agent decides how to proceed.
+        // Cancellation of one waiting call leaves both its neighbors usable.
         do {
-            let changed = "The user changed '/Applications/Google Chrome.app'. Re-query the latest state with `get_app_state` before sending more actions."
-            let native = try errorText(changed)
-            let (server, script) = try await open([text, native, text, native, text, native, text, text])
-            for id in [30, 32, 34] {
-                _ = try await server.respond(request(id))
-                let reply = try await server.respond(request(id + 1, "click"))
-                check(try failure(reply, tool: "click").modelError?.contains("Re-query") == true, "Browser's actual diagnostic remains available")
-                try await stream(reply, tool: "click")
-            }
-            _ = try await server.respond(request(36))
-            let success = try await server.respond(request(37, "click"))
-            check(!NativeComputerUseFailure.isError(try result(success)), "Repeated browser errors never poison model's later request")
-            let calls = await script.calls()
-            check(calls.count == 8, "No automatic browser mutation/retry")
+            let (server,script) = try await open([reply,reply], delay: .milliseconds(100))
+            let first = Task { try await server.respond(request(20)) }; try await started(script)
+            let middle = Task { try await server.respond(request(21,"click")) }
+            try await Task.sleep(for: .milliseconds(10))
+            let last = Task { try await server.respond(request(22,"press_key")) }
+            middle.cancel(); try await cancelled(middle)
+            _ = try await first.value; check(try successful(await last.value), "Queue continues past cancelled waiter")
+            check(await script.calls().map(\.tool) == ["get_app_state","press_key"], "Cancelled queued action never executes")
             await server.stop()
         }
-
+        // Expired waiting calls cannot execute late after the upstream request times out.
         do {
-            let slot = await MainActor.run { TargetSlot(app) }
-            let script = Script([image, text, text])
-            let server = NativeComputerUseServer(configuration: .init(script: script), resolveTarget: { _ in slot.value })
-            _ = try await server.start()
-            _ = try await server.respond(request(40))
-            slot.set(nil)
-            let absent = try await server.respond(request(41, "click"))
-            check(try failure(absent, tool: "click").detail == .staleState, "Missing app requires fresh state")
-            slot.set(app)
-            let relaunched = try await server.respond(request(42, "click"))
-            check(try failure(relaunched, tool: "click").detail == .staleState, "Relaunch cannot reuse old verification")
-            let prior = await script.calls()
-            check(prior.count == 1, "No mutation reaches unverified relaunched app")
-            _ = try await server.respond(request(43))
-            _ = try await server.respond(request(44, "click"))
+            // Leave time for initial dispatch under concurrent build/test load, while the
+            // scripted first call still outlasts the queued request's real deadline.
+            let (server,script) = try await open([reply], delay: .milliseconds(1500), timeout: 0.5)
+            let first = Task { try await server.respond(request(30)) }; try await started(script)
+            let expired = try await server.respond(request(31,"click"))
+            check(!successfulUnchecked(expired), "Queued call expires")
+            check(String(decoding: expired, as: UTF8.self).contains("No action was executed"), "Timeout explains non-dispatch")
+            _ = try await first.value
+            check(await script.calls().count == 1, "Expired call never executes later")
             await server.stop()
         }
-
-        // Preserve useful text-only state and strip unusable images instead of failing the task.
+        // Stop drains active and queued callers; cancellation before enqueue is also safe.
         do {
-            let mixed = Script.Reply.data(try json(["content": [["type": "text", "text": "button 2: text field"], ["type": "image", "data": "invalid"]]]))
-            let (server, _) = try await open([mixed, text])
-            let reply = try await server.respond(request(50))
-            let blocks = try result(reply)["content"] as! [[String: Any]]
-            check(blocks.allSatisfy { $0["type"] as? String == "text" } && blocks.first?["text"] as? String == "button 2: text field", "Runtime returns normalized usable AX state")
-            check(CaptureDiagnostics.log.entries().last?.fields["image_valid"] == "false", "Runtime does not falsely log valid image for AX fallback")
-            let action = try await server.respond(request(51, "click"))
-            check(!NativeComputerUseFailure.isError(try result(action)), "AX fallback verifies native state")
+            let (server,script) = try await open([reply], delay: .milliseconds(100))
+            let first = Task { try await server.respond(request(40)) }; try await started(script)
+            let queued = Task { try await server.respond(request(41,"click")) }
+            try await Task.sleep(for: .milliseconds(10))
+            await server.stop(); first.cancel()
+            try await cancelled(first); try await cancelled(queued)
+            check(await script.calls().count == 1, "Stop never dispatches pending actions")
+        }
+        // New, renamed and missing tools are accepted; only advertised names are callable.
+        do {
+            let (server,script) = try await open([reply],names:["new_native_action"])
+            let list = try await server.respond(json(["jsonrpc":"2.0","id":50,"method":"tools/list"]))
+            check(String(decoding:list,as:UTF8.self).contains("new_native_action"),"Future native tool advertised")
+            check(try successful(await server.respond(request(51,"new_native_action"))),"Future native tool works")
+            check(!successfulUnchecked(try await server.respond(request(52,"click"))),"Unadvertised tool rejected")
+            check(await script.calls().count == 1,"Removed tools never get fabricated")
             await server.stop()
         }
-
-        // The exact pinned CLI null-error shape remains a diagnostic input, never a stop signal.
+        // Long tasks continue; eviction prevents old actions from being replayed.
         do {
-            let captured = #"{"type":"mcp_tool_call","server":"sentient_native","tool":"probe","result":{"content":[{"type":"text","text":"Computer Use server error -10005: unspecified"},{"type":"text","text":"Native error detail: Cannot set a value for an element that is not settable"}],"structured_content":{"sentient_native_failure":{"version":1,"kind":"unknown","detail":"unspecified","stage":"action","disposition":"refresh_state","effects_may_be_unknown":true,"native_code":-10005}}},"error":null,"status":"failed"}"#
-            let observed = try JSONSerialization.jsonObject(with: Data(captured.utf8)) as! [String: Any]
-            let decoded = NativeComputerUseFailure.from(item: observed)
-            check(decoded?.code == -10005 && decoded?.modelError != nil, "Actual null-error event retains native evidence")
-            check(decoded?.stage == .action, "Legacy metadata remains diagnostic-readable")
-        }
-        for stage in [NativeComputerUseFailure.Stage.appState, .action, .transport] {
-            let raw = "Synthetic private error " + String(repeating: "PRIVATE", count: 600)
-            let value = NativeComputerUseFailure.classify(["code": -32603, "message": raw], stage: stage)
-            check(value.modelError?.count == 2048, "Original native error bounded for every stage")
-            check(!value.fields.values.joined().contains("PRIVATE"), "Original native error excluded from diagnostics")
-            check(!value.modelGuidance.contains("terminal") && !value.modelGuidance.contains("Stop computer use"), "Tool guidance never orders task termination")
-        }
-
-        // User Stop still interrupts real backoff and leaves no further computer actions.
-        do {
-            let (server, script) = try await open([try error(.timeoutReached), image])
-            let rpc = try request(60)
-            let pending = Task { try await server.respond(rpc) }
-            let start = ProcessInfo.processInfo.systemUptime
-            while CaptureDiagnostics.log.entries().last?.outcome != .skipped {
-                guard ProcessInfo.processInfo.systemUptime - start < 3 else { fatalError("Backoff never started") }
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            let cancelled = ProcessInfo.processInfo.systemUptime
-            pending.cancel()
-            do { _ = try await pending.value; fatalError("Stop ignored") } catch is CancellationError { count += 1 }
-            check(ProcessInfo.processInfo.systemUptime - cancelled < 1, "Stop interrupts wait promptly")
-            let calls = await script.calls()
-            check(calls.count == 1, "No read after Stop")
-            check(CaptureDiagnostics.log.entries().last?.outcome == .cancelled, "Stop remains cancellation, not a tool failure")
+            let (server,script) = try await open(Array(repeating: reply,count:20))
+            for id in 100..<120 { _ = try await server.respond(request(id,"click")) }
+            check(!successfulUnchecked(try await server.respond(request(100,"click"))),"Evicted action remains consumed")
+            check(await script.calls().count == 20,"No late replay after eviction")
             await server.stop()
-            do { _ = try await server.respond(request(61)); fatalError("Stopped server accepted work") } catch is CancellationError { count += 1 }
         }
-        print("PASS \(count) native read/continuation assertions (real 2/3/5-second delays; no helper, network or model)")
+        // Valid text survives a bad image; totally unusable data remains an honest error.
+        do {
+            let mixed = try json(["content":[["type":"text","text":"valid AX"],["type":"image","data":"broken"]]])
+            let (server,_) = try await open([.data(mixed),.data(try json(["content":[]]))])
+            check(try successful(await server.respond(request(60))),"AX remains usable with invalid image")
+            check(!successfulUnchecked(try await server.respond(request(61))),"Empty result remains invalid")
+            await server.stop()
+        }
+        print("PASS \(count) native passthrough, FIFO, cancellation, catalog and replay assertions")
     }
+    static func successfulUnchecked(_ data: Data) -> Bool { (try? successful(data)) == true }
 }
-
 '''
 
-with tempfile.TemporaryDirectory(prefix="sentient-native-read-retry-") as directory:
+with tempfile.TemporaryDirectory(prefix="sentient-native-passthrough-") as directory:
     root = Path(directory)
     (root / "Support.swift").write_text(SUPPORT)
     (root / "Tests.swift").write_text(TESTS)
@@ -543,8 +466,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-read-retry-") as direct
         str(APP / "Diagnostics/ComputerUseDiagnosticPolicy.swift"),
         str(APP / "Driver/OpenAIComputerUseProbe.swift"),
         str(APP / "Driver/NativePermissionReadiness.swift"),
-        str(APP / "Driver/NativeAppStateRetry.swift"),
         str(APP / "Driver/NativeComputerUseServer.swift"),
-        str(APP / "Cloud/ComputerUseStream.swift"), "-o", str(binary),
+        str(APP / "Cloud/ComputerUseStream.swift"), str(APP.parent / "Scripts/Fixtures/NativeHelperPermissionNoteStub.swift"), "-o", str(binary),
     ], check=True)
-    subprocess.run([str(binary)], check=True, timeout=75)
+    subprocess.run([str(binary)], check=True, timeout=30)

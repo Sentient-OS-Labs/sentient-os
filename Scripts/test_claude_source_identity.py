@@ -21,8 +21,14 @@ source += '\nenum ConnectorRegistry {\n' + '\n'.join(member(registry, signature)
     ['static func readOrigin(', 'static func readGenerationKey(']) + '\n}\n'
 fixture = r'''
 import Foundation
-enum ModelBackend: String { case chatgpt, claude, custom }
+enum ModelBackend: String { case chatgpt, claude, custom, sentient
+    var supportsHostedConnectors: Bool { self == .chatgpt || self == .claude }
+}
 enum CodexRuntime { static let sessionScope = "fixture", accountIdentity: String? = "codex-fixture" }
+enum HostedConnectorStore {
+    struct Account { let taskTarget: String }
+    static func account(_ slug: String) -> Account? { nil }
+}
 enum DirectMCPStore {
     struct Connection { let id: String; let generation: Int }
     static func connection(_ slug: String) -> Connection? { nil }
@@ -31,23 +37,39 @@ final class UserDefaults: @unchecked Sendable {
     static let standard = UserDefaults()
     private let lock = NSLock()
     private var values: [String: Any] = [:]
-    func set(_ value: Any?, forKey key: String) { lock.withLock { values[key] = value } }
+    private var observer: (@Sendable () -> Void)?
+    func observe(_ callback: (@Sendable () -> Void)?) { lock.withLock { observer = callback } }
+    func set(_ value: Any?, forKey key: String) {
+        let callback = lock.withLock { values[key] = value; return observer }
+        callback?()
+    }
     func bool(forKey key: String) -> Bool { lock.withLock { values[key] as? Bool ?? false } }
     func integer(forKey key: String) -> Int { lock.withLock { values[key] as? Int ?? 0 } }
     func string(forKey key: String) -> String? { lock.withLock { values[key] as? String } }
     func object(forKey key: String) -> Any? { lock.withLock { values[key] } }
-    func removeObject(forKey key: String) { lock.withLock { _ = values.removeValue(forKey: key) } }
+    func removeObject(forKey key: String) {
+        let callback = lock.withLock { _ = values.removeValue(forKey: key); return observer }
+        callback?()
+    }
     var strings: [String] { lock.withLock { values.values.compactMap { $0 as? String } } }
 }
+enum CodexFailureReason: Sendable { case notLoggedIn, tokenExpired, refreshFailed }
+@MainActor enum ClaudeSetup { static let shared = SelfMock(); final class SelfMock { func authenticationRejected() {} } }
 enum ClaudeCLI {
+    enum Model: String { case sonnet }
+    static func parseEnvelope(_ output: CodexCLI.Output, durationMS: Int) throws {}
     static func locateBinary() -> String? { "inert-claude" }
     static let baseEnv: [String: String] = [:]
     static let rateLimitResetsAtKey = "limit", rateLimitTypeKey = "limit-type"
 }
 enum CodexCLI {
+    enum Availability { case notInstalled }
+    enum CLIError: Error { case notAvailable(Availability) }
     struct Output: Sendable { let stdout: String }
     static func executeAsync(binary: String, args: [String], stdinText: String?, cwd: String?,
-                             timeout: Double, extraEnv: [String: String]) async throws -> Output {
+                             timeout: Double, extraEnv: [String: String], includeCustomProviderKey: Bool = true) async throws -> Output {
+        precondition(!includeCustomProviderKey)
+        if args.contains("--max-turns") { return .init(stdout: "OK") }
         precondition(binary == "inert-claude" && args == ["auth", "status"])
         return try await NativeStatus.shared.read()
     }
@@ -83,6 +105,14 @@ actor NativeStatus {
         let a = #"{"loggedIn":true,"email":"Alice@EXAMPLE.invalid","orgId":"org-a","subscriptionType":"PRO"}"#
         let normalizedA = #"{"loggedIn":true,"email":" alice@example.invalid ","orgId":"org-a","subscriptionType":"pro"}"#
         let b = #"{"loggedIn":true,"email":"bob@example.invalid","orgId":"org-b","subscriptionType":"max"}"#
+        let accountChanges = OSAllocatedUnfairLock(initialState: 0)
+        let accountObserver = NotificationCenter.default.addObserver(forName: ClaudeAuth.changed, object: nil, queue: nil) { _ in
+            precondition(Thread.isMainThread, "account notifications must run on the main thread")
+            _ = ClaudeAuth.cachedLoggedIn
+            _ = ClaudeAuth.readinessScope
+            accountChanges.withLock { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(accountObserver) }
         UserDefaults.standard.set(true, forKey: ClaudeAuth.loggedInKey)
         UserDefaults.standard.set("old-process-proof", forKey: ClaudeAuth.accountIdentityKey)
         check(ClaudeAuth.readinessScope == nil, "persisted identity cannot prove readiness before this process observes auth")
@@ -97,18 +127,30 @@ actor NativeStatus {
         check(!UserDefaults.standard.strings.contains { $0.localizedCaseInsensitiveContains("alice") || $0.contains("org-a") },
               "raw email and organization are not persisted")
         await NativeStatus.shared.configure(normalizedA)
+        let changesBeforeRefresh = accountChanges.withLock { $0 }
         _ = await ClaudeAuth.refresh()
         check(ClaudeAuth.readinessScope == scopeA, "normalization and harmless auth refresh preserve account scope")
+        check(accountChanges.withLock { $0 } > changesBeforeRefresh,
+              "account consumers update even when persisted values are unchanged")
         await NativeStatus.shared.configure("", fail: true)
         let failed = await ClaudeAuth.refresh()
         check(failed.accountIdentity == nil && ClaudeAuth.readinessScope == scopeA,
               "failed status cannot certify a new proof or erase the last known working account")
+        for malformed in ["", "not JSON", #"{"loggedIn":"true"}"#] {
+            await NativeStatus.shared.configure(malformed)
+            let unknown = await ClaudeAuth.refresh()
+            check(unknown.loggedIn && ClaudeAuth.readinessScope == scopeA,
+                  "unreadable status preserves the last working account")
+        }
+        let retiredAuthRevision = ClaudeAuth.revision
         ClaudeAuth.beginAccountChange()
         check(ClaudeAuth.readinessScope == nil, "explicit login invalidates proof before auth changes")
         await NativeStatus.shared.configure(a)
         _ = await ClaudeAuth.refresh()
         check(ClaudeAuth.readinessScope?.accountIdentity == scopeA.accountIdentity && ClaudeAuth.readinessScope != scopeA,
               "same-account relogin changes the in-flight proof revision")
+        ClaudeAuth.rejected(ClaudeAuth.LoginRequired(), after: retiredAuthRevision)
+        check(!ClaudeAuth.requiresVerification, "old auth failure cannot revoke an explicitly changed account")
         await NativeStatus.shared.configure(a, blocked: true)
         let obsolete = Task { await ClaudeAuth.refresh() }
         while !(await NativeStatus.shared.entered) { await Task.yield() }
@@ -119,7 +161,8 @@ actor NativeStatus {
         check(ConnectorRegistry.readOrigin(slug: "gmail", backend: .claude) != originA,
               "Claude account changes invalidate source checkpoints and writing-style origins")
         await NativeStatus.shared.release()
-        _ = await obsolete.value
+        let obsoleteStatus = await obsolete.value
+        check(obsoleteStatus.accountIdentity == nil, "stale status cannot report the old account as current")
         check(ClaudeAuth.readinessScope == scopeB && scopeB.accountIdentity != scopeA.accountIdentity,
               "old delayed auth result cannot restore account A after login to B")
         check(ClaudeAuth.legacyConnectorAccountIdentity == scopeA.accountIdentity,
@@ -132,6 +175,43 @@ actor NativeStatus {
         _ = await ClaudeAuth.refresh()
         check(ClaudeAuth.cachedLoggedIn && ClaudeAuth.readinessScope == nil,
               "missing account identity cannot certify connectors despite a logged-in plan")
+        // Exercise concurrent identity reads and status commits. A lock inversion would
+        // deadlock this fixture, whose process has a bounded timeout.
+        let notifications = OSAllocatedUnfairLock(initialState: 0)
+        UserDefaults.standard.observe {
+            precondition(Thread.isMainThread, "preference publication must run on the main thread")
+            _ = ClaudeAuth.readinessScope
+            _ = ClaudeAuth.cachedPlan
+            _ = ClaudeAuth.cachedLoggedIn
+            _ = ClaudeAuth.legacyConnectorAccountIdentity
+            notifications.withLock { $0 += 1 }
+        }
+        await NativeStatus.shared.configure(b)
+        await withTaskGroup(of: Void.self) { tasks in
+            for _ in 0..<8 {
+                tasks.addTask {
+                    for _ in 0..<50 {
+                        _ = ClaudeAuth.readinessScope
+                        _ = await ClaudeAuth.refresh()
+                        _ = ClaudeAuth.cachedLoggedIn
+                    }
+                }
+            }
+        }
+        check(ClaudeAuth.readinessScope != nil, "concurrent auth refresh and identity reads complete")
+        check(notifications.withLock { $0 > 0 }, "synchronous preference observers can reenter account reads")
+        for turn in 0..<20 {
+            await NativeStatus.shared.configure(turn.isMultiple(of: 2) ? a : b)
+            _ = await ClaudeAuth.refresh()
+        }
+        check(notifications.withLock { $0 > 20 }, "repeated account publications keep observers responsive")
+        UserDefaults.standard.observe(nil)
+        let repair = ClaudeAuth.beginLogin()
+        _ = await ClaudeAuth.refresh()
+        check(ClaudeAuth.readinessScope == nil, "local account status cannot bypass runtime verification")
+        try! await ClaudeAuth.verifyLogin(revision: repair)
+        check(ClaudeAuth.readinessScope?.accountIdentity == scopeB.accountIdentity,
+              "successful verification restores the account with its organization identity")
         ClaudeAuth.destroy()
         check(ClaudeAuth.readinessScope == nil && ClaudeAuth.legacyConnectorAccountIdentity == nil,
               "teardown clears only local account proof state")
@@ -140,6 +220,53 @@ actor NativeStatus {
         _ = await ClaudeAuth.refresh()
         check(ClaudeAuth.legacyConnectorAccountIdentity == nil,
               "a deliberate login before observing the old account cannot adopt unknown legacy connectors")
+
+        await NativeStatus.shared.configure(a, blocked: true)
+        let olderRefresh = Task { await ClaudeAuth.refresh() }
+        while !(await NativeStatus.shared.entered) { await Task.yield() }
+        await NativeStatus.shared.configure(b)
+        _ = await ClaudeAuth.refresh()
+        await NativeStatus.shared.release()
+        let olderResult = await olderRefresh.value
+        check(olderResult.accountIdentity == nil && ClaudeAuth.cachedAccountIdentity == scopeB.accountIdentity,
+              "a delayed status cannot overwrite a newer status without an explicit login")
+
+        await NativeStatus.shared.configure(b.replacingOccurrences(of: "max", with: "team"), blocked: true)
+        let usefulOlderRefresh = Task { await ClaudeAuth.refresh() }
+        while !(await NativeStatus.shared.entered) { await Task.yield() }
+        await NativeStatus.shared.configure("unreadable status")
+        _ = await ClaudeAuth.refresh()
+        await NativeStatus.shared.release()
+        _ = await usefulOlderRefresh.value
+        check(ClaudeAuth.cachedPlan == "team" && ClaudeAuth.cachedLoggedIn,
+              "an unknown newer probe cannot veto an older successful response")
+        await NativeStatus.shared.configure(b)
+        _ = await ClaudeAuth.refresh()
+
+        // A UI observer may start a newer login while an older status is being published.
+        let reentered = OSAllocatedUnfairLock(initialState: false)
+        UserDefaults.standard.observe {
+            let first = reentered.withLock { value in defer { value = true }; return !value }
+            if first { MainActor.assumeIsolated { _ = ClaudeAuth.beginLogin() } }
+            _ = ClaudeAuth.readinessScope
+        }
+        await NativeStatus.shared.configure(a)
+        let superseded = await ClaudeAuth.refresh()
+        UserDefaults.standard.observe(nil)
+        check(!superseded.loggedIn && superseded.accountIdentity == nil && ClaudeAuth.requiresVerification,
+              "reentrant login replaces the older status in memory")
+        check(UserDefaults.standard.bool(forKey: "claude.loginNeedsVerification")
+              && !UserDefaults.standard.bool(forKey: ClaudeAuth.loggedInKey),
+              "reentrant login is also the final persisted state")
+
+        await NativeStatus.shared.configure(b, blocked: true)
+        let beforeLogout = Task { await ClaudeAuth.refresh() }
+        while !(await NativeStatus.shared.entered) { await Task.yield() }
+        ClaudeAuth.destroy()
+        await NativeStatus.shared.release()
+        let afterLogout = await beforeLogout.value
+        check(!afterLogout.loggedIn && !ClaudeAuth.cachedLoggedIn && ClaudeAuth.cachedAccountIdentity == nil,
+              "logout survives completion of an older status request")
         print("Claude source identity: \(checks) checks passed")
     }
 }

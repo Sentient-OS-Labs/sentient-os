@@ -34,7 +34,7 @@ enum SlackCurationTests {
             case .computer:
                 if expected != nil { connectorFallbacks += 1 }
                 passed = expected == nil || connectorFallbacks <= 2
-            case .connector(let slug, _, let actual, _, _): passed = slug == expected && actual == operation
+            case .connector(let slug, _, let actual, _, _, _): passed = slug == expected && actual == operation
             }
             if !passed { failures += 1 }
             Log("\(passed ? "PASS" : "FAIL") Slack router: \(command)")
@@ -59,8 +59,8 @@ enum SlackCurationTests {
               "hosted Apps SDK identity is accepted")
         check(ConnectorRegistry.isValidCodexCatalogID("connector_00000000000000000000000000000001"),
               "legacy hosted identity remains accepted")
-        for invalid in ["asdk_app_bad", "asdk_app_00000000000000000000000000000001\n", "asdk_app_00000000000000000000000000000001.tools", "other_00000000000000000000000000000001"] {
-            check(!ConnectorRegistry.isValidCodexCatalogID(invalid), "malformed catalog identity is refused")
+        for opaque in ["asdk_app_bad", "asdk_app_00000000000000000000000000000001\n", "asdk_app_00000000000000000000000000000001.tools", "other_00000000000000000000000000000001"] {
+            check(ConnectorRegistry.isValidCodexCatalogID(opaque), "provider catalog identity is opaque")
         }
         let tool = "mcp__claude_ai_Fixture__send_message"
         let input: [String: Any] = ["channel": "C_FIXTURE", "text": "Synthetic marker"]
@@ -195,97 +195,13 @@ enum SlackCurationTests {
                         "https://app.slack.com/client/TFIXTURE/CFIXTURE"] {
             check(SlackSource.sourceLinks(invalid).isEmpty, "spoofed or channel-only links cannot ground a claim")
         }
-        for backend in [ModelBackend.claude, .chatgpt] {
-            let identity = SlackConnector.Identity(userID: "UFIXTURE", workspaceName: "Fixture",
-                workspaceID: backend == .chatgpt ? "TFIXTURE" : nil, backend: backend.rawValue)
-            SlackConnector.$runIdentity.withValue(identity) {
-                func searchTrace(queries: [String] = ["to:me", "from:<@UFIXTURE>", SlackSource.broadQuery(window)],
-                                 limit: Int = 10, before: String? = nil, bots: Bool = false,
-                                 failed: Bool = false, body: String? = nil, extra: [String: Any] = [:]) -> String {
-                    var events: [[String: Any]] = []
-                    for (i, query) in queries.enumerated() {
-                        var args: [String: Any] = ["query": query, "limit": limit, "after": bounds.after,
-                            "before": before ?? bounds.before, "content_types": "messages",
-                            "channel_types": "public_channel,private_channel,mpim,im", "include_bots": bots,
-                            "include_context": false, "sort": "timestamp", "sort_dir": "desc", "response_format": "detailed"]
-                        args.merge(extra) { _, replacement in replacement }
-                        let text = body ?? "# Search Results for: \(query)\n\nNo results found.\n"
-                        if backend == .claude {
-                            events.append(["type": "assistant", "message": ["content": [["type": "tool_use", "id": "search\(i)",
-                                "name": SlackConnector.claudePrefix + "slack_search_public_and_private", "input": args]]]])
-                            events.append(["type": "user", "message": ["content": [["type": "tool_result", "tool_use_id": "search\(i)",
-                                "content": [["type": "text", "text": text]], "is_error": failed]]]])
-                        } else {
-                            let wrapped = String(data: try! JSONSerialization.data(withJSONObject: ["results": text,
-                                "pagination_info": "End of results"]), encoding: .utf8)!
-                            events.append(["type": "item.completed", "item": ["id": "search\(i)", "type": "mcp_tool_call",
-                                "server": "codex_apps", "tool": "slack.slack_search_public_and_private", "arguments": args,
-                                "status": "completed", "result": ["isError": failed, "content": [["type": "text", "text": wrapped]]]]])
-                        }
-                    }
-                    return stream(events)
-                }
-                func accepts(_ raw: String, outcome: MCPSource.ReadOutcome = .quiet(itemCount: 0)) -> Bool {
-                    do { try SlackSource.validate(raw: raw, backend: backend, mode: .iterative, window: window, outcome: outcome); return true }
-                    catch { return false }
-                }
-                check(accepts(searchTrace()), "\(backend.rawValue) successful bounded searches establish a quiet window")
-                check(accepts(searchTrace(extra: ["filters": "", "keywords": [], "natural_language_query": ""])), "\(backend.rawValue) empty optional search fields preserve coverage")
-                check(!accepts(searchTrace(extra: ["filters": "in:one-channel"])), "\(backend.rawValue) extra filters cannot narrow a quiet read")
-                check(!accepts(searchTrace(extra: ["keywords": ["release"]])), "\(backend.rawValue) extra keywords cannot narrow a quiet read")
-                check(!accepts(searchTrace(extra: ["natural_language_query": "only important deadlines"])), "\(backend.rawValue) semantic hints cannot narrow a quiet read")
-                check(!accepts(""), "\(backend.rawValue) no tools cannot advance a quiet checkpoint")
-                check(!accepts(searchTrace(queries: ["to:me"])), "\(backend.rawValue) one empty personal lane is not whole-sample quiet")
-                check(!accepts(searchTrace(queries: ["to:me", "to:me", "to:me"])), "\(backend.rawValue) repeated searches cannot fake coverage")
-                check(!accepts(searchTrace(queries: ["to:me", "from:<@UOTHER>", SlackSource.broadQuery(window)])),
-                      "\(backend.rawValue) search must use the verified actor")
-                check(!accepts(searchTrace(before: "1700086400.000000")), "\(backend.rawValue) an out-of-window search is refused")
-                check(!accepts(searchTrace(limit: 100)), "\(backend.rawValue) oversized discovery is refused")
-                check(!accepts(searchTrace(limit: 20)), "\(backend.rawValue) cumulative candidate budget is enforced")
-                check(!accepts(searchTrace(bots: true)), "\(backend.rawValue) bot-inclusive discovery is refused")
-                check(!accepts(searchTrace(failed: true)), "\(backend.rawValue) failed discovery cannot masquerade as quiet")
-                check((try? SlackSource.discoveredThreadCount(raw: searchTrace(), backend: backend)) == 0,
-                      "\(backend.rawValue) genuine empty search pages have no discovered threads")
-                let notable = MCPSource.ReadOutcome.notable(.init(summary: "The user agreed to review the release. [Thread](\(fixtureLink))",
-                                                                 hasActionItems: false, itemCount: 1))
-                let message = "# Search Results for: fixture\n\nMessage_ts: 1700000000.000000\nPermalink: \(fixtureLink)\nText: The indexing test printed:\nNo results found.\nThe user agreed to review the release.\n"
-                let messageTrace = searchTrace(body: message)
-                check((try? SlackSource.discoveredThreadCount(raw: messageTrace, backend: backend)) == 1,
-                      "\(backend.rawValue) empty-result words in message content preserve distinct thread count")
-                check(accepts(messageTrace, outcome: notable), "\(backend.rawValue) empty-result words in a message do not invalidate its summary")
-                check((try? SlackSource.discoveredThreadCount(raw: searchTrace(body: "# Search Results for: fixture\nNo results found.\nUnexpected response"), backend: backend)) == nil,
-                      "\(backend.rawValue) unexpected response text cannot masquerade as an empty page")
-                func threadTrace(failed: Bool = false, pending: Bool = false) -> String {
-                    let args: [String: Any] = ["channel_id": "CFIXTURE", "message_ts": "1700000000.000000",
-                        "limit": 40, "response_format": "concise", "latest": SlackSource.threadEnd(window)]
-                    if backend == .claude {
-                        let call: [String: Any] = ["type": "assistant", "message": ["content": [["type": "tool_use", "id": "thread",
-                            "name": SlackConnector.claudePrefix + "slack_read_thread", "input": args]]]]
-                        let result: [String: Any] = ["type": "user", "message": ["content": [["type": "tool_result", "tool_use_id": "thread",
-                            "is_error": failed, "content": [["type": "text", "text": "Synthetic thread result"]]]]]]
-                        return stream(pending ? [call] : [call, result])
-                    }
-                    return stream([["type": pending ? "item.started" : "item.completed", "item": ["id": "thread", "type": "mcp_tool_call",
-                        "server": "codex_apps", "tool": "slack.slack_read_thread", "arguments": args,
-                        "status": pending ? "in_progress" : "completed", "result": ["isError": failed,
-                            "content": [["type": "text", "text": "Synthetic thread result"]]]]]])
-                }
-                check(accepts(messageTrace + "\n" + threadTrace(), outcome: .quiet(itemCount: 1)),
-                      "\(backend.rawValue) successful selected thread can complete a quiet read")
-                for tail in [threadTrace(failed: true), threadTrace(pending: true)] {
-                    check(!accepts(messageTrace + "\n" + tail, outcome: .quiet(itemCount: 1)),
-                          "\(backend.rawValue) failed or unfinished selected thread cannot advance as quiet")
-                    check(!accepts(messageTrace + "\n" + tail, outcome: notable),
-                          "\(backend.rawValue) partial success cannot hide a failed or unfinished selected thread")
-                }
-                check(accepts(searchTrace(queries: ["to:me"], body: "# Search Results for: to:me\n\n\(fixtureLink)\nA supported message."), outcome: notable),
-                      "\(backend.rawValue) a notable result needs observed content references")
-                check(!accepts(searchTrace(), outcome: notable), "\(backend.rawValue) invented source references are refused")
-                let unsourced = MCPSource.ReadOutcome.notable(.init(summary: "The user has one fact. [Thread](\(fixtureLink))\n\nAnother unsupported claim.",
-                                                                  hasActionItems: false, itemCount: 1))
-                check(!accepts(searchTrace(body: "# Search Results for: fixture\n\n\(fixtureLink)"), outcome: unsourced),
-                      "\(backend.rawValue) each retained paragraph needs a source")
-            }
+        for mode: MCPSource.ReadMode in [.initial, .iterative] {
+            let reply = #"{"item_count":1,"notable":true,"has_action_items":true,"summary":"You agreed to review the release. Follow up tomorrow.","tool_failure":""}"#
+            check((try? MCPSource.parse(reply, slug: "slack"))?.result?.hasActionItems == true,
+                  "Slack \(mode) accepts a summary without paragraph citations or exact heading wording")
+            let quiet = #"{"item_count":0,"notable":false,"has_action_items":false,"summary":"","tool_failure":""}"#
+            check((try? MCPSource.parse(quiet, slug: "slack")) == .quiet(itemCount: 0),
+                  "Slack \(mode) accepts the reader's quiet result")
         }
         failures += SlackActionTests.run()
         Log("Slack curation checks: \(checks) source checks plus action checks, \(failures) failures")

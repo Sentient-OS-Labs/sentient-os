@@ -44,6 +44,7 @@ actor VaultCloud {
 
     static let shared = VaultCloud()
 
+    // First analysis discards unfinished cloud staging before retrying. Other runs retain
     // DURABLE resume handles for BOTH build and update (B11): each carries a codex session id + the
     // staging dir holding the work-in-progress, persisted to UserDefaults so a usage limit or an app
     // restart RESUMES instead of re-running the expensive codex call from scratch. Both the build and
@@ -76,6 +77,24 @@ actor VaultCloud {
 
     private func setCreateResume(_ t: VaultGenerator.ResumeToken?) { createResume = t; Self.persistResume(t, Self.createResumeKey) }
     private func setUpdateResume(_ t: VaultGenerator.ResumeToken?) { updateResume = t; Self.persistResume(t, Self.updateResumeKey) }
+
+    /// Initial creation retries a whole cloud build/merge, never a half-written staging tree
+    /// or an old model session. Published knowledge and source summaries are untouched.
+    private func restartInitialCloudStageIfNeeded() throws {
+        guard InitialAnalysisRecovery.replayCloudStages else { return }
+        try Task.checkCancellation()
+        for path in Set([createResume?.stagingPath, updateResume?.stagingPath].compactMap { $0 }) {
+            let staging = URL(fileURLWithPath: path).standardizedFileURL
+            guard staging.deletingLastPathComponent() == VaultGenerator.stagingParent.standardizedFileURL,
+                  staging.lastPathComponent.hasPrefix(VaultGenerator.stagingPrefix),
+                  staging != VaultGenerator.vaultRoot.standardizedFileURL else { continue }
+            if FileManager.default.fileExists(atPath: staging.path) {
+                try FileManager.default.removeItem(at: staging)
+            }
+        }
+        setCreateResume(nil)
+        setUpdateResume(nil)
+    }
 
     private static func mailHashes(_ notes: [CloudNote]) -> [String: String] {
         Dictionary(notes.filter { $0.kind == .appleMail }.map {
@@ -146,13 +165,16 @@ actor VaultCloud {
                 onLine: (@Sendable (String) -> Void)? = nil) async throws -> VaultGenerator.Result {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await createPinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            try await HostedInference.withRun(purpose: .bootstrap) {
+                try await self.createPinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            }
         }
     }
 
     private func createPinned(notes: [CloudNote],
                               onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
                               onLine: (@Sendable (String) -> Void)?) async throws -> VaultGenerator.Result {
+        try restartInitialCloudStageIfNeeded()
         let notes = await AppleMailEvidence.validatedCloud(notes)
         setCreateResume(validatedResume(createResume, notes: notes))
         lastConsumedSourceIDs = []
@@ -193,13 +215,16 @@ actor VaultCloud {
                 onLine: (@Sendable (String) -> Void)? = nil) async throws -> Int {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await updatePinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            try await HostedInference.withRun(purpose: .background) {
+                try await self.updatePinned(notes: notes, onProgress: onProgress, onLine: onLine)
+            }
         }
     }
 
     private func updatePinned(notes: [CloudNote],
                               onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
                               onLine: (@Sendable (String) -> Void)?) async throws -> Int {
+        try restartInitialCloudStageIfNeeded()
         let notes = await AppleMailEvidence.validatedCloud(notes)
         setUpdateResume(validatedResume(updateResume, notes: notes))
         lastConsumedSourceIDs = []
@@ -297,6 +322,11 @@ actor VaultCloud {
 
             // Feed the remaining slices, one fresh merge session each, over the same staging.
             while next < slices.count {
+                if ModelBackend.current == .sentient, Task.isCancelled {
+                    throw VaultGenerator.VaultError.interrupted(resume: .init(sessionID: nil, stagingPath: staging.path,
+                        sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                        sessionScope: VaultGenerator.ResumeToken.scope(for: .sentient)))
+                }
                 try Task.checkCancellation()                     // the user's STOP, between slices
                 if slices.count > 1 { onProgress(.folding(part: next + 1, of: slices.count)) }
                 var invocation = configure(Self.updatePrompt(skeleton: Self.skeleton(of: staging), notes: slices[next]))
@@ -321,6 +351,11 @@ actor VaultCloud {
             // in the Knowledge editor during the run? If so, our staging snapshot is stale and swapping
             // would CLOBBER their edit. Discard staging instead; the notes stay in CycleStore and the
             // next cycle re-seeds from the now-current vault (their edit included).
+            if ModelBackend.current == .sentient, Task.isCancelled {
+                throw VaultGenerator.VaultError.interrupted(resume: .init(sessionID: nil, stagingPath: staging.path,
+                    sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    sessionScope: VaultGenerator.ResumeToken.scope(for: .sentient)))
+            }
             try Task.checkCancellation()
             guard VaultGenerator.vaultFingerprint(vault) == baseline else {
                 Log("VaultCloud.update: ⚠️ vault changed during the run (editor?) — swap aborted, re-run next cycle")

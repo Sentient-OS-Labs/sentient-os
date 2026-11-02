@@ -146,14 +146,13 @@ nonisolated struct ComputerUseCheckReport: Codable, Sendable, Identifiable {
 
     /// Never restart the helper for focus changes, unsupported inputs or missing permissions.
     static func allowsConnectionRepair(_ failure: NativeComputerUseFailure) -> Bool {
-        failure.kind == .connection || failure.detail == .requestTimedOut || failure.detail == .senderNotAuthenticated
-            || [.screenshotCaptureFailed, .screenCaptureFailed, .unknownCaptureFailed].contains(failure.detail)
+        failure.kind == .connection || failure.permitsSessionRecovery
     }
     static func outcome(for failure: NativeComputerUseFailure) -> Outcome {
         if [.senderNotAuthenticated, .approvalDenied, .blockedByPolicy].contains(failure.detail) { return .needsAttention }
         if failure.kind == .permission { return .permissionsNeeded }
         if failure.kind == .noWindows || [.focusChanged, .inputInterrupted, .elementUnavailable,
-            .staleState, .testWindowNotObserved].contains(failure.detail) { return .interrupted }
+            .staleState].contains(failure.detail) || failure.isReadinessInterruption { return .interrupted }
         return .needsAttention
     }
 }

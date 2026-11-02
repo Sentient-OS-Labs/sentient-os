@@ -27,24 +27,26 @@ final class WakeHelperClient {
     static let shared = WakeHelperClient()
     private var connection: NSXPCConnection?
     private var removing = false
+    private let registration = ServiceRegistration(kind: .wakeHelper)
+    private var probing: Task<DaemonHealth, Never>?
+    private var healthRetryAfter: TimeInterval = 0
+    private var healthFailures = 0
 
     /// Only explicit setup actions call this. Registration may throw while successfully placing
     /// the item in the approval queue; status is authoritative in that case.
     @discardableResult
-    func register() -> SMAppService.Status {
-        let service = SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName)
-        guard service.status != .enabled, service.status != .requiresApproval else { return service.status }
-        do { try service.register() } catch {
-            if service.status != .requiresApproval {
-                Diagnostics.report(.wakeFailed, phase: .setup, reason: "daemon_register", error: error)
-                Log("WakeHelper register error: \(ErrorLabel(error))")
-            }
+    func register() async -> SMAppService.Status {
+        let result = await registration.perform(.register)
+        let status = result.rawStatus.flatMap(SMAppService.Status.init(rawValue:)) ?? .notFound
+        if let error = result.error, status != .requiresApproval {
+            Diagnostics.report(.wakeFailed, phase: .setup, reason: "daemon_register", error: error)
+            Log("WakeHelper register error: \(ErrorLabel(error))")
         }
-        return service.status
+        return status
     }
 
     /// Registration is consent, not liveness. Call healthProbe before scheduling any work.
-    var status: SMAppService.Status { SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName).status }
+    var status: SMAppService.Status { registration.cachedStatus ?? .notFound }
     var isReady: Bool { !removing && status == .enabled }
     func openLoginItemsSettings() {
         PermissionGuide.shared.guide(.overnightWake, dragging: nil)
@@ -54,28 +56,51 @@ final class WakeHelperClient {
 
     func healthProbe() async -> DaemonHealth {
         guard !removing else { return .unavailable }
+        if let probing {
+            let health = await probing.value
+            return removing ? .unavailable : health
+        }
+        guard ProcessInfo.processInfo.systemUptime >= healthRetryAfter else { return .unavailable }
+        let task = Task { await self.checkHealth() }
+        probing = task
+        let health = await task.value
+        probing = nil
+        guard !removing else { return .unavailable }
+        if health == .unavailable {
+            healthFailures = min(healthFailures + 1, 5)
+            healthRetryAfter = ProcessInfo.processInfo.systemUptime + min(300, 15 * pow(2, Double(healthFailures - 1)))
+        } else { healthFailures = 0; healthRetryAfter = 0 }
+        return health
+    }
+
+    private func checkHealth() async -> DaemonHealth {
+        guard let status = await registration.refresh(), !removing else { return .unavailable }
         switch status {
         case .requiresApproval: return .requiresApproval
         case .notRegistered: return .notSetUp
         case .notFound: return .unavailable
         case .enabled:
-            let reachable = await isReachable()
+            let reachable = await call(quiet: true) { $0.prepare(withReply: $1) }
             // Approval can be revoked while the probe is in flight.
-            if status == .requiresApproval { return .requiresApproval }
-            return reachable && status == .enabled ? .ready : .unavailable
+            guard let current = await registration.refresh(), !removing else { return .unavailable }
+            if current == .requiresApproval { return .requiresApproval }
+            return reachable && current == .enabled ? .ready : .unavailable
         @unknown default: return .unavailable
         }
     }
 
     /// Quiet, side-effect-free once migration completes; does not feed the awake deadman.
     func isReachable() async -> Bool {
-        guard !removing, status == .enabled else { return false }
-        return await call(quiet: true) { $0.prepare(withReply: $1) }
+        await healthProbe() == .ready
     }
 
     func setUp() async -> DaemonHealth {
         guard !removing else { return .unavailable }
-        let registered = register()
+        if let probing { _ = await probing.value }
+        guard !removing else { return .unavailable }
+        healthRetryAfter = 0; healthFailures = 0
+        let registered = await register()
+        guard !removing, !Task.isCancelled else { return .unavailable }
         if registered == .requiresApproval {
             openLoginItemsSettings()
             return .requiresApproval
@@ -86,6 +111,9 @@ final class WakeHelperClient {
         _ = await call(quiet: true) { $0.cancelRemoval(withReply: $1) }
         // launchd can need a moment after approval. Do not promise readiness until XPC answers.
         for attempt in 0..<3 {
+            // Explicit setup retries may bypass the passive health backoff. ServiceRegistration
+            // still refuses to queue work behind a macOS request that has not returned.
+            healthRetryAfter = 0
             let health = await healthProbe()
             if health != .unavailable || attempt == 2 { return health }
             do { try await Task.sleep(for: .milliseconds(500)) } catch { return .unavailable }
@@ -100,11 +128,13 @@ final class WakeHelperClient {
         removing = true
         let hasRootFiles = [WakeHelperConfig.legacyPlistPath, WakeHelperMaintenance.supportPath,
                             WakeHelperMaintenance.logPath].contains { FileManager.default.fileExists(atPath: $0) }
-        if status != .enabled, !hasRootFiles {
+        let current = await registration.refresh(force: true)
+        guard let current else { return false }
+        if current != .enabled, !hasRootFiles {
             return await unregister()
         }
-        if status != .enabled {
-            let registered = register()
+        if current != .enabled {
+            let registered = await register()
             if registered == .requiresApproval { openLoginItemsSettings() }
             guard registered == .enabled else { return false }
         }
@@ -114,21 +144,22 @@ final class WakeHelperClient {
 
     /// Restore the usable helper after the user cancels an incomplete uninstall.
     func cancelRemoval() async {
-        if status == .enabled { _ = await call(quiet: true) { $0.cancelRemoval(withReply: $1) } }
+        if await registration.refresh(force: true) == .enabled { _ = await call(quiet: true) { $0.cancelRemoval(withReply: $1) } }
         removing = false
+        healthRetryAfter = 0; healthFailures = 0
     }
 
     private func unregister() async -> Bool {
-        let service = SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName)
-        if service.status == .notRegistered { invalidateConnection(); return true }
-        do {
-            try await service.unregister()
-            invalidateConnection()
-            return service.status == .notRegistered || service.status == .notFound
-        } catch {
+        let result = await registration.perform(.unregister)
+        if let error = result.error {
             Diagnostics.report(.wakeFailed, phase: .remove, reason: "daemon_unregister", error: error)
             return false
         }
+        if let status = result.rawStatus.flatMap(SMAppService.Status.init(rawValue:)), status == .notRegistered || status == .notFound {
+            invalidateConnection()
+            return true
+        }
+        return false
     }
 
     private func invalidateConnection() {

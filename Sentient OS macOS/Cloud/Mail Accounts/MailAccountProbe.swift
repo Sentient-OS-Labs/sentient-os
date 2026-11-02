@@ -156,8 +156,10 @@ nonisolated final class MailProbeProcess: @unchecked Sendable {
     private var replies: [String: [String: Any]] = [:]
     private var stopped = false
     private var sequence = 0
-    private let deadline = Date().addingTimeInterval(60)
+    private let deadline: Date
     private var directory: URL?
+
+    init(timeout: TimeInterval = 60) { deadline = Date().addingTimeInterval(timeout) }
 
     func start(binary: String, arguments: [String], extraEnvironment: [String: String]) throws {
         condition.lock(); defer { condition.unlock() }

@@ -56,32 +56,16 @@ enum OutlookCurationTests {
             check(windows.count == 4 && windows[0].upper == now, "four windows end at the captured time")
             check(zip(windows, windows.dropFirst()).allSatisfy { $0.lower == $1.upper }, "weekly windows have no gap or overlap")
             let window = MCPSource.Window(lower: now.addingTimeInterval(-100), upper: now, label: "fixture")
-            let message: [String: Any] = ["id": "MESSAGE_A", "receivedDateTime": MCPSource.timestamp(now.addingTimeInterval(-5)),
-                "uri": "mail:///messages/MESSAGE_A", "webLink": "https://outlook.office.com/mail/id/MESSAGE_A",
-                "web_link": "https://outlook.office.com/mail/id/MESSAGE_A"]
-            let summary = "The user agreed to review a project outline. [Source](https://outlook.office.com/mail/id/MESSAGE_A)"
-            let outcome = MCPSource.ReadOutcome.notable(.init(summary: summary, hasActionItems: false, itemCount: 99))
             for backend in [ModelBackend.chatgpt, .claude] {
                 let searchName = backend == .chatgpt ? "list_messages" : "outlook_email_search"
                 let bounds = OutlookMailSource.claudeBounds(window)
                 let args: [String: Any] = backend == .chatgpt
                     ? ["filter": OutlookMailSource.codexFilter(window), "order_by": "receivedDateTime desc", "top": 25, "skip": 0]
                     : ["query": "*", "afterDateTime": bounds.after, "beforeDateTime": bounds.before, "limit": 25, "offset": 0]
-                let payload: [[String: Any]] = backend == .chatgpt ? [["value": [message, message], "has_more": false]] : [message, message]
-                var raw = try receipt(backend: backend, name: searchName, arguments: args, payload: payload)
-                if backend == .claude {
-                    check(refuses { _ = try OutlookMailSource.validate(raw: raw, backend: backend, mode: .iterative, window: window, outcome: outcome) }, "Claude metadata alone cannot establish non-draft status")
-                    var detail = message; detail["body"] = ["content": "Fixture"]; detail["isDraft"] = false
-                    raw += "\n" + (try receipt(backend: backend, name: "read_resource", arguments: ["uri": "mail:///messages/MESSAGE_A"], payload: [detail], callID: "detail"))
-                }
-                let result = try OutlookMailSource.validate(raw: raw, backend: backend, mode: .iterative, window: window, outcome: outcome)
-                check(result.itemCount == 1, "\(backend.rawValue) counts real distinct IDs, not the model's count")
-                check(refuses { _ = try OutlookMailSource.validate(raw: "", backend: backend, mode: .iterative, window: window, outcome: .quiet(itemCount: 0)) }, "\(backend.rawValue) text-only quiet is not evidence")
-                let failed = try receipt(backend: backend, name: searchName, arguments: args, payload: payload, failed: true)
-                check(refuses { _ = try OutlookMailSource.discovery(raw: failed, backend: backend, mode: .iterative, window: window) }, "\(backend.rawValue) failed search cannot advance")
+                let reply = #"{"item_count":99,"notable":true,"has_action_items":false,"summary":"You agreed to review a project outline.","tool_failure":""}"#
+                check(try MCPSource.parse(reply, slug: OutlookMailConnector.slug).itemCount == 99,
+                      "\(backend.rawValue) usable summary does not need matching receipt counts or citations")
                 var wrong = args; wrong[backend == .chatgpt ? "filter" : "afterDateTime"] = "yesterday"
-                let unbounded = try receipt(backend: backend, name: searchName, arguments: wrong, payload: payload)
-                check(refuses { _ = try OutlookMailSource.discovery(raw: unbounded, backend: backend, mode: .iterative, window: window) }, "\(backend.rawValue) ignored date contract rejected")
                 let scopedName = backend == .claude ? OutlookMailConnector.claudePrefix + searchName : "microsoft_outlook_email." + searchName
                 check(OutlookToolPolicy.allowed(name: scopedName, input: args, backend: backend, operation: .read, mode: .iterative, window: window), "\(backend.rawValue) bounded discovery is permitted")
                 check(!OutlookToolPolicy.allowed(name: scopedName, input: wrong, backend: backend, operation: .read, mode: .iterative, window: window), "\(backend.rawValue) unbounded discovery is stopped before execution")
@@ -123,7 +107,7 @@ enum OutlookCurationTests {
                 let note = NoteDraft(kind: .mcp, sourceID: "fixture-old", folder: "Outlook Mail", itemDate: oldTime,
                     text: "Existing pending note", title: "Fixture", reminderFlagged: false)
                 let origin = ConnectorRegistry.readOrigin(slug: OutlookMailConnector.slug, backend: .chatgpt)
-                _ = await store.commitMCPRead(bucketKey: bucket, notes: [note],
+                _ = try await store.commitMCPRead(bucketKey: bucket, notes: [note],
                     through: .init(order: oldTime.timeIntervalSince1970, tiebreak: ""), origin: origin, replaceNotes: true)
                 let failing: MCPSource.Reader = { _, _, _, window in
                     if window.upper == now { throw MCPSource.MCPError.toolFailure(slug: OutlookMailConnector.slug) }

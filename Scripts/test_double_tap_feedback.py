@@ -68,13 +68,19 @@ final class DoubleTap {
         var checks = 0
         func check(_ pass: Bool, _ label: String) { precondition(pass, label); checks += 1; print("PASS " + label) }
         func pause(_ ms: Int) async throws { try await Task.sleep(for: .milliseconds(ms)) }
+        func waitUntil(_ condition: () -> Bool, seconds: Int = 5) async throws {
+            let deadline = ContinuousClock.now + .seconds(seconds)
+            while !condition() && ContinuousClock.now < deadline { try await pause(20) }
+        }
         func notice() -> NSWindow? { NSApp.windows.first { String(describing: type(of: $0)) == "DoubleTapNoticePanel" } }
         let run = DoubleTap(), originalKey = NSApp.keyWindow
         var completions = 0
         run.start { _ in completions += 1 }
         check(run.isDrafting, "setup feedback owns the Double Tap task lock immediately")
         run.start { _ in completions += 1 }
-        try await pause(1600)
+        // SwiftUI's first layout can outlast a fixed sleep while a build is running.
+        // Wait for the actual panel, retaining a bounded deadline and all visibility checks.
+        try await waitUntil { notice()?.isVisible == true }
         guard let panel = notice(), let host = panel.contentView else { preconditionFailure("Missing setup notice") }
         check(panel.isVisible && panel.frame.width > 300 && panel.frame.height > 40, "swirl transitions into a fully sized setup message")
         check(panel.ignoresMouseEvents && !panel.canBecomeKey && !panel.canBecomeMain && NSApp.keyWindow === originalKey,
@@ -99,14 +105,14 @@ final class DoubleTap {
         }
         check(DoubleTapSetupNotice.duration == .seconds(3), "message lifetime is three seconds")
         // A real live timer must dismiss the panel and unlock the next gesture.
-        try await pause(2900)
+        try await waitUntil({ !run.isDrafting }, seconds: 4)
         check(!panel.isVisible && !run.isDrafting && completions == 1, "feedback dismisses and completes exactly once after its timeout")
         run.start { _ in completions += 1 }
         run.cancel()
         try await pause(100)
         check(!panel.isVisible && !run.isDrafting && completions == 2, "cancelling during animation cleans up and completes once")
         run.start { _ in completions += 1 }
-        try await pause(1600)
+        try await waitUntil { panel.isVisible }
         check(panel.isVisible, "a later gesture reuses and reveals the notice")
         run.cancel()
         try await pause(100)

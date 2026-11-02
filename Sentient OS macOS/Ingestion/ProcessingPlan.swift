@@ -45,8 +45,16 @@ enum ProcessingPlan {
         if initialCompletedAt(defaults) == nil { defaults.set(date.timeIntervalSince1970, forKey: initialCompletedKey) }
     }
 
-    /// Interrupted foreground work resumes. Unattended work stays in its overnight schedule.
-    static func recovered(_ record: Record) -> Record {
+    /// Initial creation waits for explicit resume after relaunch. Later unattended work keeps
+    /// its schedule; later foreground work retains the existing recovery behavior.
+    static func recovered(_ record: Record, initialComplete: Bool = true) -> Record {
+        if !initialComplete, [.running, .scheduled, .requested].contains(record.status) {
+            var recovered = record
+            recovered.status = .paused
+            recovered.due = nil
+            recovered.notice = "Analysis is paused. Resume when you’re ready; saved on-device work is kept and unfinished cloud steps restart safely."
+            return recovered
+        }
         guard record.status == .running else { return record }
         var recovered = record
         recovered.status = record.trigger == .overnight ? .scheduled : .requested

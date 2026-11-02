@@ -80,12 +80,19 @@ operation races its reply/error against a 30-second timeout and resumes its call
 
 ## Setup, enablement, and migration
 
-`enableAfterSetup()` runs after an explicit overnight-analysis choice. Reaching Home or choosing
-Run now does not enable the production schedule. Overnight setup presents the wake helper and
-launch-at-login controls only for that choice; neither is silently installed. The one-time
+`enableAfterSetup()` runs after the user completes wake/login setup and explicitly starts first
+analysis. Both services are required at this setup boundary, but neither is silently registered.
+First analysis starts now and supports explicit pause/resume; it has no overnight timing choice.
+The scheduler also arms recovery wakes while initial analysis is unfinished. A running initial
+analysis keeps its existing owner; failed initial work can retry at the scheduled time. Explicit
+pauses remain paused. Interrupted or legacy-scheduled first analyses reopen paused after relaunch.
+The one-time
 `scheduler.enabledAfterSetup` latch preserves existing explicit values of `scheduler.enabled` and
 respects the old `scheduler.autoEnableFired` latch. The obsolete auto-enable delay preference is
-removed; there is no 14-hour timer.
+removed; there is no 14-hour timer. Established installations that completed analysis before the
+old auto-enable timer fired recover scheduling on launch if no explicit on/off preference exists.
+Settings provides an explicit overnight switch and shows the actual armed wake. Turning it off
+clears pending scheduled work while allowing an active analysis to finish.
 
 The scheduler can run when `dbg.scheduler.enabled` is on, when `scheduler.enabled` is on outside
 knowledge-base-only mode, or when the coordinator has a pending first night. That explicit first-night
@@ -132,7 +139,12 @@ overnight diagnostic, then persists the next due date with a reason. Explicit Ru
 when its model or sources are unavailable; the coordinator monitors readiness independently of windows.
 
 For admitted overnight work, the coordinator obtains `beginAwake(1800)`, feeds the helper roughly
-every 60 seconds, and holds an idle-system-sleep activity. `ProcessingRun` reads local sources through
+every 60 seconds, and holds an idle-system-sleep activity. First full analysis also obtains the
+helper hold while plugged in, releasing it on battery. An unavailable helper leaves manual analysis
+running with a keep-the-lid-open notice. Awake requests and cleanup are serialized so a late reply
+cannot retain a hold after Pause. A heartbeat succeeds only while the helper still holds its awake
+session; after a helper restart, the coordinator reacquires it. Stall and run-duration measurements
+use a suspending clock, so actual sleep does not count as stalled inference. `ProcessingRun` reads local sources through
 `IterativeRun`, then selected Gmail, Calendar, and curated MCP sources, followed by `ProactiveCycle`
 for a full cycle. Cancellation checks between legs prevent a draining read from starting a new leg.
 The coordinator retains exclusive ownership through task completion and helper cleanup.

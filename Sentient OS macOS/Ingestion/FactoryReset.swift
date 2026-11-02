@@ -26,6 +26,12 @@ enum FactoryReset {
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
         guard conversation.beginMaintenance() else { return false }
         defer { conversation.endMaintenance() }
+        await ComputerUseGate.shared.beginTeardown()
+        await NativePermissionCheck.shared.beginTeardown()
+        defer {
+            NativePermissionCheck.shared.endTeardown()
+            ComputerUseGate.shared.endTeardown()
+        }
         let processing = appState?.processing ?? ProcessingCoordinator.shared
         await processing.suspend()
         appState?.scheduler.reevaluate()
@@ -44,18 +50,21 @@ enum FactoryReset {
             return false
         }
         await conversation.drainBackgroundWork()
-        await NativePermissionCheck.shared.close()
         await ComputerUseDoctor.shared.clear(defaults: defaults)
+        await NativePermissionCheck.shared.close()
         // Invalidate in-flight learning before any suspension; explicit settings survive.
         SidekickInstructionStore.resetLearning()
         await HostedConnectorSetup.beginTeardown()
         defer { HostedConnectorSetup.endTeardown() }
         // Retain contact records and their local identity, like invitation access. Reset clears
         // learned knowledge and app connections, not the founders' feedback contact list.
-        do { try await DirectMCPConnections.shared.removeAll() }
+        do {
+            try await HostedConnectorClient.shared.disconnectAll()
+            try await DirectMCPConnections.shared.removeAll()
+        }
         catch {
             Diagnostics.report(.cleanupFailed, phase: .reset, reason: "connector_credentials", error: error)
-            Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false
+            Log("FactoryReset: connection cleanup needs retry"); return false
         }
         await processing.reset()
         await CycleStore.shared.wipeEverything()
@@ -78,12 +87,13 @@ enum FactoryReset {
         d.removeObject(forKey: "onboarding.emailSubmitted")
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
         d.removeObject(forKey: CodexAuth.assertedPlusKey)   // …and asks again before trusting
-        // The Frontier Model Choice (ModelBackend/CustomProvider + its Keychain key) SURVIVES
+        // The AI Models & Accounts (ModelBackend/CustomProvider + its Keychain key) SURVIVES
         // reset on purpose — like the wake helper it's a setup choice, not a learning; a rebuild
         // should come back up on the same engine. Uninstall is what destroys it.
         d.removeObject(forKey: AppState.onboardingKey)
         d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)         // re-offer the optional voice grant on rebuild
         d.removeObject(forKey: HealthCaution.nativeComputerUseEverReadyKey)
+        NativePermissionSetup.shared.reset()
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
         SidekickHistory.reset()                                          // paired requests and outcomes start blank on rebuild
         DiagnosticHistory.reset(defaults: d)

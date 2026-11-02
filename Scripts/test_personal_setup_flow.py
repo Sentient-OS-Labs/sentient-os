@@ -179,12 +179,16 @@ enum PermissionRelaunchDraft {
 }
 enum PermissionWaitDraft { static func clear() {} }
 enum SidekickInstructionStore { static func resetLearning() {} }
-@MainActor final class NativePermissionCheck { static let shared = NativePermissionCheck(); var isChecking=false; func close() async {} }
+@MainActor final class NativePermissionCheck { static let shared = NativePermissionCheck(); var isChecking=false; func close() async {}; func beginTeardown() async {}; func endTeardown() {} }
 @MainActor final class ComputerUseDoctor { static let shared = ComputerUseDoctor(); var isRunning=false; func clear(defaults: UserDefaults) async {} }
 @MainActor enum HostedConnectorSetup {
     static var active = false
     static func beginTeardown() async { active = true }
     static func endTeardown() { active = false }
+}
+@MainActor final class HostedConnectorClient {
+    static let shared = HostedConnectorClient()
+    func disconnectAll() async throws {}
 }
 @MainActor final class DirectMCPConnections {
     static let shared = DirectMCPConnections(); var fails = false
@@ -206,7 +210,10 @@ enum CodexAuth {
     static let kbOnlyKey = "plan.kbOnly", assertedPlusKey = "plan.assertedPlus"
     static var knowledgeBaseOnly: Bool { UserDefaults.standard.bool(forKey: kbOnlyKey) }
 }
-enum ComputerUseGate { static let micSpeechOfferedKey = "mic" }
+@MainActor final class ComputerUseGate { static let micSpeechOfferedKey = "mic"; static let shared=ComputerUseGate(); func beginTeardown() async {}; func endTeardown() {} }
+@MainActor final class WakeHelperClient {static let shared=WakeHelperClient();var isReady=false}
+enum LoginItem {static var isEnabled=false}
+@MainActor final class NativePermissionSetup {static let shared=NativePermissionSetup();func reset(){}}
 enum HealthCaution { static let nativeComputerUseEverReadyKey = "native"; static let computerUseEverReadyKey = "legacy" }
 enum SidekickHistory { static func reset() {} }
 enum SourceHealth { static let readStatusKey = "health" }
@@ -312,18 +319,28 @@ extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value 
         check(!app.scheduler.isEnabled, "stale scheduler switches cannot start work before personal setup")
         d.removeObject(forKey: OvernightScheduler.enabledKey)
         d.removeObject(forKey: OvernightScheduler.prodEnabledKey)
+        let interrupted=ProcessingPlan.recovered(.init(status:.running,trigger:.onboarding),initialComplete:false)
+        check(interrupted.status == .paused && interrupted.due == nil,"interrupted first analysis waits for explicit resume")
+        let oldNight=ProcessingPlan.recovered(.init(status:.scheduled,trigger:.overnight,due:Date()),initialComplete:false)
+        check(oldNight.status == .paused && oldNight.due == nil,"legacy first-night schedules become manual resume")
+        check(ProcessingPlan.recovered(.init(status:.paused,trigger:.onboarding),initialComplete:false).status == .paused,
+              "explicit pauses survive relaunch")
         SourceSelection.selectionCount = 2
         check(!app.finishPersonalSetup(.now) && ProcessingPlan.read(d).status == .idle,
               "last-moment source loss rejects setup completion without persisting work")
         SourceSelection.selectionCount = 3; app.processing.isBusy = true
         check(!app.finishPersonalSetup(.now), "setup cannot replace active analysis")
         app.processing.isBusy = false
+        check(!app.finishPersonalSetup(.now), "first analysis requires background setup")
+        WakeHelperClient.shared.isReady=true
+        check(!app.finishPersonalSetup(.now), "wake alone cannot bypass launch-at-login setup")
+        LoginItem.isEnabled=true
         check(app.finishPersonalSetup(.now) && app.processing.record.status == .requested
-            && app.processing.resumeSawComplete && !app.scheduler.isEnabled,
-              "run-now persists intent then setup completion before monitoring, without scheduling")
+            && app.processing.resumeSawComplete && app.scheduler.isEnabled,
+              "ready background setup starts analysis now and enables future nightly updates")
         app.processing.record = .init()
-        check(app.finishPersonalSetup(.overnight) && app.processing.record.status == .scheduled
-            && app.scheduler.isEnabled, "explicit overnight choice creates durable first-night intent")
+        check(app.finishPersonalSetup(.overnight) && app.processing.record.status == .requested
+            && app.scheduler.isEnabled, "legacy timing callers also start first analysis now")
         app.processing.initialComplete = true; app.processing.record = .init()
         d.set(false, forKey: OvernightScheduler.prodEnabledKey)
         app.scheduler.enableAfterSetup()
@@ -408,5 +425,5 @@ source = '\n'.join((fixture, progress, plan, member(relaunch, '@MainActor @Obser
 with tempfile.TemporaryDirectory(prefix='sentient-personal-setup-') as directory:
     path = Path(directory)
     (path / 'main.swift').write_text(source)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(path / 'main.swift'), '-o', str(path / 'check')], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(path / 'main.swift'), str(APP / 'Ingestion/InitialAnalysisRecovery.swift'), '-o', str(path / 'check')], check=True)
     subprocess.run([str(path / 'check')], check=True)

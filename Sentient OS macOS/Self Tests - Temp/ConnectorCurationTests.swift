@@ -1,7 +1,7 @@
 #if DEBUG
 //
 // ConnectorCurationTests.swift
-// Exercises strict read outcomes, real SwiftData transactions, origin backfills, prompt
+// Exercises decoded read outcomes, real SwiftData transactions, origin backfills, prompt
 // variants, classification validation and connector status handling using isolated fixtures.
 // Doc: Documentation - General - Self-Testing (Eval Harness).md
 //
@@ -12,7 +12,10 @@ import os
 
 enum ConnectorCurationTests {
     @MainActor static func run() async {
-        await ModelBackend.$runOverride.withValue(.chatgpt) { await checks() }
+        let fixtures = Dictionary(uniqueKeysWithValues: ConnectorRegistry.packs.map { ($0.slug, ConnectorReadDiscovery.Surface()) })
+        await ConnectorReadDiscovery.$current.withValue(fixtures) {
+            await ModelBackend.$runOverride.withValue(.chatgpt) { await checks() }
+        }
     }
 
     @MainActor private static func checks() async {
@@ -119,9 +122,14 @@ enum ConnectorCurationTests {
             check(try MCPSource.parse(good, slug: slug).result?.hasActionItems == true, "notable result preserves action items")
             check(try MCPSource.parse(quiet, slug: slug) == .quiet(itemCount: 3), "valid quiet result keeps its considered count")
             check(try MCPSource.parse("```json\n" + good + "\n```", slug: slug).result != nil, "fenced valid JSON remains compatible")
-            check(refuses(good.replacingOccurrences(of: "ACTION ITEMS", with: "BACKGROUND")), "action flag requires its actual section")
-            check(refuses(good.replacingOccurrences(of: "The user", with: "You")), "Drive summary cannot address the reader")
-            check(refuses(good.replacingOccurrences(of: "confirmed project", with: "$500K project")), "Drive summary rejects an exact currency amount")
+            var extended = try JSONSerialization.jsonObject(with: Data(good.utf8)) as! [String: Any]
+            extended["provider_metadata"] = ["source": "synthetic", "version": 2]
+            let extendedJSON = String(decoding: try JSONSerialization.data(withJSONObject: extended), as: UTF8.self)
+            check(try MCPSource.parse(extendedJSON, slug: slug) == MCPSource.parse(good, slug: slug),
+                  "additive response metadata does not change the decoded summary")
+            check(!refuses(good.replacingOccurrences(of: "ACTION ITEMS", with: "BACKGROUND")), "action flag survives differing heading wording")
+            check(!refuses(good.replacingOccurrences(of: "The user", with: "You")), "summary style does not reject usable content")
+            check(!refuses(good.replacingOccurrences(of: "confirmed project", with: "$500K project")), "currency formatting alone is not a failed read")
             check(try MCPSource.parse(good.replacingOccurrences(of: "deadline", with: "deadline September 8—10"), slug: slug)
                 .result?.summary.contains("September 8-10") == true, "typography normalization preserves a date range without another read")
             for bad in ["", "not json", "{}", good.replacingOccurrences(of: "\"item_count\":1,", with: ""),
@@ -141,43 +149,16 @@ enum ConnectorCurationTests {
             let sensitive = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"Synthetic card fixture: 4111 1111 1111 1111","tool_failure":""}"#
             check(try MCPSource.parse(sensitive, slug: slug) == .quiet(itemCount: 1), "high-risk text is dropped while anonymous coverage stays intact")
 
-            func codexReadTrace(_ name: String, failed: Bool = false, completed: Bool = true) throws -> String {
-                let value: [String: Any] = ["type": "item.completed", "item": [
-                    "type": "mcp_tool_call", "tool": name, "status": completed ? "completed" : "failed",
-                    "error": NSNull(), "result": ["isError": failed, "content": []]]]
-                return String(data: try JSONSerialization.data(withJSONObject: value), encoding: .utf8)!
+            for mode: MCPSource.ReadMode in [.initial, .iterative] {
+                let result = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                    FullAcceptanceTests.envelope(good)
+                }) { try await MCPSource.read(slug: slug, prompt: "Synthetic read", mode: mode) }
+                check(result.result?.hasActionItems == true, "usable summary needs no separate native receipt proof")
+                let empty = try await FrontierRun.$acceptanceRun.withValue({ _ in
+                    FullAcceptanceTests.envelope(quiet)
+                }) { try await MCPSource.read(slug: slug, prompt: "Synthetic read", mode: mode) }
+                check(empty == .quiet(itemCount: 3), "quiet result needs no separate discovery proof")
             }
-            func claudeReadTrace(_ name: String, failed: Bool = false, resultID: String = "read1") throws -> String {
-                let call: [String: Any] = ["type": "assistant", "message": ["content": [[
-                    "type": "tool_use", "id": "read1", "name": name]]]]
-                let result: [String: Any] = ["type": "user", "message": ["content": [[
-                    "type": "tool_result", "tool_use_id": resultID, "is_error": failed,
-                    "content": [["type": "text", "text": "{\"files\":[]}"]]]]]]
-                return try [call, result].map { String(data: try JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }.joined(separator: "\n")
-            }
-            check(!MCPSource.hasDriveReadEvidence(raw: #"{"type":"item.completed","item":{"type":"agent_message","text":"I checked Drive and found nothing"}}"#,
-                backend: .chatgpt, requiresDiscovery: true), "model prose is not evidence for a quiet checkpoint")
-            check(try MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.search"),
-                backend: .chatgpt, requiresDiscovery: true), "successful empty discovery permits a quiet result")
-            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.search", failed: true),
-                backend: .chatgpt, requiresDiscovery: true), "failed discovery cannot establish quiet success")
-            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.search", completed: false),
-                backend: .chatgpt, requiresDiscovery: true), "incomplete tool calls are not successful reads")
-            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.fetch"),
-                backend: .chatgpt, requiresDiscovery: true), "one fetched file cannot establish a quiet discovery window")
-            check(try MCPSource.hasDriveReadEvidence(raw: codexReadTrace("gdrive.fetch"),
-                backend: .chatgpt, requiresDiscovery: false), "successful content reads can support notable results")
-            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("gmail.search"),
-                backend: .chatgpt, requiresDiscovery: true), "another connector cannot establish Drive read evidence")
-            let search = "mcp__claude_ai_Google_Drive__search_files"
-            check(try MCPSource.hasDriveReadEvidence(raw: claudeReadTrace(search),
-                backend: .claude, requiresDiscovery: true), "Claude discovery requires a paired successful tool result")
-            check(try !MCPSource.hasDriveReadEvidence(raw: claudeReadTrace(search, failed: true),
-                backend: .claude, requiresDiscovery: true), "Claude permission denials cannot advance a quiet checkpoint")
-            check(try !MCPSource.hasDriveReadEvidence(raw: claudeReadTrace(search, resultID: "unrelated"),
-                backend: .claude, requiresDiscovery: true), "unmatched Claude tool results are not read evidence")
-            check(try !MCPSource.hasDriveReadEvidence(raw: claudeReadTrace("ToolSearch"),
-                backend: .claude, requiresDiscovery: true), "discovering tool names is not reading Drive")
 
             let schema = Schema([BucketPointer.self, CycleNote.self])
             let container = try ModelContainer(for: schema,
@@ -189,7 +170,7 @@ enum ConnectorCurationTests {
             let origin = ConnectorRegistry.readOrigin(slug: slug, backend: .chatgpt)
             let oldNote = NoteDraft(kind: .mcp, sourceID: "fixture-old", folder: "Google Drive", itemDate: oldTime,
                                     text: "Existing pending summary", title: "Fixture", reminderFlagged: false)
-            check(await store.commitMCPRead(bucketKey: bucket, notes: [oldNote],
+            check(try await store.commitMCPRead(bucketKey: bucket, notes: [oldNote],
                 through: ItemKey(order: oldTime.timeIntervalSince1970, tiebreak: ""), origin: origin,
                 replaceNotes: true) == .saved, "baseline note and origin are committed together")
             let notable = try MCPSource.parse(good, slug: slug)
@@ -234,7 +215,7 @@ enum ConnectorCurationTests {
             check((await store.notes()).count == 1 && afterQuiet?.mark.order == now.addingTimeInterval(40).timeIntervalSince1970,
                   "successful quiet read advances without erasing pending summaries")
 
-            _ = await store.commitMCPRead(bucketKey: bucket, notes: [],
+            _ = try await store.commitMCPRead(bucketKey: bucket, notes: [],
                 through: ItemKey(order: now.timeIntervalSince1970, tiebreak: ""), origin: "v1:claude:0", replaceNotes: false)
             _ = try await MCPSource.run(slug: slug, mode: .iterative, store: store,
                                        now: now.addingTimeInterval(50), reader: reader)
@@ -281,8 +262,8 @@ enum ConnectorCurationTests {
             let identityA = try MCPSource.profileFingerprint(raw: identityTrace("account-a"))
             let identityB = try MCPSource.profileFingerprint(raw: identityTrace("account-b"))
             check(identityA?.count == 64 && identityA != identityB, "account identity is a stable local fingerprint")
-            func structuredProfile(_ workspace: Any, extra: Bool = false) throws -> String {
-                var profile: [String: Any] = ["id": "account-a", "name": "Fixture", "email": "fixture@example.invalid",
+            func structuredProfile(_ workspace: Any, extra: Bool = false, id: Any = "account-a") throws -> String {
+                var profile: [String: Any] = ["id": id, "name": "Fixture", "email": "fixture@example.invalid",
                     "nickname": NSNull(), "picture": NSNull(), "workspace_id": workspace, "workspace_name": NSNull()]
                 if extra { profile["unexpected_scope"] = "unknown" }
                 return String(data: try JSONSerialization.data(withJSONObject: ["type": "item.completed", "item": [
@@ -293,8 +274,10 @@ enum ConnectorCurationTests {
             check(try MCPSource.profileFingerprint(raw: structuredProfile("workspace-a")) != MCPSource.profileFingerprint(raw: structuredProfile("workspace-b")), "Drive workspace changes alter checkpoint identity")
             do { _ = try MCPSource.profileFingerprint(raw: structuredProfile(42)); check(false, "malformed workspace must fail") }
             catch { check(true, "malformed Drive workspace is rejected") }
-            do { _ = try MCPSource.profileFingerprint(raw: structuredProfile(NSNull(), extra: true)); check(false, "unknown profile shape must fail") }
-            catch { check(true, "unreviewed Drive profile fields remain rejected") }
+            check(try MCPSource.profileFingerprint(raw: structuredProfile(NSNull(), extra: true)) == identityA,
+                  "additive Drive profile metadata preserves the same account fingerprint")
+            do { _ = try MCPSource.profileFingerprint(raw: structuredProfile(NSNull(), id: 42)); check(false, "malformed account ID must fail") }
+            catch { check(true, "malformed required Drive identity types are rejected") }
             do { _ = try MCPSource.profileFingerprint(raw: identityTrace("account-a") + "\n" + identityTrace("account-b")); check(false, "mixed identities must fail") }
             catch { check(true, "mixed successful profile identities are rejected") }
             do { _ = try MCPSource.profileFingerprint(raw: #"{"type":"item.completed","item":{"type":"agent_message","text":"account-a"}}"#); check(false, "model identity claims must fail") }
@@ -373,6 +356,36 @@ enum ConnectorCurationTests {
             else { check(false, "exact final DONE accepts trailing whitespace") }
             if case .couldNot = AgentStatus.parseConnector("STATUS: COULD_NOT - The content is not done") { check(true, "failure reason mentioning done remains a failure") }
             else { check(false, "failure reason mentioning done remains a failure") }
+
+            let coverage = AppleCalendarSource.Coverage(now: now, ids: ["fixture"])
+            func event(_ id: String, _ content: String) -> AppleCalendarSource.Event {
+                .init(id: id, start: now, end: now.addingTimeInterval(60), schedule: "fixture", content: content, revision: content)
+            }
+            let before = AppleCalendarSource.Snapshot(capturedAt: now, coverage: coverage,
+                events: [event("keep", "same"), event("edit", "old"), event("delete", "old")])
+            let after = AppleCalendarSource.Snapshot(capturedAt: now, coverage: coverage,
+                events: [event("keep", "same"), event("edit", "new"), event("add", "new")])
+            check(after.unchangedEventIDs(comparedTo: before) == ["keep"],
+                  "calendar reconciliation retains unchanged events while isolating additions, edits and deletions")
+            check(after.partialMarker(pending: 2).text.contains("2 events are still awaiting analysis"),
+                  "partial calendar publication states its missing coverage")
+            check(after.partialMarker(pending: 2).text.contains("do not establish free time"),
+                  "partial calendar coverage cannot imply availability")
+            var skippedCalendar = CalendarRetryCache(coverage: coverage)
+            skippedCalendar.skipped = ["keep": "same", "edit": "old", "delete": "old"]
+            skippedCalendar.validate(against: after)
+            check(skippedCalendar.skipped == ["keep": "same"], "unchanged failed calendar events stay skipped; edits and deletions clear old failures")
+            let tomorrow = AppleCalendarSource.Snapshot(capturedAt: now.addingTimeInterval(86400),
+                coverage: .init(now: now.addingTimeInterval(86400), ids: ["fixture"]), events: after.events)
+            skippedCalendar.validate(against: tomorrow)
+            check(skippedCalendar.skipped == ["keep": "same"], "rolling calendar window does not retry yesterday's failed event")
+            let mail = AppleMailRow(id: 100, account: "fixture", messageID: "fixture", date: now, excluded: false, sent: false)
+            var mailState = AppleMailCheckpoint(generation: "fixture", top: 0)
+            mailState.finish(.init(row: mail, phase: .discovery), retry: false, skipFailure: true)
+            check(mailState.deferred.isEmpty && mailState.prepare(generation: "fixture", rows: [mail], now: now).isEmpty,
+                  "failed model item is excluded from Mail retries and reconciliation")
+            let restoredMail = try JSONDecoder().decode(AppleMailCheckpoint.self, from: JSONEncoder().encode(mailState))
+            check(restoredMail.skippedRows == [100], "Mail skip survives restart")
 
             if let path = ProcessInfo.processInfo.environment["LAB_MIGRATION_STORE"] {
                 let migrated = try ModelContainer(for: schema,

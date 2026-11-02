@@ -22,6 +22,18 @@ final class Process: @unchecked Sendable {
 }
 @MainActor enum CodexCLI {
     static var status: () async -> Bool = { false }
+    static var logoutStatus: Int32 = 0
+    static var logoutArgs: [String] = []
+    enum Availability { case notInstalled }
+    enum CLIError: Error { case notAvailable(Availability), exitFailure(code: Int32, message: String) }
+    struct Result { let status: Int32; let stderr: String }
+    actor Cache { func invalidate() {} }
+    static let shared = Cache()
+    static func locateBinary() -> String? { "/fixture/codex" }
+    static func executeAsync(binary: String, args: [String], stdinText: String?, cwd: String?, timeout: TimeInterval) async throws -> Result {
+        logoutArgs = args
+        return Result(status: logoutStatus, stderr: "fixture")
+    }
     static var launchFails = false
     static var processes: [Process] = []
     enum Failure: Error { case launch }
@@ -32,6 +44,10 @@ final class Process: @unchecked Sendable {
         let process = Process(); process.onURL = onURL; process.onExit = onExit
         processes.append(process); return process
     }
+}
+@MainActor enum CodexRuntime {
+    static var clears = 0
+    static func clearSignedOutAccountCache() throws { clears += 1 }
 }
 @MainActor final class Gate {
     var entered = false
@@ -171,6 +187,20 @@ __METHODS__
         check(retry != nil, "Cancelled launch remains retryable")
         await fresh.cancelLogin(ifAttempt: retry)
 
+        CodexCLI.status = { true }
+        await fresh.refreshLoginStatus()
+        do { try await fresh.signOut() } catch { fatalError("Logout failed") }
+        check(!fresh.loggedIn && !fresh.signingOut, "Logout clears observable login")
+        check(CodexCLI.logoutArgs == ["logout"] && CodexRuntime.clears == 1, "Official logout then private cache cleanup")
+        firstProcess.onURL?(link); firstProcess.onExit?()
+        for _ in 0..<100 { await Task.yield() }
+        check(!fresh.loggedIn && fresh.loginURL == nil, "Old login callbacks cannot undo logout")
+        CodexCLI.logoutStatus = 1
+        do { try await fresh.signOut(); fatalError("Expected failure") } catch {}
+        check(!fresh.signingOut && CodexRuntime.clears == 1, "Failed logout remains retryable and retains cache")
+        CodexCLI.logoutStatus = 0
+        try! await fresh.signOut()
+        check(CodexRuntime.clears == 2, "Logout retry completes")
         fresh.shuttingDown = true
         let afterShutdown = await fresh.startLogin()
         check(afterShutdown == nil, "Shutdown blocks sign-in")

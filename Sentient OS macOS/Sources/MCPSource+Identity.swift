@@ -1,7 +1,7 @@
 //
 // MCPSource+Identity.swift
-// Binds Codex Drive checkpoints to the connected account using the verified profile read.
-// Only a local fingerprint is retained. Claude currently exposes no equivalent profile tool.
+// Binds checkpoints to the current connection. Explicit profile diagnostics remain available
+// in the developer lab; ordinary ingestion does not require a profile tool.
 // Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 //
 
@@ -18,6 +18,7 @@ extension MCPSource {
         return ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" ? origin + ":notion-history-v2" : origin
     }
 
+    #if DEBUG
     static func readIdentity(slug: String, onReceipt: ReceiptObserver? = nil) async throws -> String? {
         if slug == OutlookCalendarConnector.slug { return try await OutlookCalendarConnector.readIdentity(onReceipt: onReceipt).fingerprint }
         if slug == OutlookMailConnector.slug { return try await OutlookMailConnector.readIdentity(onReceipt: onReceipt).fingerprint }
@@ -35,9 +36,12 @@ extension MCPSource {
             do {
                 var inv = readInvocation(slug: slug, prompt: prompt)
                 inv.mcpReadToolNames = ["get_profile"]
-                inv.effort = .low
+                inv.effort = .medium
                 inv.timeout = 60
-                let result = try await FrontierRun.run(inv)
+                let request = inv
+                let result = try await Diagnostics.withOperation("mcp_identity_attempt", propagatesFailure: false) {
+                    try await FrontierRun.run(request)
+                }
                 envelope = result
                 meter.withLock { values in
                     var total = values[slug] ?? (0, 0)
@@ -112,4 +116,5 @@ extension MCPSource {
         guard identities.count == 1 else { throw MCPError.connectionChanged }
         return identities.first!
     }
+    #endif
 }

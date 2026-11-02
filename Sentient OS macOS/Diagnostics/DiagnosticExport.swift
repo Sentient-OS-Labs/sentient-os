@@ -171,7 +171,7 @@ enum DiagnosticExport {
                 build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
                 binaryID: BuildIdentity.identifier,
                 buildConfiguration: configuration, lastExplicitResetAt: defaults.object(forKey: "diagnostics.lastExplicitResetAt") as? Date,
-                launchAtLogin: LoginItem.isEnabled,
+                launchAtLogin: await LoginItem.refresh(),
                 onboardingComplete: defaults.bool(forKey: AppState.onboardingKey),
                 analysisRunning: PipelineActivity.shared.isRunning,
                 computerTaskRunning: appState.commandCoordinator.run.isRunning,
@@ -244,6 +244,7 @@ enum DiagnosticExport {
                 ?? ["desktop", "documents", "downloads"].contains(source)
         }
         result["customFolders"] = !CustomRoots.urls.isEmpty
+        result["siyuan"] = defaults.bool(forKey: SiYuanSource.enabledKey)
         result["appleMail"] = !AppleMailSelection.accounts.isEmpty
         result["appleCalendar"] = AppleCalendarSource.isEnabled
         return result

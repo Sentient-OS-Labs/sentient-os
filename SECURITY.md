@@ -58,6 +58,28 @@ These distinct paths are why a product-wide claim that all files, messages or sc
 leave the Mac would be inaccurate. Local source analysis, cloud drafting, user-requested actions and
 optional sharing each have their own boundary.
 
+### Optional hosted inference and connectors
+
+The source also includes Sentient-funded Anthropic inference and hosted connectors. The provider
+picker remains hidden, an unset gateway URL keeps the service unavailable, and the database policies
+install disabled. Source publication does not deploy or activate these services.
+
+When configured and enabled, task context passes through Sentient's gateway to Anthropic. This can
+include knowledge summaries and notes, user instructions, screen/app content and actual message text
+from enabled research or connected services. Hosted connectors use Composio for provider credentials
+and execution; those credentials are not confined to the Mac's Keychain. Provider processing,
+retention and temporary-file policies apply and must be disclosed for the deployed configuration.
+
+A separate anonymous installation credential authenticates hosted usage. The server records bounded
+operational metadata, run/account identifiers, usage and accounting records. Run capabilities bind
+tools to an account generation and read or action scope. Background work is read-only; requested
+writes have separate authorization and uncertain outcomes do not trigger automatic replay.
+Explicit source selections survive failed reads and are reconsidered on the next processing attempt.
+
+Hosted inference and optional knowledge sharing have separate identities and controls. Disabling
+sharing does not disable hosted inference. See [hosted inference](HostedInference/README.md) and
+[hosted connectors](HostedInference/CONNECTORS_REVIEW.md) for configuration, limits and rollout checks.
+
 ## Permissions and actions
 
 Full Disk Access supports local readers, including Apple Mail, Notes and conversations. Source

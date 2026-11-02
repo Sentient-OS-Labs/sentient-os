@@ -11,6 +11,11 @@ final class MainNavigation {
     enum Page: Equatable { case home, settings, knowledge }
     private(set) var page: Page = .home
     private(set) var previousPage: Page?
+    enum ModelSettingsSection: String, CaseIterable, Identifiable {
+        case main = "Main AI", doubleTap = "Double Tap"
+        var id: Self { self }
+    }
+    var modelSettingsSection: ModelSettingsSection = .main
     var settingsPane: SettingsView.Pane = .sources
     private(set) var hasOpenedKnowledge = false
 
@@ -35,7 +40,10 @@ final class MainNavigation {
         let token = resetToken
         let proceed = { [self] in
             guard resetToken == token else { return }
-            if let settingsPane { self.settingsPane = settingsPane }
+            if let settingsPane {
+                self.settingsPane = settingsPane
+                if settingsPane == .frontierModel { modelSettingsSection = .main }
+            }
             if page == .knowledge { hasOpenedKnowledge = true }
             if self.page != page { previousPage = self.page }
             self.page = page
@@ -58,6 +66,7 @@ final class MainNavigation {
         previousPage = nil
         page = .home
         settingsPane = .sources
+        modelSettingsSection = .main
         hasOpenedKnowledge = false
     }
 

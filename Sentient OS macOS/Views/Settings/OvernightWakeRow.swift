@@ -2,7 +2,7 @@
 //  OvernightWakeRow.swift
 //  Sentient OS macOS · Views/Settings/
 //
-//  Shared native helper setup for onboarding and Permissions & Health. refresh checks actual
+//  Shared native helper setup for onboarding and Permissions & Help. refresh checks actual
 //  readiness; setUp requests registration; monitor follows approval while the row is visible.
 //  Doc: Documentation - Settings.md
 //
@@ -20,6 +20,7 @@ final class OvernightWakeSetup {
 
     #if DEBUG
     private static var sourceFixtureRoot: URL?
+    private static var sourceFixtureReady = false
     private(set) static var sourceFixtureRefreshes = 0
     private(set) static var sourceFixtureSetups = 0
 
@@ -41,12 +42,22 @@ final class OvernightWakeSetup {
               manifest["suite"] as? String == "ai.sentient.sidekick-app." + nonce,
               UserDefaults.standard.string(forKey: "lab.fixture.nonce") == nonce else { return false }
         sourceFixtureRoot = owned
+        sourceFixtureReady = false
         sourceFixtureRefreshes = 0; sourceFixtureSetups = 0
         return true
     }
     private static var isSourceFixtureProcess: Bool {
         ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickapp"
             && ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-personal-sources"
+    }
+    /// The owned source UI lab can model both background requirements without touching macOS.
+    static var sourceFixtureReadiness: Bool? {
+        guard isSourceFixtureProcess else { return nil }
+        return sourceFixtureRoot != nil && sourceFixtureReady
+    }
+    static func setSourceFixtureReady(_ ready: Bool) {
+        guard isSourceFixtureProcess, sourceFixtureRoot != nil else { return }
+        sourceFixtureReady = ready
     }
     #endif
 
@@ -55,7 +66,7 @@ final class OvernightWakeSetup {
         if Self.isSourceFixtureProcess {
             guard Self.sourceFixtureRoot != nil else { return }
             Self.sourceFixtureRefreshes += 1
-            health = .notSetUp
+            health = Self.sourceFixtureReady ? .ready : .notSetUp
             return
         }
         #endif

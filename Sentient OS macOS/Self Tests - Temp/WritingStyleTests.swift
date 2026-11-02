@@ -23,20 +23,25 @@ enum WritingStyleTests {
         let dir = fm.temporaryDirectory.appendingPathComponent("writingstyle-tests-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: dir) }
         do {
+            guard Bundle.main.bundleIdentifier?.hasPrefix("ai.sentient.writingstyle-tests") == true else { throw TestError.failed }
             guard VaultGenerator.vaultRoot.path.hasPrefix("/tmp/") || VaultGenerator.vaultRoot.path.hasPrefix("/private/tmp/") else { throw TestError.failed }
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             try testLocal(in: dir)
             try testStripper()
             try testMail()
+            try testOutlookDiscovery()
             try await WritingStyle.$acceptanceSources.withValue(["gmail", "outlook-mail"]) {
                 try await testGeneration()
             }
-            let view = WritingStyleSetupView(runsSetup: false)
-            let renderer = ImageRenderer(content: view)
-            renderer.scale = 2
-            if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
-               let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
-                try png.write(to: URL(fileURLWithPath: "/tmp/writingstyle-setup-preview.png"))
+            try await FullAcceptanceTests.writingStyleAnalysisCompletion()
+            if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST_RENDER"] == "1" {
+                let view = WritingStyleSetupView(runsSetup: false)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+                   let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+                    try png.write(to: URL(fileURLWithPath: "/tmp/writingstyle-setup-preview.png"))
+                }
             }
             Log("WritingStyle tests: \(checks) passed")
         } catch { Log("WritingStyle tests FAILED: \(ErrorLabel(error))"); exit(1) }
@@ -292,6 +297,88 @@ enum WritingStyleTests {
                   "Gmail multipart with only an attachment part is a complete read with no sample")
     }
 
+    /// A listing may be metadata only even when the later fetch succeeds. None of the fixtures
+    /// comes from a mailbox; IDs, addresses and prose are synthetic.
+    static func outlookEnvelope(_ listed: [[String: Any]], fetched: [[String: Any]] = [],
+                                more: Bool = false, fetchFirst: Bool = false) throws -> CodexCLI.Envelope {
+        func call(_ id: String, _ tool: String, _ args: [String: Any], _ payload: [String: Any]) throws -> String {
+            try json(["type": "item.completed", "item": ["id": id, "type": "mcp_tool_call", "server": "codex_apps",
+                "tool": "microsoft_outlook_email." + tool, "arguments": args, "status": "completed",
+                "result": ["structured_content": payload]]])
+        }
+        var payload: [String: Any] = ["messages": listed]
+        if more { payload["@odata.nextLink"] = "fixture-next-page" }
+        let listing = try call("listing", "list_messages", ["folder_id": "sentitems", "order_by": "sentDateTime desc",
+                                                              "filter": "isDraft eq false"], payload)
+        let reads = try fetched.enumerated().map { index, record in
+            try call("fetch-\(index)", "fetch_message", ["message_id": record["id"] ?? "missing"], record)
+        }
+        let lines = fetchFirst ? reads + [listing] : [listing] + reads
+        return .init(result: #"{"tool_failure":""}"#, sessionID: nil, numTurns: nil, durationMS: nil,
+                     inputTokens: nil, cachedInputTokens: nil, outputTokens: nil, raw: lines.joined(separator: "\n"))
+    }
+
+    private static func testOutlookDiscovery() throws {
+        let metadata: [String: Any] = ["id": "sample-1", "sentDateTime": "2026-09-01T12:00:00Z",
+                                       "isDraft": false, "bodyPreview": "Preview only"]
+        var full = metadata
+        full["body"] = ["contentType": "text", "content": "The complete synthetic message."]
+        full["toRecipients"] = [["emailAddress": ["name": "Fixture", "address": "fixture@example.test"]]]
+        func read(_ envelope: CodexCLI.Envelope) throws -> [WritingStyleMail.Sample] {
+            try WritingStyleMail.validate(envelope, slug: "outlook-mail", backend: .chatgpt)
+        }
+        func rejects(_ envelope: CodexCLI.Envelope, _ label: String) throws {
+            var rejected = false
+            do { _ = try read(envelope) } catch { rejected = true }
+            try check(rejected, label)
+        }
+        let complete = try read(outlookEnvelope([full]))
+        try check(complete.count == 1 && complete[0].text == "The complete synthetic message.", "Outlook full-body list remains sufficient")
+        for fetchFirst in [false, true] {
+            let samples = try read(outlookEnvelope([metadata], fetched: [full], fetchFirst: fetchFirst))
+            try check(samples.map(\.text) == complete.map(\.text) && samples.first?.to == ["Fixture"],
+                      "Outlook resolves metadata from full receipt, fetchFirst=\(fetchFirst)")
+        }
+        try rejects(outlookEnvelope([metadata]), "Outlook preview alone remains unread")
+        let idOnly: [String: Any] = ["id": "sample-1"]
+        try check(try read(outlookEnvelope([idOnly], fetched: [full])).count == 1, "Outlook ID-only discovery resolves from full fetch")
+        try rejects(outlookEnvelope([idOnly]), "Outlook ID-only discovery is not an empty mailbox")
+        var noBody = metadata; noBody.removeValue(forKey: "bodyPreview")
+        try rejects(outlookEnvelope([noBody]), "Outlook absent body without preview is not a verified empty message")
+        try check(try read(outlookEnvelope([noBody], fetched: [full])).count == 1, "Outlook absent body cannot conflict with its later full fetch")
+        var empty = full; empty["body"] = ""
+        try check(try read(outlookEnvelope([empty])).isEmpty, "Outlook explicit empty body is a complete read without a sample")
+        try rejects(outlookEnvelope([metadata], fetched: [metadata]), "Outlook incomplete content fetch still fails")
+        var wrongID = full; wrongID["id"] = "unlisted"
+        try rejects(outlookEnvelope([metadata], fetched: [wrongID]), "Outlook cannot substitute an unlisted message")
+        var changed = full; changed["body"] = "Conflicting complete body"
+        try rejects(outlookEnvelope([full], fetched: [changed]), "Outlook conflicting complete bodies still fail")
+        var draft = idOnly; draft["isDraft"] = true
+        try rejects(outlookEnvelope([draft], fetched: [full]), "Outlook draft metadata cannot be rescued by a fetch")
+        var draftRead = full; draftRead["isDraft"] = true
+        try rejects(outlookEnvelope([metadata], fetched: [draftRead]), "Outlook fetched drafts remain excluded")
+        var truncated = metadata; truncated["body_truncated"] = true
+        try rejects(outlookEnvelope([truncated], fetched: [full]), "Outlook explicitly truncated discovery stays refused")
+        var truncatedRead = full; truncatedRead["truncated"] = true
+        try rejects(outlookEnvelope([metadata], fetched: [truncatedRead]), "Outlook truncated full reads stay refused")
+        var noDate = full; noDate.removeValue(forKey: "sentDateTime")
+        try rejects(outlookEnvelope([metadata], fetched: [noDate]), "Outlook full read still requires a date")
+        var future = full; future["sentDateTime"] = "2999-01-01T00:00:00Z"
+        try rejects(outlookEnvelope([metadata], fetched: [future]), "Outlook future sent dates stay refused")
+        try rejects(outlookEnvelope([metadata], fetched: [full], more: true), "Outlook short sample set still requires exhausted discovery")
+        var newest = metadata; newest["id"] = "newest"; newest["sentDateTime"] = "2026-09-02T12:00:00Z"
+        try rejects(outlookEnvelope([newest, metadata], fetched: [full]), "Outlook newest unread message cannot be skipped")
+        let older = (0..<15).map { index -> [String: Any] in
+            var record = full; record["id"] = "older-\(index)"; return record
+        }
+        try rejects(outlookEnvelope([["id": "undated-newest"]] + older),
+                    "Outlook missing dates preserve discovery order rather than dropping the newest ID")
+        try check(try read(outlookEnvelope([])).isEmpty, "Outlook native empty mailbox remains valid")
+        let html: [String: Any] = ["contentType": "html", "content": "<p>Fixture</p>"]
+        var htmlRead = full; htmlRead["body"] = html
+        try check(try read(outlookEnvelope([metadata], fetched: [htmlRead])).isEmpty, "Outlook fetched HTML is verified but never sampled as prose")
+    }
+
     /// Every client shape the stripper must recognize, with fictional names throughout.
     private static func testStripper() throws {
         let own = "Hey Jordan,\n\nSounds great, would love to meet any time on\nFriday after 12.\n\nBest,\nSam"
@@ -415,19 +502,19 @@ enum WritingStyleTests {
         } catch is CancellationError { cancelled = true }
         try check(cancelled && !WritingStyle.exists(), "cancelled setup publishes no partial file")
 
-        overrides[AppState.onboardingKey] = false
+        overrides[ProcessingPlan.initialCompletedKey] = 0
         defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
         await FrontierRun.$acceptanceRun.withValue({ invocation in
             try await MainActor.run { try envelope(slug: invocation.mcpReadConnectors[0], backend: .chatgpt) }
         }) {
-            ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
+            await ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
         }
         try check(WritingStyle.exists(), "initial-processing hook collects the samples and lands the file")
         try fm.removeItem(at: file)
-        overrides[AppState.onboardingKey] = true
+        overrides[ProcessingPlan.initialCompletedKey] = Date().timeIntervalSince1970
         defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
         await FrontierRun.$acceptanceRun.withValue({ _ in throw TestError.failed }) {
-            ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
+            await ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
         }
         try check(!WritingStyle.exists(), "existing-user background cycles leave setup to the home")
     }

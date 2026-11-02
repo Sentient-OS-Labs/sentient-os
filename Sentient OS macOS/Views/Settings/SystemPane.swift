@@ -2,11 +2,7 @@
 //  SystemPane.swift
 //  Sentient OS macOS
 //
-//  Settings → System: how Sentient lives on this Mac. The daily overnight wake time,
-//  the launch-at-login toggle (LoginItem.swift)
-//  with its keep-Sentient-alive confirm, the privacy pledge with the two anonymous-reporting
-//  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck), the
-//  how-we-protect-your-data line with its Read More door to the PrivacyPolicyView sheet, the
+//  Settings → System: updates, privacy controls, and the
 //  danger-zone Reset (the shared FactoryReset wipe — a system-level act, so it lives here),
 //  and the Uninstall group (the farewell sheet → the full System/Uninstall teardown).
 //  The updates group lands here once Sparkle ships.
@@ -21,27 +17,18 @@ struct SystemPane: View {
     /// carry their choice over. Analytics has its own key since the two toggles split.
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
     @AppStorage("analyticsEnabled") private var analyticsEnabled = true
-    @AppStorage(OvernightScheduler.minutesKey) private var wakeMinutes = OvernightScheduler.defaultMinutes
 
-
-    @State private var launchAtLogin = LoginItem.isEnabled
-    @State private var confirmLoginOff = false
+    @State private var showPrivacyPolicy = false
     @State private var confirmReset = false
     @State private var resetting = false
     @State private var resetError: String?
     @State private var showUninstall = false
-    @State private var showPrivacyPolicy = false
-    @State private var exportingDiagnostics = false
-    @State private var diagnosticFile: URL?
-    @State private var diagnosticError: String?
 
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
             VStack(alignment: .leading, spacing: 34) {
-                startupGroup
+                SettingsGroup(label: "Updates", inset: 0) { updatesGroup }
                 privacyGroup
-                diagnosticsGroup
-                InviteSettingsSection()
                 SettingsGroup(label: "Danger zone", description: "Remove your knowledge or uninstall Sentient.", inset: 0, destructive: true) {
                     VStack(spacing: 0) {
                         dangerGroup
@@ -50,86 +37,6 @@ struct SystemPane: View {
                     }
                 }
 
-            }
-        }
-        .task { launchAtLogin = LoginItem.isEnabled }   // live status — revocable in System Settings
-    }
-
-    // MARK: - General
-
-    private var startupGroup: some View {
-        SettingsGroup(label: "General", inset: 0) {
-            VStack(spacing: 0) {
-                SettingToggleLine(title: "Launch at login",
-                                  sub: "Keep Sentient ready in your menu bar.", isOn: $launchAtLogin)
-                SettingsHairline(opacity: 0.10)
-                SettingsRow(title: "Overnight wake time", subtitle: "Start overnight intelligence daily at this time, in your Mac’s local time zone.") {
-                    DatePicker("Overnight wake time", selection: wakeTime, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.field).labelsHidden().fixedSize()
-                        .accessibilityIdentifier("settings.overnightWakeTime")
-                }
-                SettingsDetails(title: "When does overnight intelligence run?") {
-                    SettingsProse(PrivacyCopy.overnight)
-                }
-                .padding(.horizontal, 20).padding(.bottom, 20)
-                SettingsHairline(opacity: 0.10)
-                updatesGroup
-            }
-        }
-        .onChange(of: launchAtLogin) { _, on in
-            if on {
-                if !LoginItem.enable() { launchAtLogin = false }
-            } else if LoginItem.isEnabled {
-                launchAtLogin = true          // hold the switch until the user confirms
-                confirmLoginOff = true
-            }
-        }
-        .alert("Turn off launch at login?", isPresented: $confirmLoginOff) {
-            Button("Keep It On", role: .cancel) {}
-            Button("Turn Off Anyway", role: .destructive) {
-                Task {
-                    await LoginItem.disable()
-                    launchAtLogin = LoginItem.isEnabled
-                }
-            }
-        } message: {
-            Text("To stay helpful, your Sentient runs its on-device intelligence at your chosen overnight wake time, and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive.")
-        }
-    }
-
-    private var wakeTime: Binding<Date> {
-        Binding(get: {
-            let minutes = OvernightScheduler.validatedMinutes(wakeMinutes)
-            // A fixed date keeps the time-only editor independent of today's DST transition.
-            return Calendar.current.date(from: DateComponents(year: 2001, month: 1, day: 15,
-                hour: minutes / 60, minute: minutes % 60)) ?? Date()
-        }, set: { date in
-            let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-            let minutes = (components.hour ?? 3) * 60 + (components.minute ?? 0)
-            guard minutes != wakeMinutes else { return }
-            wakeMinutes = minutes
-            appState.scheduler.commit()
-        })
-    }
-
-    // MARK: - Updates (Sparkle — the story is "we keep you current", not a dial)
-
-    private var updatesGroup: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsRow(title: "Updates", subtitle: "Version \(UpdateController.currentVersionString)") {
-                SettingsPillButton(title: "Check for updates") {
-                    appState.update.checkForUpdatesNow(from: .settings)
-                }
-                .disabled(!UpdateController.appUpdatesEnabled)
-            }
-            if let last = appState.update.lastCheckDate {
-                Text("Last checked \(last.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
-                    .padding(.horizontal, 20).padding(.bottom, 16)
-            }
-            if !UpdateController.appUpdatesEnabled {
-                SettingsProse("Updates are disabled in this development build.")
-                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
     }
@@ -158,49 +65,24 @@ struct SystemPane: View {
         .sheet(isPresented: $showPrivacyPolicy) { PrivacyPolicyView() }
     }
 
-    // MARK: - Diagnostics
+    // MARK: - Updates (Sparkle — the story is "we keep you current", not a dial)
 
-    private var diagnosticsGroup: some View {
-        SettingsGroup(label: "Diagnostics", inset: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsRow(title: "Export diagnostic file",
-                            subtitle: "Send this diagnostics file to the devs to help us fix any bugs you're facing") {
-                    SettingsPillButton(title: exportingDiagnostics ? "Preparing…" : "Export…") {
-                        exportingDiagnostics = true
-                        diagnosticError = nil
-                        diagnosticFile = nil
-                        Task {
-                            defer { exportingDiagnostics = false }
-                            do { diagnosticFile = try await DiagnosticExport.save(appState: appState) }
-                            catch {
-                                diagnosticError = DiskSpace.isDiskFull(error)
-                                    ? "Your disk is full. Free up space and try exporting again."
-                                    : "The diagnostics file couldn't be saved. Try another location."
-                                Log("Diagnostics export: save failed (\(ErrorLabel(error)))")
-                            }
-                        }
-                    }
-                    .disabled(exportingDiagnostics)
-                    .accessibilityLabel("Export diagnostic file")
+    private var updatesGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: "Updates", subtitle: "Version \(UpdateController.currentVersionString)") {
+                SettingsPillButton(title: "Check for updates") {
+                    appState.update.checkForUpdatesNow(from: .settings)
                 }
-                VStack(alignment: .leading, spacing: 10) {
-                    SettingsProse(DiagnosticExport.disclosure)
-                    SettingsProse(DiagnosticExport.sharingNote)
-                    if let diagnosticError {
-                        Text(diagnosticError).font(.system(size: 13)).foregroundStyle(Theme.Ink.amber)
-                    }
-                    if let diagnosticFile {
-                        HStack {
-                            Text("Saved. Review the file before sharing.")
-                                .font(.system(size: 13)).foregroundStyle(SettingsStyle.secondary)
-                            Spacer()
-                            SettingsPillButton(title: "Show in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([diagnosticFile])
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 20).padding(.bottom, 20)
+                .disabled(!UpdateController.appUpdatesEnabled)
+            }
+            if let last = appState.update.lastCheckDate {
+                Text("Last checked \(last.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
+                    .padding(.horizontal, 20).padding(.bottom, 16)
+            }
+            if !UpdateController.appUpdatesEnabled {
+                SettingsProse("Updates are disabled in this development build.")
+                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
     }

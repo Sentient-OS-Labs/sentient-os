@@ -90,7 +90,7 @@ run start; a little overlap next run beats a boundary gap.
 - `runIterative`: events with a start time in `[mark, now)`.
 - **`fetchProactiveContext()`** is separate and deliberately uncurated: the last 7 days plus the next 24 hours, every event, as a compact chronological text block (`{connected, events_text}`). `ProactiveCycle` fetches it once and injects it into both the judge and the research prompts, so the judge can reason about time-sensitivity while staying tool-free.
 
-Models: the luna tier for every read (`gpt-6-luna` on codex, `haiku` on claude; medium effort, low
+Models: the luna tier for every read (`gpt-6-luna` on codex, `claude-haiku-5-5` on claude; medium effort, low
 for the connect probe), read-only sandbox, web search off for calendar. Sending an email or creating
 an event runs on the flagship tier in the executor.
 
@@ -118,9 +118,13 @@ source or run resets that card, so an earlier summary cannot imply success for a
 - The connectors are account-level on both engines, so they work whether or not the user's own CLI config is loaded (`includeUserConfig`).
 - OpenAI strict output schemas need `additionalProperties: false` on the object and every property in `required`, or codex fails with `invalid_json_schema`.
 - **codex:** read tools pass under the read-only sandbox; only the WRITE tools (`send_email`, `create_event`) are approval-gated headless, and the executor pre-approves them per run with the sandbox intact (`CodexCLI.Invocation.approveConnectorWrites`).
-- **claude:** headless, EVERY connector call is denied unless an allow rule names it (measured 2026-08-23 — auto mode denies them too), so the probes and reads set `Invocation.claudeConnectorReads`, which pre-approves the curated read-only tools (`ClaudeCLI.ConnectorTools`); write tools stay structurally denied on read runs. The executor's fires map `approveConnectorWrites` to a scoped allow.
+- **claude:** headless reads use the live read-only tool metadata from the CLI control interface, with the existing reviewed reads as a fallback when discovery is unavailable. Explicit write/destructive metadata overrides the fallback. Microsoft 365 keeps separate Mail and Calendar scopes within its shared server.
+- Ordinary MCP ingestion uses the account and connection generation for its checkpoint scope. A separate profile call is optional developer diagnostics. A reconnect during a read invalidates that read before saving, and older profile-scoped checkpoints receive a bounded backfill while retaining pending summaries.
+- Codex read policy admits the selected app's live read-only tools using its native `writes` approval mode. Catalog IDs are quoted opaque values. Missing routing metadata triggers a bounded control-interface discovery without a model turn. Successful routes proceed directly, and discovery failure retains the existing route. `ConnectorReadDiscovery` caches optional metadata for one minute and shares it across a source's windows.
 - Progress events (`GmailConnect.Progress`, `CalendarConnect.Progress`) map each window onto the same bar and "just processed" card `ProcessingView` shows for on-device items; the Gmail windows arrive in completion order because they run in parallel.
 
 ## Related docs
 
 `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md` (the claude.ai connectors and the read allow rules), `Proactive/Documentation - Proactive Intelligence.md` (the calendar context and the write channels), `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md` (why the chips lock).
+
+Claude ingestion uniformly uses Haiku 5.5/medium, including specialized writing-style and calendar-context reads. Granola and other connectors no longer default to Sonnet.

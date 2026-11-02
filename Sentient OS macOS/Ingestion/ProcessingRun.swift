@@ -42,6 +42,7 @@ final class ProcessingRun {
         var progress: RunProgress
         var failure: CycleFailure?
         var hadDiagnostics = false
+        var deviceProgress: RunProgress?
         var complete: Bool {
             failure == nil && !progress.diskFull && progress.sourceReadFailures.isEmpty
                 && progress.failed == 0 && progress.extractionFailed == 0 && progress.parseFailures == 0
@@ -52,6 +53,7 @@ final class ProcessingRun {
     let request: ProcessingRequest
     let scheduled: Bool
     private var unavailableConnectors: Set<String> = []
+    private var deviceProgress = RunProgress()
     private var mode: IterativeRun.Mode { request.mode }
     init(request: ProcessingRequest, scheduled: Bool) {
         self.request = request; self.scheduled = scheduled
@@ -61,7 +63,7 @@ final class ProcessingRun {
     func execute(progress: @escaping @Sendable (RunProgress) -> Void,
                  phase: @escaping @Sendable (ProactiveCyclePhase) -> Void,
                  onLine: @escaping @Sendable (String) -> Void) async -> Result {
-        await Diagnostics.withOperation("processing") {
+        var result = await Diagnostics.withOperation("processing") {
             var p = RunProgress()
             if !request.connectors.isEmpty {
                 if let path = request.modelPath {
@@ -70,6 +72,7 @@ final class ProcessingRun {
                     p.failSourceRead(name: "On-device sources", message: "The on-device model is unavailable. Retry when its download finishes.")
                 }
             }
+            deviceProgress = p
             for (name, message) in request.unavailableSources.sorted(by: { $0.key < $1.key }) {
                 p.failSourceRead(name: name, message: message)
             }
@@ -77,12 +80,16 @@ final class ProcessingRun {
             // Cancellation is checked at EVERY leg boundary. Stopping a read must never launch
             // another cloud request or publish the knowledge base while the old task drains.
             if Task.isCancelled || p.diskFull { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             if request.runGmail { p = await runGmailLeg(base: p, yield: progress) }
-            if Task.isCancelled { return Result(progress: p) }
+            if Task.isCancelled || p.diskFull { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             if request.runCalendar { p = await runCalendarLeg(base: p, yield: progress) }
             if Task.isCancelled { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             if !request.mcpSlugs.isEmpty { p = await runMCPLeg(base: p, yield: progress) }
             if Task.isCancelled { return Result(progress: p) }
+            if let failure = claudeLoginFailure(progress: p, phase: phase) { return failure }
             progress(p)
             var failure: CycleFailure?
             if request.fullCycle {
@@ -91,6 +98,8 @@ final class ProcessingRun {
             }
             return Result(progress: p, failure: failure, hadDiagnostics: Diagnostics.current?.hasFailure == true)
         }
+        if InitialAnalysisRecovery.replayCloudStages { result.deviceProgress = deviceProgress }
+        return result
     }
 
     private func recordConnectionOutcome(slug: String, connected: Bool) {
@@ -105,22 +114,37 @@ final class ProcessingRun {
         ConnectorCensus.recordReadOutcome(slug: slug, backend: backend, connected: connected)
     }
 
+    /// Stop before another cloud leg when Claude has rejected its own login. In particular,
+    /// don't let an empty read look like successful onboarding or consume pending summaries.
+    private func claudeLoginFailure(progress: RunProgress,
+                                    phase: @Sendable (ProactiveCyclePhase) -> Void) -> Result? {
+        guard ModelBackend.current == .claude, ClaudeAuth.requiresVerification,
+              request.fullCycle || request.runGmail || request.runCalendar || !request.mcpSlugs.isEmpty else { return nil }
+        let failure = CycleFailure(message: ClaudeAuth.LoginRequired().localizedDescription,
+                                   kind: .loggedOut, stage: .vault, reason: .notLoggedIn)
+        phase(.failed(failure))
+        if scheduled { OvernightCaution.record(.loggedOut) }
+        return Result(progress: progress, failure: failure)
+    }
+
     /// Cloud Gmail leg — each weekly window maps onto the SAME bar/card: its prompt → the prompt
     /// pane, its summary → the just-processed card, the windows → the bar (extended past `base`, the
     /// device leg's final counts).
     private func runGmailLeg(base: RunProgress,
                              yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
         let box = ProgressBox(base)
-        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
+        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseQuiet = base.quietReads
         let onProgress: @Sendable (GmailConnect.Progress) -> Void = { ev in
             switch ev {
             case let .windowStart(total, label, prompt):
-                // All windows start together (parallel); the bar advances only as they finish below.
                 var p = box.value
                 p.total = baseTotal + total
-                p.lastPrompt = prompt
-                p.lastPath = "Gmail · \(label)"
-                p.lastItemDate = nil
+                if p.sourceRead?.name != "Gmail" {
+                    p.beginSourceRead(name: "Gmail", label: "Gmail · \(label)", prompt: prompt)
+                } else {
+                    // Starting the next worker must not hide the last committed summary.
+                    p.lastPrompt = prompt
+                }
                 box.value = p
                 yield(p)
             case let .windowDone(total, label, summary, threads, completed, keptSoFar):
@@ -128,14 +152,9 @@ final class ProcessingRun {
                 p.total       = baseTotal + total
                 p.done        = baseDone + completed
                 p.survivors   = baseKept + keptSoFar
-                p.junk        = baseJunk + (completed - keptSoFar)   // a window with nothing notable
-                p.lastTitle   = "Email · \(label)"
-                p.lastSummary = summary
-                p.lastVerdict = summary == nil ? .junk : .survivor
-                p.lastFilePath = nil
-                p.lastPath    = "Gmail · \(label)" + (threads > 0 ? " · \(threads) threads" : "")
+                p.quietReads  = baseQuiet + (completed - keptSoFar)
+                p.finishSourceRead(name: "Gmail", label: "Gmail · \(label)", summary: summary, items: threads)
                 p.lastItemDate = nil
-                p.lastSeconds = nil
                 box.value = p
                 yield(p)
             }
@@ -147,23 +166,37 @@ final class ProcessingRun {
             _ = mode == .initial ? try await GmailConnect.runInitial(onProgress: onProgress)
                                  : try await GmailConnect.runIterative(onProgress: onProgress)
             recordConnectionOutcome(slug: "gmail", connected: true)
+            SourceHealth.recordReadOutcome(source: "gmail", outcome: "ok")
+            // A completed import can have no new windows in the current second.
+            var p = box.value
+            p.successfulSources.insert("Gmail")
+            p.sourceReadFailures.removeValue(forKey: "Gmail")
+            box.value = p
         } catch {
             if Task.isCancelled || error is CancellationError { return box.value }
             if ConnectorReadFailure.isConnectionFailure(error) {
                 unavailableConnectors.insert("gmail")
                 recordConnectionOutcome(slug: "gmail", connected: false)
+                SourceHealth.recordReadOutcome(source: "gmail", outcome: "connector_auth")
                 var p = box.value
                 p.failSourceRead(name: "Gmail", message: "Reconnect Gmail to retry this source.")
                 return p
             }
             var p = box.value
+            let usageLimited = (error as? ConnectorReadFailure.GmailFailure) == .accountLimit || CodexFailureReason.classify(error) == .usageLimit
+            SourceHealth.recordReadOutcome(source: "gmail", outcome: usageLimited ? "usage_limit" : "incomplete")
             Diagnostics.report(.sourceReadFailed, phase: .read, reason: "hosted_source", error: error, source: "gmail")
-            p.failSourceRead(name: "Gmail", message: "Gmail could not be read. Your progress is saved; retry analysis.")
-            p.lastTitle = "Gmail failed"
-            p.lastItemDate = nil
-            p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            p.lastVerdict = .junk
-            p.lastFilePath = nil
+            let message: String
+            if DiskSpace.isDiskFull(error) {
+                p.diskFull = true
+                message = "Gmail needs more disk space to save its summaries. Completed summaries are saved."
+            } else if usageLimited {
+                message = "Gmail could not continue because a usage limit was reached. Saved summaries are kept; retry after the limit resets."
+            } else {
+                message = (error as? GmailConnect.GmailError)?.errorDescription
+                    ?? "Gmail could not finish reading your email. Saved summaries are kept; retry analysis to continue."
+            }
+            p.failSourceRead(name: "Gmail", message: message)
             box.value = p
             yield(p)
             Log("ProcessingRun.gmail: ✗ \(ErrorLabel(error))")

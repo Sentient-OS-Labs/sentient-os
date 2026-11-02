@@ -307,10 +307,14 @@ private struct SidekickMessageRow: View {
             if user { Spacer(minLength: 58) }
             VStack(alignment: .leading, spacing: 10) {
                 if let reference = event.reply {
+                    if let card = reference.card {
+                        SidekickCardReplyPreview(card: card)
+                    } else {
                     Button { conversation.show(messageID: reference.messageID) } label: {
                         Label(reference.selectedText.map { String($0.prefix(100)) } ?? "Earlier message", systemImage: "arrowshape.turn.up.left")
                             .font(.system(size: 10.5)).lineLimit(2).foregroundStyle(SidekickStyle.accent)
                     }.buttonStyle(.plain)
+                    }
                 }
                 if user {
                     SidekickPlainText(text: event.text, onReply: { reply($0) }, onReplyToMessage: { reply(nil) },

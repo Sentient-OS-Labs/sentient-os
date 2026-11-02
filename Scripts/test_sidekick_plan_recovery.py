@@ -28,6 +28,7 @@ import Foundation
 import Observation
 nonisolated enum ModelBackend: String, CaseIterable { case chatgpt, claude, custom }
 nonisolated enum CodexCLI {
+    struct ExecResult { let status: Int32; let stdout: String; let stderr: String }
     enum Availability { case notInstalled, notWorking(String) }
     enum CLIError: Error {
         case usageLimit(message: String, sessionID: String?)
@@ -76,8 +77,13 @@ checks = r'''
             CodexCLI.CLIError.exitFailure(code: 1, message: "Upgrade to Plus might help")
         ]
         for (index, error) in otherErrors.enumerated() {
-            check(SidekickUpgradeOffer.forProviderFailure(error, backend: .chatgpt, planRaw: "free", assertedPlus: false) == nil,
+            let expected: SidekickUpgradeOffer? = ChatGPTProviderFailure.classify(error) == .modelUnavailable ? .modelUnavailable : nil
+            check(SidekickUpgradeOffer.forProviderFailure(error, backend: .chatgpt, planRaw: "free", assertedPlus: false) == expected,
                   "non-provider quota, permission, network, model or speculative error \(index) has no billing action")
+        }
+        for plan in [nil, "free", "plus"] as [String?] {
+            check(SidekickUpgradeOffer.forProviderFailure(CodexCLI.CLIError.exitFailure(code: 1, message: "model_not_found"), backend: .chatgpt, planRaw: plan, assertedPlus: true) == .modelUnavailable, "real model rejection has recovery regardless of detection")
+            check(SidekickUpgradeOffer.forProviderFailure(CodexCLI.CLIError.exitFailure(code: 1, message: "workspace routing discovery unauthorized (401)"), backend: .chatgpt, planRaw: plan, assertedPlus: false) == .loginRequired, "real auth rejection offers reconnect regardless of detection")
         }
         let owner = SidekickRecovery()
         var answers: [SidekickAnswer] = []
@@ -115,7 +121,8 @@ assert 'planRaw: CodexAuth.currentPlan()?.raw' in command
 assert 'NSWorkspace.shared.open(CodexAuth.upgradeURL)' in view
 assert 'HomeWindowOpening.open(.settings, settingsPane: .frontierModel)' in view
 assert 'content.question == nil && content.upgradeOffer == nil' in recovery
-source = '\n'.join((fixture, recovery, member(end, 'extension SidekickUpgradeOffer'), checks))
+failure = (APP / 'Cloud/ChatGPTRecovery.swift').read_text().split('extension CodexCLI')[0]
+source = '\n'.join((fixture, failure, recovery, member(end, 'extension SidekickUpgradeOffer'), checks))
 with tempfile.TemporaryDirectory(prefix='sentient-plan-recovery-') as directory:
     path = Path(directory)
     (path / 'main.swift').write_text(source)

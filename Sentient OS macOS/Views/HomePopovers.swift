@@ -62,11 +62,15 @@ struct AnalysisPopover: View {
     @State private var vault: (notes: Int, domains: Int)?
     @State private var hasBattery = false   // desktop Macs hide the battery row entirely
 
+    private func hostedSelected(_ service: String) -> Bool {
+        HostedConnectorStore.accounts().contains { $0.service == service && ConnectorRegistry.isKBEnabled($0.slug) }
+    }
+
     private var anyArmed: Bool {
         runDownloads || runDesktop || runDocuments || runNotes || (runSiYuan && SiYuanSource.isInstalled)
             || !customRoots.isEmpty
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
-            || !appleMailAccounts.isEmpty || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
+            || !appleMailAccounts.isEmpty || (ModelBackend.current != .sentient && (runGmail || runCalendar)) || !MCPSource.kbSlugs().isEmpty
     }
     private var armed: Bool {
         anyArmed || processing.isBusy || processing.record.status == .scheduled || processing.record.status == .requested
@@ -118,9 +122,9 @@ struct AnalysisPopover: View {
                     }
                 }
                 HStack(spacing: 8) {
-                    SourceChip("Gmail",    on: runGmail,
+                    SourceChip("Gmail",    on: ModelBackend.current == .sentient ? hostedSelected("gmail") : runGmail,
                                locked: CodexAuth.connectorsLocked, action: onPickGmail)
-                    SourceChip("Calendar", on: runCalendar,
+                    SourceChip("Calendar", on: ModelBackend.current == .sentient ? hostedSelected("google-calendar") : runCalendar,
                                locked: CodexAuth.connectorsLocked, action: onPickCalendar)
                 }
             }

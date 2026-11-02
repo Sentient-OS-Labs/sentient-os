@@ -299,10 +299,7 @@ final class CodexSetup {
         // The one idle tick keeps EVERY managed engine CLI current — ClaudeSetup self-guards
         // (only while Claude is the backend, only the managed binary, once a day).
         Task { await ClaudeSetup.shared.updateIfDue(trigger: "idle") }
-        // Keep the dedicated connector action policies classified: the chips + every
-        // detected connector. Self-guards (Claude backend only) and cache hits are free, so
-        // this is one-time work per CLI version, done while the user is away.
-        Task { await ConnectorClassifier.sweepActionConnectors() }
+
     }
 
     /// A compatibility failure remains visible until a repair succeeds. An intact pinned release
@@ -355,6 +352,32 @@ final class CodexSetup {
     private var connectorRefreshTask: Task<Void, Never>?
     private var refreshedAccount: String?
     private var lastConnectorRefresh: Date?
+    private(set) var signingOut = false
+
+    func signOut() async throws {
+        guard !signingOut else { return }
+        signingOut = true
+        defer { signingOut = false }
+        await cancelLogin()
+        connectorRefreshTask?.cancel()
+        _ = await connectorRefreshTask?.value
+        connectorRefreshTask = nil
+        guard let binary = CodexCLI.locateBinary() else {
+            throw CodexCLI.CLIError.notAvailable(.notInstalled)
+        }
+        let result = try await CodexCLI.executeAsync(binary: binary, args: ["logout"],
+            stdinText: nil, cwd: nil, timeout: 30)
+        guard result.status == 0 else {
+            throw CodexCLI.CLIError.exitFailure(code: result.status, message: result.stderr)
+        }
+        loggedIn = false
+        loginStatusChecked = true
+        refreshedAccount = nil
+        lastConnectorRefresh = nil
+        loginStatusLine = nil
+        await CodexCLI.shared.invalidate()
+        try CodexRuntime.clearSignedOutAccountCache()
+    }
 
     /// Re-check only the private profile. A stale probe cannot overwrite a newer sign-in or dismissal.
     func refreshLoginStatus() async {
@@ -362,12 +385,12 @@ final class CodexSetup {
     }
 
     private func checkLoginStatus() async -> Bool? {
-        guard !shuttingDown, !Task.isCancelled else { return nil }
+        guard !shuttingDown, !signingOut, !Task.isCancelled else { return nil }
         let generation = loginGeneration
         let probe = UUID()
         loginStatusProbe = probe
         let ok = await CodexCLI.loginStatus()
-        guard !Task.isCancelled, !shuttingDown, generation == loginGeneration,
+        guard !Task.isCancelled, !shuttingDown, !signingOut, generation == loginGeneration,
               probe == loginStatusProbe else { return nil }
         loggedIn = ok
         loginStatusChecked = true
@@ -389,7 +412,7 @@ final class CodexSetup {
     /// starts, so dismissing one surface cannot cancel a later login started elsewhere.
     @discardableResult
     func startLogin(force: Bool = false) async -> UUID? {
-        guard !shuttingDown, !startingLogin, !Task.isCancelled else { return nil }
+        guard !shuttingDown, !startingLogin, !signingOut, !Task.isCancelled else { return nil }
         guard installed else { loginStatusLine = "✗ Install the Codex CLI first"; return nil }
         if !force, loggedIn { loginStatusLine = "✓ Already logged in"; return nil }
         startingLogin = true

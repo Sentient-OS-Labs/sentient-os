@@ -42,7 +42,7 @@ Home remains mounted behind the Settings and Knowledge pages so its composer, tr
 presentation keep their lifetime. Analyze routes unfinished personal setup to `PersonalSetupView`;
 otherwise it requests work from `ProcessingCoordinator` and opens `ProcessingWindowView`.
 The coordinator owns processing independently of either window, and overnight scheduling follows
-an explicit setup choice. Also mounted here: background model/computer-use setup whispers,
+explicit background setup and waits for the first analysis to complete. Also mounted here: background model/computer-use setup whispers,
 `UpdateGateView`, the optional writing-sample retry and the `Home.opened` analytics signal.
 
 ## The home (`HomeView`)
@@ -92,7 +92,9 @@ and a fresh Home starts with the original four. Prompts use live apps/browser in
 missing details/access, and preserve approval for cancellations, bookings and sending messages.
 The exact invitation, “Sidekick is ready. What can I take off your hands?”, uses plain text
 without a colored glow. The durable successful-task milestone
-shifts emphasis to Finish setup without resetting chat or automatically opening setup. During pending
+shifts emphasis to Finish setup without resetting chat or automatically opening setup. The subtle CTA
+glow remains visible alongside a finished conversation; active work and pending recovery questions
+suppress it until the task is idle. During pending
 setup, Analysis and the Double Tap lesson route to Finish setup; after setup they show the actual
 processing status. Paused and attention states explicitly say setup is saved, while Double Tap and
 personal context still wait for initial analysis.
@@ -111,7 +113,7 @@ screenshots include only fixture-owned windows; the runner never starts a provid
 `--manual-review` offers a bounded 90-second hold for a native accessibility inspection, followed by
 the same assertions. It does not bypass failures or authorize real work.
 `Scripts/test_personal_setup_sources.py --app <signed-debug-app>` runs the actual source picker and
-timing sheet against three empty directories inside its isolated fixture. It verifies the zero/two/three
+background-setup sheet against three empty directories inside its isolated fixture. It verifies the zero/two/three
 source threshold, Run now's callback after native sheet dismissal, and retained sources and Sidekick
 draft across reopening. Eight screenshots cover standard 840×760 and minimum 700×560 setup windows.
 The callback is captured; no analysis, cloud connection, protected database read, or wake setup starts.
@@ -323,9 +325,9 @@ The run: one progress stream carries `IterativeRun`, the Gmail and Calendar legs
 explicit loading, summary, quiet and failure states. Each MCP connector occupies one bar slot;
 its committed windows update the card. Quiet later windows preserve a useful summary from that
 source, while a new source or run resets the card. A generation token makes a
-paused, stopped, or superseded run stale so it can never fire the tail; onboarding's `pausable` mode
-freezes in place and, on resume, waits for the old run to drain and composes carried counts so the bar
-never restarts. `DisplayAwake` holds the screen on for the initial ingest. The dev buttons pass
+paused, stopped, or superseded run stale so it can never fire the tail; initial analysis
+waits for the old run to drain before resuming. On-device counters/bookmarks carry forward, while
+unfinished cloud stages replay from their start without double-counting their earlier windows. `DisplayAwake` holds the screen on for the initial ingest. The dev buttons pass
 `showPrompt: true`, which adds a left pane showing the exact prompt for the current item; that is the
 only dev/prod difference. Two more display-only demo knobs (`dev.processing.demoBaseDone/Total`) let a
 screen recording open mid-run.
@@ -390,3 +392,9 @@ The busy composer replaces Send with one Stop control and omits the redundant wo
 Actual questions retain their answer controls. Enabled Send has a more visible spectrum rim and
 soft bloom. Settings menus keep their entire decorated label inside the native button-style Menu
 hit target, including padding and chevron; the open-source footer has the shared gold heart.
+
+The first-analysis setup screen requires verified Overnight wake and Launch at login before Start
+analysis. The old now/overnight choice is removed. Its footer remains fixed while approval guidance
+scrolls on small windows. Already-ready requirements are marked Ready without redundant clicks;
+explicit setup/approval buttons own the System Settings guide. Initial analysis can be paused and
+resumed without returning to setup, and interrupted first runs reopen paused.

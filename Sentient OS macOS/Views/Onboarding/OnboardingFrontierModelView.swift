@@ -3,12 +3,13 @@
 //  Sentient OS macOS
 //
 //  Onboarding's frontier-model step (grew out of the codex-login-only screen, 2026-07-25): the
-//  five engine pills in one centered row over the SAME per-engine panels Settings renders
+//  six engine choices over the same per-engine panels Settings renders
 //  (FrontierEnginePicker), with the live codex login embedded as the ChatGPT panel
 //  (OnboardingCodexLoginPanel). Continue prepares and commits a signed-in Claude choice;
 //  other choices must already be the active, healthy engine, including the selected custom
 //  preset. Every choice prepares its CLI, so an existing login cannot bypass its update check.
-//  Joins shared Codex preparation at launch; browsing tabs never changes the saved engine.
+//  Sentient prepares its own hosted connection without a subscription login. Browsing tabs
+//  never changes the saved engine; unavailable deployments cannot become the active choice.
 //  Doc: Views/Onboarding/Documentation - Onboarding.md
 //
 
@@ -20,6 +21,7 @@ struct OnboardingFrontierModelView: View {
 
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
+    @State private var sentient = SentientSetup.shared
     @State private var tab: FrontierEngineTab = .chatgpt
     @State private var continueAttempt: UUID?
     @State private var continueTask: Task<Void, Never>?
@@ -28,9 +30,11 @@ struct OnboardingFrontierModelView: View {
     private var limitedChatGPT: Bool { tab == .chatgpt && codex.loggedIn && limitedPlan }
     private var continuing: Bool { continueAttempt != nil }
     private var enginePreparing: Bool {
-        tab == .claude
-            ? claude.preparing || claude.installing
-            : codex.preparing || codex.installing
+        switch tab {
+        case .sentient: return sentient.preparing
+        case .claude: return claude.preparing || claude.installing
+        default: return codex.preparing || codex.installing
+        }
     }
 
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
@@ -50,6 +54,7 @@ struct OnboardingFrontierModelView: View {
         if tab == .claude { return claude.loggedIn }
         guard tab == activeTab else { return false }
         switch ModelBackend(rawValue: backendRaw) ?? .chatgpt {
+        case .sentient: return sentient.configured && sentient.ready
         case .custom:  return CustomProvider.current.isUsable
         case .claude:  return claude.loggedIn
         case .chatgpt: return codex.loggedIn
@@ -63,27 +68,15 @@ struct OnboardingFrontierModelView: View {
             // below the pills changes; the ScrollView carries the tall endpoint panels.
             ScrollView {
                 VStack(spacing: 34) {
-                    VStack(spacing: 14) {
-                        OnboardingWhisper("FRONTIER MODEL")
+                    ModelSelectionHeading(title: "Choose your frontier model",
+                                          subtitle: "Your most intelligent AI clicks around for Sidekick")
 
-                        Text("Choose your frontier model")
-                            .display(26)
-                            .foregroundStyle(Theme.Ink.bright)
-
-                        Text(PrivacyCopy.frontierSummary)
-                            .font(.system(size: 14.5))
-                            .foregroundStyle(Theme.secondary)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(4)
-                            .frame(maxWidth: 640)
-                    }
-
-                    FrontierEnginePicker(tab: $tab, layout: .singleRow,
+                    FrontierEnginePicker(tab: $tab, layout: .onboardingGrid,
                                          chatgptHealthy: codex.loggedIn) {
                         OnboardingCodexLoginPanel()
                     }
 
-                    if tab != .claude {
+                    if tab != .claude && tab != .sentient {
                         if codex.preparing || codex.installing { MonoWaitLine("preparing codex…") }
                         OnboardingStatusText(codex.installStatus)
                     }
@@ -105,11 +98,13 @@ struct OnboardingFrontierModelView: View {
                                          enabled: engineReady && !continuing && !enginePreparing,
                                          glow: 0.28, action: continueWithEngine)
                 }
-                .padding(.horizontal, 40)
-                .padding(.vertical, 48)
+                .frame(maxWidth: 680)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 40)
                 .frame(maxWidth: .infinity)
             }
             .scrollBounceBehavior(.basedOnSize)
+            .environment(\.settingsFormStyle, true)
 
             // Keep room for the privacy controls and invitation ticket while tall provider
             // panels scroll. OnboardingView hosts the ticket so its gift covers all chrome.
@@ -117,30 +112,19 @@ struct OnboardingFrontierModelView: View {
         }
         .overlay { OnboardingTelemetryConsent() }
         .onAppear {
-            tab = activeTab
+            tab = activeTab.visibleTab
             // Join launch preparation, including adoption of a portable existing login into
             // the private runtime. A legacy CLI's login alone cannot make this screen ready.
             Task {
-                _ = await codex.ensureCurrent()
-                await codex.refreshLoginStatus()
-                limitedPlan = CodexAuth.isLimited()
-            }
-            Task {
-                await claude.refreshInstalled()
-                await claude.refreshLoginStatus()
+                if tab == .chatgpt { _ = await codex.ensureCurrent() }
+                await refreshSelectedEngine()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // Back from the browser — often already signed in. Step-level on purpose: the
             // ChatGPT panel (and its own watcher) may not exist while another tab is showing.
             Task {
-                await codex.refreshInstalled()
-                await codex.refreshLoginStatus()
-                limitedPlan = CodexAuth.isLimited()
-            }
-            Task {
-                await claude.refreshInstalled()
-                await claude.refreshLoginStatus()
+                await refreshSelectedEngine()
             }
         }
         .onChange(of: backendRaw) { cancelContinue() }
@@ -161,7 +145,9 @@ struct OnboardingFrontierModelView: View {
                 if continueAttempt == attempt { continueAttempt = nil; continueTask = nil }
             }
             let prepared: Bool
-            if selectedTab == .claude {
+            if selectedTab == .sentient {
+                prepared = await sentient.prepare()
+            } else if selectedTab == .claude {
                 prepared = await claude.ensureCurrent()
             } else {
                 prepared = await codex.ensureCurrent()
@@ -169,7 +155,9 @@ struct OnboardingFrontierModelView: View {
             guard !Task.isCancelled, continueAttempt == attempt,
                   backendRaw == initialBackend, tab == selectedTab else { return }
             guard prepared else {
-                continueStatus = selectedTab == .claude
+                continueStatus = selectedTab == .sentient ? sentient.status
+                    ?? "Sentient couldn't connect. Try again or choose another provider."
+                    : selectedTab == .claude
                     ? claude.installStatus ?? "✗ Claude Code couldn't be prepared. Try again."
                     : codex.installStatus ?? "✗ Codex couldn't be prepared. Try again."
                 return
@@ -183,7 +171,9 @@ struct OnboardingFrontierModelView: View {
             guard !Task.isCancelled, continueAttempt == attempt,
                   backendRaw == initialBackend, tab == selectedTab else { return }
             guard engineReady else {
-                continueStatus = "✗ Sign in to your selected provider, then try Continue again."
+                continueStatus = selectedTab == .sentient
+                    ? "Connect to Sentient, then try Continue again."
+                    : "✗ Sign in to your selected provider, then try Continue again."
                 return
             }
             // Commit only after preparation and a fresh login check succeed, immediately
@@ -201,6 +191,22 @@ struct OnboardingFrontierModelView: View {
         continueTask = nil
         continueAttempt = nil
         continueStatus = nil
+    }
+
+    private func refreshSelectedEngine() async {
+        switch tab {
+        case .sentient:
+            await sentient.refresh()
+        case .claude:
+            await claude.refreshInstalled()
+            await claude.refreshLoginStatus()
+        case .chatgpt:
+            await codex.refreshInstalled()
+            await codex.refreshLoginStatus()
+            limitedPlan = CodexAuth.isLimited()
+        case .openRouter, .lmStudio, .custom:
+            await codex.refreshInstalled()
+        }
     }
 }
 

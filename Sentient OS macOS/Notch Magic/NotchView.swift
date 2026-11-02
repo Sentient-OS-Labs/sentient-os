@@ -21,6 +21,14 @@ import AppKit
 struct NotchMetrics: Equatable {
     var availableSize = CGSize(width: 1440, height: 900)
     var hardwareNotch: CGSize?              // nil = this display has no physical notch
+    var compactMode = false
+    var setupVisible = false
+
+    func showingSetup(_ visible: Bool) -> Self {
+        var result = self
+        result.setupVisible = visible
+        return result
+    }
 
     var hasPhysicalNotch: Bool { hardwareNotch != nil }
     var baseWidth: CGFloat { max(hardwareNotch?.width ?? 0, 200) }
@@ -41,7 +49,27 @@ struct NotchMetrics: Equatable {
     /// The most the notch grows to fit a long spoken instruction before the caption truncates.
     var maxReadBackLines: Int { 10 }
 
-    var runningWidth: CGFloat { max(baseWidth + 160, 360) }
+    var runningWidth: CGFloat { max(baseWidth + 140, 340) }
+    var compactLeadingWidth: CGFloat { 82 + hPad }
+    var compactTrailingWidth: CGFloat { 54 + hPad }
+    var compactCameraWidth: CGFloat { hasPhysicalNotch ? baseWidth : 0 }
+
+    func isCompact(for phase: NotchPhase) -> Bool {
+        guard compactMode, !setupVisible else { return false }
+        switch phase {
+        case .running, .finishing(.success), .finishing(.stopped): return true
+        default: return false
+        }
+    }
+
+    func glowScale(for phase: NotchPhase) -> CGFloat { isCompact(for: phase) ? 0.9 : 1 }
+
+    func glowRotationPeriod(for phase: NotchPhase) -> TimeInterval { isCompact(for: phase) ? 8.5 : 6.5 }
+
+    /// Unequal wings keep the real camera centered while giving the status more room.
+    func horizontalOffset(for phase: NotchPhase) -> CGFloat {
+        isCompact(for: phase) && hasPhysicalNotch ? (compactTrailingWidth - compactLeadingWidth) / 2 : 0
+    }
 
     // MARK: Hover — the click-to-type affordance (the idle notch swells under the cursor)
 
@@ -70,6 +98,10 @@ struct NotchMetrics: Equatable {
     func size(for phase: NotchPhase, readBack: String? = nil, remembering: String? = nil,
               personalizing: Bool = false, recoveryContent: SidekickRecoveryContent? = nil,
               messageContent: SidekickConversationStore.Record? = nil) -> CGSize {
+        if isCompact(for: phase) {
+            return CGSize(width: compactLeadingWidth + compactCameraWidth + compactTrailingWidth,
+                          height: baseHeight + notchBottomCover)
+        }
         switch phase {
         case .hidden:
             // Retract target: collapse to the EXACT hardware notch (radius matched in `radii`) so the black
@@ -86,7 +118,7 @@ struct NotchMetrics: Equatable {
         case .running, .finishing:
             let caption: CGFloat
             if case .finishing(.failed) = phase { caption = captionHeight * 2 }        // room for the 2-line ✗ reason
-            else if remembering != nil || personalizing { caption = captionHeight } // one context-status line
+            else if setupVisible || remembering != nil || personalizing { caption = captionHeight } // one context-status line
             else if readBack?.isEmpty == false { caption = readBackCaptionHeight(readBack!) }
             else { caption = captionHeight }
             return CGSize(width: runningWidth, height: runningHeight(caption: caption))
@@ -109,6 +141,9 @@ struct NotchMetrics: Equatable {
     }
 
     func radii(for phase: NotchPhase) -> (top: CGFloat, bottom: CGFloat) {
+        if isCompact(for: phase) {
+            return (top: 9, bottom: min(max(size(for: phase).height * 0.3, 10), 14))
+        }
         switch phase {
         case .opening, .hidden:
             // The macOS notch's OWN corner radius (DynamicNotch's tuned match: baseHeight / 3), so at
@@ -182,6 +217,7 @@ struct NotchView: View {
         NotchContent(phase: coordinator.phase,
                      readBack: coordinator.readBack,
                      statusLine: coordinator.run.statusLine,
+                     setupCaption: coordinator.setupCaption,
                      activity: coordinator.run.isRunning && !coordinator.run.isOffline
                          ? coordinator.run.conversation.latestActivity.flatMap { SidekickActivityPresentation.steps([$0]).first } : nil,
                      remembering: coordinator.run.remembering,
@@ -190,7 +226,7 @@ struct NotchView: View {
                      hovering: coordinator.notchHovering,
                      demoText: coordinator.demoDraft,
                      showStop: !coordinator.run.isDemo,
-                     metrics: metrics,
+                     metrics: metrics.showingSetup(coordinator.setupCaption != nil),
                      recovery: coordinator.run.recovery,
                      message: coordinator.notchMessage,
                      isTaskRunning: coordinator.run.isRunning,
@@ -227,6 +263,7 @@ struct NotchContent: View {
     let phase: NotchPhase
     let readBack: String?
     let statusLine: String
+    var setupCaption: CommandCoordinator.SetupCaption? = nil
     var activity: SidekickActivityPresentation.Step? = nil
     var remembering: String? = nil
     var rememberingLabel = "Remembering"
@@ -265,6 +302,7 @@ struct NotchContent: View {
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride
     private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
     @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @State private var settledGlowID: String?
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -273,6 +311,7 @@ struct NotchContent: View {
                              : metrics.size(for: phase, readBack: readBack, remembering: remembering, personalizing: personalizing,
                                             recoveryContent: recovery?.content, messageContent: message)
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: phase)
+        let glowScale = metrics.glowScale(for: phase)
         let visible = phase != .hidden
         // The notch sits FLUSH at the screen's top edge — its concave top corners visible on the bezel
         // (the genuine-notch flare). The glow traces only the sides + bottom (NotchSkirtShape), so the
@@ -290,8 +329,8 @@ struct NotchContent: View {
                 .shadow(color: .black.opacity(0.55), radius: 9, y: 3)
                 .opacity(visible || hoverIdle ? 1 : 0)
                 .allowsHitTesting(false)
-            glow(radii, lineWidth: 13, blur: 17, strength: 0.75)   // wide soft outer halo (behind the fill)
-            glow(radii, lineWidth: 6,  blur: 6,  strength: 0.95)   // denser halo hugging the edge
+            glow(radii, lineWidth: 13 * glowScale, blur: 17 * glowScale, strength: 0.75)
+            glow(radii, lineWidth: 6 * glowScale, blur: 6 * glowScale, strength: 0.95)
             NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom)
                 .fill(.black)
                 // Clickable ONLY as the hover affordance — every other state keeps the shell
@@ -302,7 +341,7 @@ struct NotchContent: View {
                 .contentShape(Rectangle().inset(by: -4))
                 .onTapGesture(perform: onNotchClick)
                 .allowsHitTesting(hoverIdle)
-            glow(radii, lineWidth: 3,  blur: 0.6, strength: 1.0)   // crisp bright rim, over the fill
+            glow(radii, lineWidth: 3 * glowScale, blur: 0.6 * glowScale, strength: 1)
             content(size: size)
                 .opacity(visible ? 1 : 0)              // icons + caption dissolve as the shell retracts into the cutout
                 .blur(radius: reduceMotion || visible ? 0 : 7)
@@ -314,7 +353,9 @@ struct NotchContent: View {
         .accessibilityLabel(a11yLabel)
         .scaleEffect(reduceMotion || visible || hoverIdle ? 1 : 0.94, anchor: .top)
         .opacity(shellOpacity)                           // shell stays opaque & MERGES into a real notch on dismiss (fades only if there's none)
+        .offset(x: metrics.horizontalOffset(for: phase))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(morph, value: metrics.compactMode)
         .animation(morph, value: phase)
         .animation(morph, value: readBack)               // grow/shrink the notch as the read-back appears/clears
         .animation(morph, value: personalizing)
@@ -322,6 +363,7 @@ struct NotchContent: View {
         .animation(morph, value: recovery?.content?.id) // successive presentations can need different heights
         .animation(morph, value: message?.event.id)
         .animation(hoverMorph, value: hovering)          // the hover swell/settle — snappier than the phase morph
+        .task(id: readingGlowID) { await settleReadingGlow() }
         .onChange(of: phase) { _, newPhase in
             if newPhase == .typing {
                 DispatchQueue.main.async { fieldFocused = true }   // focus once the panel has become key
@@ -366,7 +408,70 @@ struct NotchContent: View {
 
     // MARK: Content
 
-    private func content(size: CGSize) -> some View {
+    @ViewBuilder private func content(size: CGSize) -> some View {
+        if metrics.isCompact(for: phase) { compactContent }
+        else { expandedContent(size: size) }
+    }
+
+    private var compactStatus: SidekickActivityPresentation.NotchStatus {
+        if let setupCaption { return .init(text: setupCaption.rawValue, activity: nil) }
+        if phase == .finishing(.success) { return .init(text: "Done", activity: nil) }
+        if phase == .finishing(.stopped) { return .init(text: "Stopped", activity: nil) }
+        if personalizing { return .init(text: "Learning", activity: nil) }
+        if remembering != nil { return .init(text: "Reading", activity: nil) }
+        return SidekickActivityPresentation.compactNotchStatus(statusLine, activity: activity)
+    }
+
+    private var compactContent: some View {
+        let status = compactStatus
+        return HStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Group {
+                    if let activity = status.activity {
+                        SidekickActivityIcon(identifier: activity.appIdentifier, symbol: activity.symbol)
+                    } else {
+                        NotchIdentityMark(size: metrics.controlSlot, working: phase == .running, animated: !identityAnimationPaused)
+                    }
+                }
+                .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+                Text(status.text)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .accessibilityIdentifier("notch.compactStatus")
+            }
+            .padding(.leading, metrics.hPad).padding(.trailing, 2)
+            .frame(width: metrics.compactLeadingWidth, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(status.activity.map { "\($0.appName ?? "Sidekick"), \($0.title)" } ?? status.text)
+            Color.clear.frame(width: metrics.compactCameraWidth)
+            HStack(spacing: 12) {
+                if showsHistoryControl { conversationButton }
+                else { Color.clear.frame(width: metrics.controlSlot, height: metrics.controlSlot) }
+                rightControl.frame(width: metrics.controlSlot, height: metrics.controlSlot)
+            }
+            .padding(.trailing, metrics.hPad)
+            .frame(width: metrics.compactTrailingWidth, alignment: .trailing)
+        }
+        .frame(height: metrics.topRowHeight)
+        .padding(.bottom, metrics.notchBottomCover)
+        .help(readBack.map(NotchMetrics.quoted) ?? progressCaption)
+        .animation(.easeInOut(duration: 0.15), value: status.text)
+    }
+
+    private var conversationButton: some View {
+        Button(action: onOpenConversation) {
+            Image(systemName: "arrow.up.forward.app")
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+        }
+        .buttonStyle(NotchIconButtonStyle())
+        .help("Open conversation in Sentient")
+        .accessibilityLabel("Open Sidekick conversation in Sentient")
+    }
+
+    private func expandedContent(size: CGSize) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 if phase == .recovery {
@@ -387,14 +492,7 @@ struct NotchContent: View {
                 Spacer(minLength: metrics.centerGap)
                 HStack(spacing: 12) {
                     if showsHistoryControl {
-                        Button(action: onOpenConversation) {
-                            Image(systemName: "arrow.up.forward.app")
-                                .font(.system(size: 13, weight: .medium))
-                                .frame(width: metrics.controlSlot, height: metrics.controlSlot)
-                        }
-                        .buttonStyle(NotchIconButtonStyle())
-                        .help("Open conversation in Sentient")
-                        .accessibilityLabel("Open Sidekick conversation in Sentient")
+                        conversationButton
                     }
                     rightControl
                         .frame(width: metrics.controlSlot, height: metrics.controlSlot)
@@ -582,7 +680,18 @@ struct NotchContent: View {
         switch phase {
         case .running:
             Group {
-                if personalizing {
+                if let setupCaption {
+                    HStack(spacing: 6) {
+                        Text(setupCaption.rawValue)
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .accessibilityHidden(true)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("notch.permissionSetup")
+                } else if personalizing {
                     Text("Personalizing Sidekick…")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Self.rememberingGradient)
@@ -645,7 +754,8 @@ struct NotchContent: View {
     /// Narration and connection notices keep their own words. Raw tool IDs use durable
     /// structured activity; while its projection catches up, show a quiet working label.
     private var notchStatus: SidekickActivityPresentation.NotchStatus {
-        SidekickActivityPresentation.notchStatus(statusLine, activity: activity)
+        if let setupCaption { return .init(text: setupCaption.rawValue, activity: nil) }
+        return SidekickActivityPresentation.notchStatus(statusLine, activity: activity)
     }
     private var shownActivity: SidekickActivityPresentation.Step? { notchStatus.activity }
     private var progressCaption: String { notchStatus.text }
@@ -653,6 +763,7 @@ struct NotchContent: View {
     /// Distinct identities let personalization, remembering, read-back and progress blur-dissolve.
     /// (note / status changes WITHIN a state morph in place instead).
     private var runningCaptionKey: Int {
+        if let setupCaption { return setupCaption == .computerUse ? 5 : 4 }
         if personalizing { return 3 }
         if remembering != nil { return 2 }
         if readBack != nil { return 1 }
@@ -715,9 +826,10 @@ struct NotchContent: View {
         // right at the notch's frame edge. So we grow the layer (negative padding) and inset the skirt mask
         // by the same margin: the gradient then bleeds beyond ALL sides equally (no thin bottom edge).
         let m = lineWidth / 2 + blur + 6
+        let rotationPeriod = metrics.glowRotationPeriod(for: phase)
         return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            let angle = ambientAnimationPaused ? 0 : (t.truncatingRemainder(dividingBy: 6.5) / 6.5) * 360
+            let angle = ambientAnimationPaused ? 0 : (t.truncatingRemainder(dividingBy: rotationPeriod) / rotationPeriod) * 360
             let breathe = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 3.2) + 1) / 2
             AngularGradient(colors: GlowHalo.stops, center: .center, angle: .degrees(angle))
                 .opacity(0.88 + 0.12 * breathe)
@@ -731,12 +843,32 @@ struct NotchContent: View {
         .padding(-m)
     }
 
+    /// Key the arrival to the presented content so drafting and preference changes
+    /// cannot replay the glow. SwiftUI cancels the settling task when content changes.
+    private var readingGlowID: String? {
+        switch phase {
+        case .message: return message.map { "message:\($0.event.id)" }
+        case .recovery: return recovery?.content.map { "recovery:\($0.id.uuidString)" }
+        default: return nil
+        }
+    }
+
+    private func settleReadingGlow() async {
+        guard let id = readingGlowID, settledGlowID != id else { return }
+        guard !reduceMotion, !lowPowerMode else { settledGlowID = id; return }
+        do { try await Task.sleep(for: .milliseconds(650)) } catch { return }
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeOut(duration: 0.65)) { settledGlowID = id }
+    }
+
     private var glowStrength: Double {
         switch phase {
         case .hidden:    return 0
-        case .message, .recovery: return 0.35
+        case .message, .recovery:
+            guard let id = readingGlowID, !reduceMotion, !lowPowerMode else { return 0.5 }
+            return settledGlowID == id ? 0.5 : 1
         case .finishing: return 0.9
-        default:         return 1.0   // alive from the moment the notch appears — opening, listening, typing, running…
+        default:         return 1.0
         }
     }
 
@@ -776,7 +908,7 @@ struct NotchContent: View {
         case .typing: return "Type a task for Sentient, or click the microphone to say it"
         case .listening: return "Sentient is listening. Click stop, or press Return, when you're done"
         case .transcribing: return "Sentient is transcribing"
-        case .running: return "Sentient is working. \(progressCaption)"
+        case .running: return "Sentient is working. \(metrics.isCompact(for: phase) ? compactStatus.text : progressCaption)"
         case .finishing: return statusLine
         case .notice(let m): return m
         case .recovery: return "Sidekick needs your help"

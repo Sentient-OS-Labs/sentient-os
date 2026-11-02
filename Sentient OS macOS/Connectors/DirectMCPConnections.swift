@@ -115,7 +115,7 @@ actor DirectMCPConnections {
         }
     }
 
-    /// The execution gate: refresh inventory and classify before tools become usable.
+    /// The execution gate: refresh the live inventory before tools become usable.
     static func verify(_ connection: DirectMCPConnection,
                        onProgress: @escaping @Sendable (DirectMCPConnectPhase) async -> Void = { _ in }) async throws -> DirectMCPConnection {
         do {
@@ -128,35 +128,27 @@ actor DirectMCPConnections {
                                    counts: [.before: connection.tools.count, .after: tools.count])
             }
             let identity = DirectMCPIdentity.parse(snapshot.account)
-            if let previous = connection.accountFingerprint, previous != identity?.fingerprint {
+            // A missing optional account tool does not revoke the selected OAuth grant.
+            // A returned profile must still agree with the previously observed account.
+            if let previous = connection.accountFingerprint, snapshot.account != nil, previous != identity?.fingerprint {
                 throw DirectMCPError.connectionChanged
             }
             var updated = connection
-            updated.accountFingerprint = identity?.fingerprint
-            updated.accountLabel = identity?.label
+            updated.accountFingerprint = identity?.fingerprint ?? connection.accountFingerprint
+            updated.accountLabel = identity?.label ?? connection.accountLabel
             updated.tools = tools
-            if connection.policyFingerprint != DirectMCPTool.fingerprint(tools) || !connection.policyValid {
-                await onProgress(.checkingTools)
-                try Task.checkCancellation()
-                updated.policy = try await classify(tools, providerName: connection.provider?.name ?? connection.providerSlug)
-                updated.policyFingerprint = DirectMCPTool.fingerprint(tools)
-                updated.policyRevision = DirectMCPConnection.currentPolicyRevision
-            } else {
-                await Log("Direct MCP: verified tool policy reused")
-            }
-            // Deterministic safety rules also apply when a cached inventory is unchanged.
-            for tool in tools {
-                if updated.category(for: tool) == .destructive ||
-                    (connection.provider?.reviewedReads.contains(tool.name) == true && !tool.readOnlyHint) {
-                    updated.policy[tool.name] = .destructive
-                }
-            }
+            // Live annotations supplement the provider's existing reviewed read capabilities.
+            updated.policy = Dictionary(uniqueKeysWithValues: tools.map {
+                ($0.name, updated.category(for: $0))
+            })
+            updated.policyFingerprint = DirectMCPTool.fingerprint(tools)
+            updated.policyRevision = DirectMCPConnection.currentPolicyRevision
             // Closed provider/reason vocabulary only: never emit tool definitions or account IDs.
             let provider = connection.provider?.slug ?? "other"
             CrashReporting.diagnosticBreadcrumb("connector.policy_verified", data: ["source": provider,
                 "tools": String(tools.count), "read_tools": String(updated.readNames.count),
                 "native_reads": String(connection.provider?.nativeKnowledgeReads.intersection(Set(updated.readNames)).count ?? 0),
-                "account_verified": String(updated.accountFingerprint != nil)])
+                "account_verified": String(identity != nil)])
             try Task.checkCancellation()
             guard DirectMCPStore.connection(id: connection.id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
             updated.verifiedAt = Date()
@@ -188,6 +180,8 @@ actor DirectMCPConnections {
         try? DirectMCPStore.save(current)
     }
 
+    #if DEBUG
+    // Retained only for explicit legacy classification fixtures.
     static func classify(_ tools: [DirectMCPTool], providerName: String,
                          onResult: (@Sendable (CodexCLI.Envelope) -> Void)? = nil) async throws -> [String: DirectMCPTool.Category] {
         let inventory = tools.compactMap { String(data: $0.definition, encoding: .utf8) }.joined(separator: ",\n")
@@ -247,6 +241,8 @@ actor DirectMCPConnections {
                 "required": names, "properties": properties]]]), as: UTF8.self)
     }
 
+    #endif
+
     @discardableResult
     func disconnect(_ id: UUID) async throws -> Bool {
         attempts[id]?.task.cancel()
@@ -279,4 +275,5 @@ actor DirectMCPConnections {
         }
         if let firstError { throw firstError }
     }
+
 }

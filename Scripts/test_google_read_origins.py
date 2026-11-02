@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Exercise Google read origins and the mailbox-processing collection hook.
+"""Exercise Calendar read origins with controlled source/store suspension.
 
 Only source reads and the store actor are fixtures, controlled with continuations.
 An in-memory spy records the processing hook before each read. No prompts, accounts,
-preferences, network requests, or disk-backed data are used.
+preferences, network requests, or disk-backed data are used. Gmail's durable import,
+origin handling, and collection hook are covered with its actual disk-backed store
+by test_gmail_import_recovery.py.
 """
 from pathlib import Path
 import subprocess
@@ -28,12 +30,10 @@ def declaration(source, signature):
 
 
 production = []
-for service, count_label in [('Gmail', 'Weeks'), ('Calendar', 'Months')]:
+for service, count_label in [('Calendar', 'Months')]:
     source = (APP / 'Sources' / f'{service}Connect.swift').read_text()
     names = ['private struct ReadResult', 'enum Progress', 'static func runInitial(',
              'private static func readInitial(', 'static func runIterative(', 'private static func readIterative(']
-    if service == 'Gmail':
-        names += ['private struct Window', 'private struct WindowResult']
     methods = '\n'.join(declaration(source, name) for name in names)
     initial_line = next(line.strip() for line in source.splitlines() if f'let initial{count_label} =' in line)
     bucket_line = next(line.strip() for line in source.splitlines() if 'let bucketKey =' in line)
@@ -44,15 +44,8 @@ for service, count_label in [('Gmail', 'Weeks'), ('Calendar', 'Months')]:
     private static func label(_ date: Date) -> String {{ "fixture" }}
     private static func draft(_ result: ReadResult, itemDate: Date, label: String) -> NoteDraft {{ NoteDraft() }}
     '''
-    if service == 'Gmail':
-        shared += '''
+    shared += '''
         private static func read(prompt: String) async throws -> ReadResult? { await ReadGate.shared.read(); return nil }
-        private static func weeklyPrompt(query: String, label: String) -> String { query }
-        private static func qDate(_ date: Date) -> String { "fixture" }
-        '''
-    else:
-        shared += '''
-        private static func read(prompt: String, window: DateInterval) async throws -> ReadResult? { await ReadGate.shared.read(); return nil }
         private static func readPrompt(range: String, label: String) -> String { range }
         private static func iso(_ date: Date) -> String { "fixture" }
         '''
@@ -161,7 +154,7 @@ actor CycleStore {
     }
     func mcpCheckpoint(_ bucket: String) throws -> Checkpoint? { checkpoint }
     func commitMCPRead(bucketKey: String, notes: [NoteDraft], through mark: ItemKey,
-                       origin: String, replaceNotes: Bool) async -> Outcome {
+                       origin: String, replaceNotes: Bool) async throws -> Outcome {
         entered = true; enteredWaiter?.resume(); enteredWaiter = nil
         if paused { await withCheckedContinuation { blockedCommit = $0 } }
         checkpoint = Checkpoint(mark: mark, origin: origin); commits += 1
@@ -176,13 +169,10 @@ actor CycleStore {
 
 @main struct Harness {
     enum Source: String, CaseIterable, Sendable {
-        case gmail, calendar
-        var initialReads: Int { self == .gmail ? 4 : 12 }
+        case calendar
+        var initialReads: Int { 12 }
         func read(initial: Bool) async throws {
             switch self {
-            case .gmail:
-                if initial { _ = try await GmailConnect.runInitial() }
-                else { _ = try await GmailConnect.runIterative() }
             case .calendar:
                 if initial { _ = try await CalendarConnect.runInitial() }
                 else { _ = try await CalendarConnect.runIterative() }
@@ -255,17 +245,33 @@ actor CycleStore {
                     let reads = events.filter { $0.kind == "read" }
                     precondition(reads.count == (mode == "iterative" ? 1 : source.initialReads))
                     precondition(reads.allSatisfy { $0.backend == backend && $0.pinned })
-                    if source == .gmail {
-                        precondition(hooks.count == 1 && events.first?.kind == "hook")
-                        precondition(hooks[0].slug == "gmail" && hooks[0].backend == backend && hooks[0].pinned)
-                    } else {
-                        precondition(hooks.isEmpty)
-                    }
+                    precondition(hooks.isEmpty)
                     checks += 1
-                    print("PASS \(backend.rawValue) \(source.rawValue) \(mode) \(source == .gmail ? "collect hook once before reads" : "no collect hook")")
+                    print("PASS \(backend.rawValue) \(source.rawValue) \(mode) no collect hook")
                 }
             }
         }
+        Generation.shared.reset()
+        await CycleStore.shared.reset(checkpointPresent:false)
+        await ReadGate.shared.reset(paused:true)
+        let interrupted=Task {
+            try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await CalendarConnect.runIterative()}
+        }
+        await ReadGate.shared.waitUntilStarted();interrupted.cancel();await ReadGate.shared.release()
+        do {_ = try await interrupted.value;fatalError("Cancelled Calendar stage accepted")}
+        catch is CancellationError {}
+        let partial=try await CycleStore.shared.mcpCheckpoint("google-calendar")
+        precondition(partial == nil)
+        await ReadGate.shared.reset(paused:false)
+        _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await CalendarConnect.runIterative()}
+        let rereads=await ReadGate.shared.count()
+        precondition(rereads == Source.calendar.initialReads)
+        print("PASS interrupted Calendar stage restarts all monthly windows")
+        await ReadGate.shared.reset(paused:false)
+        _ = try await InitialAnalysisRecovery.$replayCloudStages.withValue(true) {try await CalendarConnect.runIterative()}
+        let preserved=await ReadGate.shared.count();precondition(preserved == 0)
+        print("PASS completed Calendar stage is preserved during initial creation")
+        checks += 2
         print("Checked \(checks) Google read origin and processing-hook cases; failures=0")
     }
 }
@@ -275,5 +281,5 @@ with tempfile.TemporaryDirectory(prefix='sentient-google-read-origin-') as direc
     swift = root / 'Fixture.swift'
     swift.write_text(FIXTURE + '\n' + '\n'.join(production))
     binary = root / 'checks'
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), '-o', str(binary)], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(swift), str(APP / 'Ingestion/InitialAnalysisRecovery.swift'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)

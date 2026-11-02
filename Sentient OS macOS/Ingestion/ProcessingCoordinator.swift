@@ -40,10 +40,11 @@ final class ProcessingCoordinator {
     @ObservationIgnored private var requestOverride: ProcessingRequest?
     @ObservationIgnored private var runID = UUID()
     @ObservationIgnored private var stopReason: Stop?
-    @ObservationIgnored private var lastProgressAt = Date()
-    @ObservationIgnored private var startedAt = Date()
+    @ObservationIgnored private var lastProgressAt = SuspendingClock.now
+    @ObservationIgnored private var startedAt = SuspendingClock.now
     @ObservationIgnored private var lastHeartbeatAt = Date.distantPast
     @ObservationIgnored private var helperHeld = false
+    @ObservationIgnored private var awakeUpdate: Task<Bool, Never>?
     @ObservationIgnored private var helperRelease: Task<Void, Never>?
     @ObservationIgnored private var diagnosticID: UUID?
     @ObservationIgnored private var activity: NSObjectProtocol?
@@ -60,8 +61,9 @@ final class ProcessingCoordinator {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        record = ProcessingPlan.recovered(ProcessingPlan.read(defaults))
-        initialComplete = ProcessingPlan.initialCompletedAt(defaults) != nil
+        let completed = ProcessingPlan.initialCompletedAt(defaults) != nil
+        initialComplete = completed
+        record = ProcessingPlan.recovered(ProcessingPlan.read(defaults), initialComplete: completed)
         ProcessingPlan.save(record, to: defaults)
         switch record.status {
         case .scheduled: state = .scheduled
@@ -74,7 +76,10 @@ final class ProcessingCoordinator {
 
     var batteryFloor: Int { initialComplete ? PowerState.iterativeBatteryFloor : PowerState.initialBatteryFloor }
     var paused: Bool { record.status == .paused }
-    var hasPendingFirstNight: Bool { !initialComplete && record.status == .scheduled }
+    var hasPendingFirstNight: Bool {
+        !initialComplete && record.status == .scheduled
+            && (defaults.object(forKey: OvernightScheduler.prodEnabledKey) as? Bool) != false
+    }
     var needsAttention: Bool {
         switch state {
         case .waiting, .paused, .diskFull, .failed: true
@@ -123,19 +128,14 @@ final class ProcessingCoordinator {
         return formatter.string(from: date)
     }
 
-    /// Persist before the caller marks onboarding complete. Only explicit Run now opens progress.
+    /// Persist before the caller marks setup complete. The legacy timing argument is retained
+    /// for restored callers, but first analysis always starts now and can be paused explicitly.
     func choose(_ timing: Timing) {
         guard !isBusy else { return }
         requestOverride = nil
         carried = RunProgress()
-        if timing == .overnight {
-            record = .init(status: .scheduled, trigger: .overnight,
-                           due: OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes))
-            state = .scheduled
-        } else {
-            record = .init(status: .requested, trigger: .onboarding)
-            state = .idle
-        }
+        record = .init(status: .requested, trigger: .onboarding)
+        state = .idle
     }
 
     func startMonitoring() {
@@ -202,6 +202,13 @@ final class ProcessingCoordinator {
         record = .init(status: .scheduled, trigger: .overnight,
             due: OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes), notice: notice)
         state = .scheduled
+    }
+
+    func cancelScheduled() {
+        guard !isBusy, record.status == .scheduled else { return }
+        record.status = .idle
+        record.due = nil
+        state = .idle
     }
 
     /// Reset must invalidate pending intent before it wipes checkpoints. A draining task retains
@@ -288,7 +295,7 @@ final class ProcessingCoordinator {
         let id = runID
         record.status = .running; record.due = nil; record.notice = nil
         let trigger = record.trigger
-        startedAt = Date(); lastProgressAt = Date(); lastHeartbeatAt = .distantPast
+        startedAt = .now; lastProgressAt = .now; lastHeartbeatAt = .distantPast
         updatingExistingKnowledge = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
         thought = nil; prepSubtext = nil
         state = .loadingModel
@@ -310,6 +317,9 @@ final class ProcessingCoordinator {
             diagnosticID = nil
             isBusy = false
             task = nil
+            if (defaults.object(forKey: OvernightScheduler.prodEnabledKey) as? Bool) == false {
+                cancelScheduled()
+            }
         }
     }
 
@@ -319,21 +329,27 @@ final class ProcessingCoordinator {
         self.diagnosticID = diagnosticID
         if scheduled {
             Analytics.signal("Scheduler.overnightStarted")
-            helperHeld = await WakeHelperClient.shared.beginAwake(timeout: 1800)
-            if !helperHeld {
+        }
+        if needsAwakeProtection {
+            let held = await maintainAwake(for: id)
+            if Task.isCancelled || stopReason != nil { finishStopped(RunProgress()); return }
+            if scheduled && !held {
                 record = .init(status: .scheduled, trigger: .overnight,
                     due: OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes),
-                    notice: "Overnight wake needs attention. Open Settings, Permissions & Health.")
+                    notice: "Overnight wake needs attention. Open Settings, Permissions & Help.")
                 state = .scheduled
                 if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "wake_helper") }
                 return
+            }
+            if !held {
+                record.notice = "Keep the lid open while analysis runs. Finish overnight wake setup in Settings → Permissions & Help to continue with the lid closed."
             }
         }
         if Task.isCancelled { finishStopped(RunProgress()); return }
         let report: @Sendable (RunProgress) -> Void = { [weak self] p in
             Task { @MainActor [weak self] in
                 guard let self, self.runID == id, self.stopReason == nil else { return }
-                self.lastProgressAt = Date()
+                self.lastProgressAt = .now
                 self.progress = Self.composed(self.carried, p)
                 if self.state == .loadingModel { self.state = .processing }
             }
@@ -343,7 +359,7 @@ final class ProcessingCoordinator {
         // A valid vault can be published before a later proactive stage fails or is paused.
         if request.fullCycle { knowledgeRevision += 1 }
         if Task.isCancelled || stopReason != nil {
-            finishStopped(result.progress)
+            finishStopped(result.deviceProgress ?? result.progress)
             if let diagnosticID { DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .stopped, reason: "paused") }
             return
         }
@@ -379,7 +395,7 @@ final class ProcessingCoordinator {
         if let diagnosticID {
             DiagnosticHistory.finish(.overnight, id: diagnosticID,
                 outcome: complete ? .completed : (result.failure == nil ? .partial : .failed),
-                measurements: ["elapsed_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
+                measurements: ["elapsed_ms": Int(startedAt.duration(to: .now) / .milliseconds(1)),
                                "device_items": result.progress.total, "device_failed": result.progress.failed])
             if complete { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
         }
@@ -402,23 +418,25 @@ final class ProcessingCoordinator {
 
     private func execute(_ request: ProcessingRequest, scheduled: Bool, id: UUID,
                          report: @escaping @Sendable (RunProgress) -> Void) async -> ProcessingRun.Result {
-        await ProcessingRun(request: request, scheduled: scheduled).execute(progress: report, phase: { [weak self] phase in
-            Task { @MainActor [weak self] in
-                guard let self, self.runID == id, self.stopReason == nil else { return }
-                self.lastProgressAt = Date(); self.thought = nil
-                switch phase {
-                case .knowledgeBase(let text): self.state = .preparing; self.prepStatus = text; self.prepSubtext = nil
-                case .deciding: self.state = .preparing; self.prepStatus = "Finding things worth doing…"
-                case .researching(let n): self.state = .preparing; self.prepStatus = "Preparing \(n) suggestions…"
-                case .done, .failed: break
+        await InitialAnalysisRecovery.$replayCloudStages.withValue(!initialComplete && request.fullCycle && request.readySelectionCount != nil) {
+            await ProcessingRun(request: request, scheduled: scheduled).execute(progress: report, phase: { [weak self] phase in
+                Task { @MainActor [weak self] in
+                    guard let self, self.runID == id, self.stopReason == nil else { return }
+                    self.lastProgressAt = .now; self.thought = nil
+                    switch phase {
+                    case .knowledgeBase(let text): self.state = .preparing; self.prepStatus = text; self.prepSubtext = nil
+                    case .deciding: self.state = .preparing; self.prepStatus = "Finding things worth doing…"
+                    case .researching(let n): self.state = .preparing; self.prepStatus = "Preparing \(n) suggestions…"
+                    case .done, .failed: break
+                    }
                 }
-            }
-        }, onLine: { [weak self] line in
-            Task { @MainActor [weak self] in
-                guard let self, self.runID == id, self.stopReason == nil else { return }
-                self.lastProgressAt = Date(); self.thought = line
-            }
-        })
+            }, onLine: { [weak self] line in
+                Task { @MainActor [weak self] in
+                    guard let self, self.runID == id, self.stopReason == nil else { return }
+                    self.lastProgressAt = .now; self.thought = line
+                }
+            })
+        }
     }
 
     private func stop(_ reason: Stop) {
@@ -428,7 +446,7 @@ final class ProcessingCoordinator {
         stopReason = reason
         state = .stopping
         // Persist the user's pause immediately, even if the app quits while work is draining.
-        record.status = reason == .user ? .paused : .requested
+        record.status = reason == .user || (reason == .cancelled && !initialComplete) ? .paused : .requested
         if reason == .stalled || reason == .ceiling {
             record.status = .failed
             record.notice = "Analysis stopped making progress. Waiting for it to finish stopping; completed work is saved."
@@ -462,7 +480,7 @@ final class ProcessingCoordinator {
         case .cancelled, nil:
             record.status = .paused; state = .paused
         }
-        if record.trigger == .overnight, stopReason != .user {
+        if initialComplete, record.trigger == .overnight, stopReason != .user {
             record.status = .scheduled
             record.due = OvernightScheduler.nextOccurrence(minutesSinceMidnight: OvernightScheduler.configuredMinutes)
             if record.notice == nil { record.notice = "Overnight analysis paused. Your progress is saved for the next run." }
@@ -473,17 +491,44 @@ final class ProcessingCoordinator {
     private func checkRunningWork() async {
         guard isBusy, stopReason == nil, record.status == .running else { return }
         if PowerState.shouldPause(power, scheduled: record.trigger == .overnight) { stop(.power); return }
-        if Date().timeIntervalSince(lastProgressAt) > OvernightScheduler.stallSeconds { stop(.stalled); return }
-        if record.trigger == .overnight {
-            if Date().timeIntervalSince(startedAt) >= Double(WakeHelperConfig.maxAwakeSeconds) { stop(.ceiling); return }
-            if helperHeld && Date().timeIntervalSince(lastHeartbeatAt) >= 60 {
-                lastHeartbeatAt = Date()
-                _ = await WakeHelperClient.shared.heartbeat()
-            }
+        // Time spent asleep is not a stalled model. Resume normally when a scheduled wake fires.
+        if lastProgressAt.duration(to: .now) > .seconds(OvernightScheduler.stallSeconds) { stop(.stalled); return }
+        if record.trigger == .overnight || (!initialComplete && activeRequest?.fullCycle == true) {
+            if startedAt.duration(to: .now) >= .seconds(WakeHelperConfig.maxAwakeSeconds) { stop(.ceiling); return }
+        }
+        if needsAwakeProtection {
+            if Date().timeIntervalSince(lastHeartbeatAt) >= 60 { _ = await maintainAwake(for: runID) }
+        } else if helperHeld {
+            await releaseAwake()
+            lastHeartbeatAt = .distantPast
         }
     }
 
+    private var needsAwakeProtection: Bool {
+        record.trigger == .overnight || (!initialComplete && activeRequest?.fullCycle == true && power.onAC)
+    }
+
+    /// Serialize start/recovery with Pause and final cleanup. A timed-out begin may still reach
+    /// the helper, so remember the possible hold until endAwake has been queued after it.
+    private func maintainAwake(for id: UUID) async -> Bool {
+        if let awakeUpdate { return await awakeUpdate.value }
+        let update = Task { @MainActor in
+            if let helperRelease { await helperRelease.value }
+            guard runID == id, stopReason == nil, record.status == .running, needsAwakeProtection else { return false }
+            lastHeartbeatAt = Date()
+            if helperHeld, await WakeHelperClient.shared.heartbeat() { return true }
+            guard runID == id, stopReason == nil, record.status == .running, needsAwakeProtection else { return false }
+            helperHeld = true
+            return await WakeHelperClient.shared.beginAwake(timeout: 1800)
+        }
+        awakeUpdate = update
+        let held = await update.value
+        awakeUpdate = nil
+        return held
+    }
+
     private func releaseAwake() async {
+        if let awakeUpdate { _ = await awakeUpdate.value }
         if let helperRelease { await helperRelease.value; return }
         guard helperHeld else { return }
         helperHeld = false

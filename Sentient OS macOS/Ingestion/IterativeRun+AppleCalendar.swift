@@ -13,6 +13,7 @@ extension IterativeRun {
         var p = RunProgress()
         var generations = 0, runtimeFailures = 0
         var notes: [NoteDraft] = []
+        var resolved = Set<String>()
         let name = "Apple Calendar"
         let deadline = Date().addingTimeInterval(Self.sourceTimeCapSeconds)
         var diagnosticPhase: Diagnostics.Phase = .snapshot
@@ -30,7 +31,12 @@ extension IterativeRun {
             onProgress(p)
             for event in snapshot.events.sorted(by: { ($0.start, $0.id) < ($1.start, $1.id) }) {
                 try Task.checkCancellation()
-                guard Date() < deadline else { throw CalendarRunFailure.deadline }
+                if Date() >= deadline { break }
+                if cache.skipped?[event.id] == event.revision, !event.revision.isEmpty {
+                    resolved.insert(event.id)
+                    p.done += 1
+                    continue
+                }
                 var seconds = 0.0
                 var loaded = false
                 do {
@@ -46,22 +52,11 @@ extension IterativeRun {
                             try await engine.reload(); generations = 0
                         }
                         let prompt = Triage.prompt(for: artifact, currentDate: Date())
-                        for attempt in 0..<2 {
-                            try Task.checkCancellation()
-                            diagnosticPhase = .generate
-                            let result = try await engine.generate(prompt: prompt + (attempt == 0 ? "" : Triage.calendarRetryInstruction))
-                            generations += 1; seconds += result.totalTime
-                            switch Triage.calendarReply(result.text, for: artifact) {
-                            case .success(let outcome): decision = outcome
-                            case .failure(let reason):
-                                Log("Apple Calendar reply deferred: \(reason.rawValue), attempt=\(attempt + 1), bytes=\(result.text.utf8.count)")
-                                if attempt == 1 {
-                                    Diagnostics.report(.modelOutputInvalid, phase: .parse, reason: "calendar_reply", error: reason, source: "apple_calendar", counts: [.bytes: result.text.utf8.count, .retries: 1])
-                                    throw reason
-                                }
-                            }
-                            if decision != nil { break }
-                        }
+                        try Task.checkCancellation()
+                        diagnosticPhase = .generate
+                        let result = try await engine.generate(prompt: prompt)
+                        generations += 1; seconds += result.totalTime
+                        decision = try Triage.calendarReply(result.text, for: artifact).get()
                     }
                     guard let decision else { throw Triage.ReplyFailure.invalidJSON }
                     try Task.checkCancellation()
@@ -81,26 +76,33 @@ extension IterativeRun {
                     p.lastTitle = decision.title
                     p.lastSummary = decision.summary.isEmpty ? nil : decision.summary
                     p.lastVerdict = decision.verdict
+                    resolved.insert(event.id)
                 } catch is CancellationError { throw CancellationError() }
                 catch let error as AppleCalendarSource.ReadError { throw error }
                 catch CalendarRunFailure.storage { throw CalendarRunFailure.storage }
                 catch {
-                    Diagnostics.report(.sourceReadFailed, phase: diagnosticPhase, error: error, source: "apple_calendar", flags: [.retriable: true], terminal: true)
+                    Diagnostics.report(.ingestionSkipped, phase: diagnosticPhase, error: error, source: "apple_calendar", flags: [.retriable: false])
                     p.failed += 1
-                    p.lastTitle = "Analysis deferred"
+                    if !event.revision.isEmpty {
+                        if cache.skipped == nil { cache.skipped = [:] }
+                        cache.skipped?[event.id] = event.revision
+                        resolved.insert(event.id)
+                        guard await store.saveCalendarRetryCache(cache) == .saved else { throw CalendarRunFailure.storage }
+                    }
+                    p.lastTitle = "Event skipped"
                     p.lastVerdict = nil
                     if !loaded {
                         p.extractionFailed += 1; runtimeFailures = 0
                         p.lastTitle = "Calendar event unavailable"
-                        p.lastSummary = "An event could not be read. Calendar analysis will retry this window."
+                        p.lastSummary = "This event was skipped."
                         Log("Apple Calendar event deferred: \(String(describing: type(of: error)))")
                     } else if let reason = error as? Triage.ReplyFailure {
                         p.parseFailures += 1; runtimeFailures = 0
-                        p.lastSummary = "The local model returned an incomplete answer. Completed safe summaries are saved for the next attempt."
+                        p.lastSummary = "The local model returned an incomplete answer. This event was skipped."
                         Log("Apple Calendar analysis deferred: \(reason.rawValue)")
                     } else {
                         runtimeFailures += 1
-                        p.lastSummary = "The on-device model could not finish. This calendar window remains queued for another analysis."
+                        p.lastSummary = "The on-device model could not finish this event. It was skipped."
                         Log("Apple Calendar generation failed: \(String(describing: type(of: error)))")
                     }
                 }
@@ -109,19 +111,25 @@ extension IterativeRun {
                 onProgress(p)
                 if runtimeFailures == 3 || runtimeFailures >= 6 {
                     do { try await engine.reload(); generations = 0 }
-                    catch { throw CalendarRunFailure.model }
-                    if runtimeFailures >= 6 { throw CalendarRunFailure.model }
+                    catch { break }
+                    if runtimeFailures >= 6 { break }
                 }
             }
             try Task.checkCancellation()
-            guard p.failed == 0 else { throw CalendarRunFailure.analysis }
-            guard Date() < deadline else { throw CalendarRunFailure.deadline }
             diagnosticPhase = .validate
-            try await withExtractionTimeout(Self.extractionTimeoutSeconds) { try snapshot.validate() }
+            guard snapshot.coverage.matchesSelection else { throw AppleCalendarSource.ReadError.changed }
+            let fresh = try await withExtractionTimeout(Self.extractionTimeoutSeconds) {
+                try AppleCalendarSource.capture(ids: AppleCalendarSource.selectedIDs, coverage: snapshot.coverage)
+            }
+            let unchanged = fresh.unchangedEventIDs(comparedTo: snapshot)
+            notes.removeAll { !unchanged.contains($0.sourceID) }
+            resolved.formIntersection(unchanged)
+            let remaining = fresh.events.count - resolved.count
+            cache.validate(against: fresh)
+            guard await store.saveCalendarRetryCache(cache) == .saved else { throw CalendarRunFailure.storage }
             try Task.checkCancellation()
-            guard Date() < deadline else { throw CalendarRunFailure.deadline }
             diagnosticPhase = .commit
-            let result = await store.commitCalendarSnapshot(snapshot, notes: notes)
+            let result = await store.commitCalendarSnapshot(fresh, notes: notes, pending: remaining)
             guard result == .saved else {
                 try Task.checkCancellation()
                 p.diskFull = result == .diskFull
@@ -133,10 +141,16 @@ extension IterativeRun {
             for _ in notes { LifetimeStats.bump(.survivor) }
             for _ in 0..<p.junk { LifetimeStats.bump(.junk) }
             for _ in 0..<p.sensitive { LifetimeStats.bump(.sensitive) }
-            p.successfulSources.insert(name)
-            UserDefaults.standard.removeObject(forKey: AppleCalendarSource.issueKey)
-            SourceHealth.recordReadOutcome(source: "apple_calendar", outcome: "ok")
-            if snapshot.events.isEmpty {
+            if remaining == 0 {
+                p.successfulSources.insert(name)
+                UserDefaults.standard.removeObject(forKey: AppleCalendarSource.issueKey)
+                SourceHealth.recordReadOutcome(source: "apple_calendar", outcome: "ok")
+            } else {
+                AppleCalendarSource.recordIssue(.incomplete)
+                p.sourceReadFailures[name] = "Calendar updated. \(remaining) events remain for another analysis."
+                SourceHealth.recordReadOutcome(source: "apple_calendar", outcome: "incomplete")
+            }
+            if fresh.events.isEmpty {
                 p.quietReads += 1
                 p.finishSourceRead(name: name, label: name, summary: nil, items: 0)
                 p.lastTitle = "No events in selected calendars"

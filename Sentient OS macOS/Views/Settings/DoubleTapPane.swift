@@ -15,13 +15,17 @@ struct DoubleTapPane: View {
     @State private var hasWritingSources = WritingStyle.hasSources
     @State private var collectingExamples = false
     @State private var writingStatus: String?
+    @State private var draftingModel = DoubleTapProvider.current.model
 
     private var provider: DoubleTapProvider { DoubleTapProvider(rawValue: providerRaw) ?? .sentient }
 
     var body: some View {
         SettingsPane(title: "Double Tap", whisper: "Replies in your voice, ready for you to review.") {
             VStack(alignment: .leading, spacing: 32) {
-                SettingsGroup(label: "Custom instructions", description: "Tell Double Tap how you like to write.") {
+                SettingsGroup(label: "Activation", inset: 0) {
+                    ShortcutSetting()
+                }
+                SettingsGroup(label: "Writing instructions", description: "Tell Double Tap how you like to write.") {
                     VStack(alignment: .leading, spacing: 12) {
                         SettingsTextBox(placeholder: "Keep texts casual and lowercase. Use a professional tone for email.", text: $instructions)
                             .frame(height: 112)
@@ -68,34 +72,18 @@ struct DoubleTapPane: View {
                 }
 
                 SettingsGroup(label: "Drafting model", inset: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        SettingsRow(title: "Provider", subtitle: "Independent of your Sidekick model.") {
-                            SettingsMenu(title: "Double Tap provider", value: provider.label, selection: $providerRaw) {
-                                ForEach(DoubleTapProvider.allCases) { provider in
-                                    Text(provider.label).tag(provider.rawValue)
-                                }
-                            }
-                            .frame(width: 200)
+                    SettingsRow(title: provider.label,
+                                subtitle: provider == .sentient
+                                    ? "Model managed by Sentient. Separate from your main AI."
+                                    : draftingModel.isEmpty ? "Choose a model in AI Models & Accounts."
+                                    : "Model: \(draftingModel). Separate from your main AI.") {
+                        SettingsPillButton(title: "Change model…") {
+                            MainNavigation.shared.show(.settings, settingsPane: .frontierModel)
+                            MainNavigation.shared.modelSettingsSection = .doubleTap
                         }
-                        SettingsHairline(opacity: 0.10)
-                        VStack(alignment: .leading, spacing: 18) {
-                            if provider == .sentient {
-                                SettingsProse(PrivacyCopy.doubleTapCovered)
-                            } else {
-                                DoubleTapCredentials(provider: provider).id(provider)
-                            }
-                            SettingsDetails(title: "What is shared with this provider?") {
-                                SettingsProse(PrivacyCopy.doubleTapContext)
-                                SettingsProse(provider == .sentient
-                                    ? "This context passes through Sentient’s relay to OpenAI."
-                                    : provider.hasCustomEndpoint
-                                    ? "This context goes directly to your configured endpoint. For local drafting, use a local model served on this Mac."
-                                    : "This context goes directly to your chosen \(provider.name) provider, under its policies and your account settings.")
-                            }
-                        }
-                        .padding(20)
                     }
                 }
+
             }
         }
         .onAppear(perform: refreshWritingState)
@@ -106,6 +94,7 @@ struct DoubleTapPane: View {
     }
 
     private func refreshWritingState() {
+        draftingModel = provider.model
         hasWritingExamples = WritingStyle.exists()
         hasWritingSources = WritingStyle.hasSources
     }
@@ -122,6 +111,44 @@ struct DoubleTapPane: View {
             } catch is CancellationError { }
             catch {
                 writingStatus = "Examples could not be collected. Check your selected sources and try again. Double Tap remains available."
+            }
+        }
+    }
+}
+
+/// The single editor for Double Tap's provider, model, endpoint and Keychain credentials.
+struct DoubleTapModelSettings: View {
+    @AppStorage(DoubleTapProvider.key) private var providerRaw = DoubleTapProvider.sentient.rawValue
+    private var provider: DoubleTapProvider { DoubleTapProvider(rawValue: providerRaw) ?? .sentient }
+
+    var body: some View {
+        ModelSelectionPanel(title: "Double Tap", subtitle: "Quick replies that sound like you.", centered: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsRow(title: "Provider", subtitle: "Independent of your Sidekick model.") {
+                    SettingsMenu(title: "Double Tap provider", value: provider.label, selection: $providerRaw) {
+                        ForEach(DoubleTapProvider.allCases) { provider in
+                            Text(provider.label).tag(provider.rawValue)
+                        }
+                    }
+                    .frame(width: 200)
+                }
+                SettingsHairline(opacity: 0.10)
+                VStack(alignment: .leading, spacing: 18) {
+                    if provider == .sentient {
+                        SettingsProse(PrivacyCopy.doubleTapCovered)
+                    } else {
+                        DoubleTapCredentials(provider: provider).id(provider)
+                    }
+                    SettingsDetails(title: "What is shared with this provider?") {
+                        SettingsProse(PrivacyCopy.doubleTapContext)
+                        SettingsProse(provider == .sentient
+                            ? "This context passes through Sentient’s relay to OpenAI."
+                            : provider.hasCustomEndpoint
+                            ? "This context goes directly to your configured endpoint. For local drafting, use a local model served on this Mac."
+                            : "This context goes directly to your chosen \(provider.name) provider, under its policies and your account settings.")
+                    }
+                }
+                .padding(20)
             }
         }
     }

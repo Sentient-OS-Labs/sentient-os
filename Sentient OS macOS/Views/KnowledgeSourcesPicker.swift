@@ -55,6 +55,14 @@ struct KnowledgeSourcesPicker: View {
         return context == .onboarding ? sources.filter(\.isCurated) : sources
     }
 
+    private var knowledgeConnectorSources: [ConnectorSource] {
+        connectorSources.filter(\.showsInKnowledgeSources)
+    }
+
+    private var sidekickConnectorSources: [ConnectorSource] {
+        connectorSources.filter { !$0.showsInKnowledgeSources }
+    }
+
     // Connector opt-ins use dynamic mcp.<slug>.kb keys, so the fixed @AppStorage properties
     // above cannot observe every selection. Recount on preferences changes, including edits
     // in a connection sheet or another window, and report the live count to onboarding.
@@ -63,7 +71,7 @@ struct KnowledgeSourcesPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: context == .settings ? 30 : 20) {
             if context == .settings {
-                Text("Choose at least three sources to set up your personal context.")
+                Text("Choose at least three sources for analysis and nightly updates.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.72))
                     .padding(.top, -16)
@@ -74,8 +82,20 @@ struct KnowledgeSourcesPicker: View {
             SettingsHairline()
             otherAppsGroup
             foldersGroup
+            if context == .settings, !sidekickConnectorSources.isEmpty {
+                SettingsHairline()
+                SettingsGroup(label: "Connected Sidekick apps",
+                              description: "Already connected. Sidekick can use these apps when you ask.") {
+                    ChipFlow {
+                        ForEach(sidekickConnectorSources) { source in
+                            connectorPill(source)
+                        }
+                    }
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: ClaudeAuth.changed))
             .receive(on: RunLoop.main)) { _ in
                 selectionCount = SourceSelection.selectionCount
             }
@@ -126,10 +146,15 @@ struct KnowledgeSourcesPicker: View {
         }
         .sheet(isPresented: $showAppleCalendarConnect) { AppleCalendarConnectSheet() }
         .sheet(item: $selectedConnector) { source in
-            ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
+            if ModelBackend.current == .sentient, HostedConnectorStore.services.contains(source.serviceSlug) {
+                HostedConnectorConnectSheet(service: source.serviceSlug, account: source.connector.flatMap { HostedConnectorStore.account($0.slug) })
+            } else {
+                ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
+            }
         }
         .onChange(of: backendRaw) { selectedConnector = nil }
         .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
+        .onReceive(NotificationCenter.default.publisher(for: HostedConnectorStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
     }
 
     /// Clicking a protected app is explicit intent. Merely showing its chip never opens a
@@ -196,7 +221,7 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private var chatsGroup: some View {
-        SettingsGroup(label: "Your conversations") {
+        SettingsGroup(label: "Messages") {
             VStack(alignment: .leading, spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 18) { conversationPills }
@@ -228,7 +253,7 @@ struct KnowledgeSourcesPicker: View {
     // MARK: - Hosted and direct connectors
 
     private var emailAndCalendarGroup: some View {
-        SettingsGroup(label: "Email & calendar") {
+        SettingsGroup(label: "Email & calendars") {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 18) {
@@ -253,10 +278,14 @@ struct KnowledgeSourcesPicker: View {
     private var emailColumn: some View {
         let mailSupported = AppleMailSource.isSupported
         return VStack(alignment: .leading, spacing: 9) {
+            if ModelBackend.current == .sentient {
+                ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "gmail" }) { connectorPill($0, featured: true) }
+            } else {
             KnowledgeSourcePill(label: "Gmail", detail: runGmail && !SourceSelection.hostedSourceReady("gmail") ? "Connection needs attention · Manage" : nil,
                                 asset: "GmailMark", selected: runGmail,
                                 featured: true, locked: CodexAuth.connectorsLocked && !runGmail) { showGmailConnect = true }
-            ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
+            }
+            ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
             KnowledgeSourcePill(label: "Apple Mail", detail: mailSupported
@@ -278,10 +307,14 @@ struct KnowledgeSourcesPicker: View {
 
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
+            if ModelBackend.current == .sentient {
+                ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "google-calendar" }) { connectorPill($0, featured: true) }
+            } else {
             KnowledgeSourcePill(label: "Google Calendar", detail: runCalendar && !SourceSelection.hostedSourceReady("calendar") ? "Connection needs attention · Manage" : nil,
                                 asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked && !runCalendar) { showCalendarConnect = true }
-            ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
+            }
+            ForEach(knowledgeConnectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
                 connectorPill(source, featured: true)
             }
             KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
@@ -299,11 +332,11 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private var otherAppsGroup: some View {
-        SettingsGroup(label: "More of your world") {
+        SettingsGroup(label: "Apps & notes") {
             VStack(alignment: .leading, spacing: 12) {
                 ChipFlow {
-                    ForEach(connectorSources.filter {
-                        !["outlook-mail", "outlook-calendar"].contains($0.serviceSlug)
+                    ForEach(knowledgeConnectorSources.filter {
+                        !["gmail", "google-calendar", "outlook-mail", "outlook-calendar"].contains($0.serviceSlug)
                     }) { source in
                         connectorPill(source)
                     }
@@ -326,7 +359,8 @@ struct KnowledgeSourcesPicker: View {
 
     private func connectorPill(_ source: ConnectorSource, featured: Bool = false) -> some View {
         ConnectorPill(source: source,
-                      locked: !ConnectorRegistry.isKBEnabled(source.connector?.slug ?? source.serviceSlug)
+                      locked: source.showsInKnowledgeSources
+                        && !ConnectorRegistry.isKBEnabled(source.connector?.slug ?? source.serviceSlug)
                         && (source.usesHostedConnection ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly),
                       featured: featured) { selectedConnector = source }
     }
@@ -344,8 +378,11 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private func updateConnectors() {
-        connectors = ConnectorRegistry.detectedForCurrentBackend().filter { $0.origin != .direct }
-            + DirectMCPStore.connections().map(\.detected)
+        connectors = ConnectorRegistry.detectedForCurrentBackend(includeUnavailableDirect: true)
+        if ModelBackend.current == .sentient {
+            connectors.removeAll { $0.origin == .sentient }
+            connectors += HostedConnectorStore.accounts().map(\.detected)
+        }
         selectionCount = SourceSelection.selectionCount
     }
 
@@ -371,39 +408,178 @@ private struct SourceAccessSheet: View {
     var onStopReading: (() -> Void)?
     var onReady: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var openedSettings = false
     @State private var checked = false
+    @State private var readable = false
+    @State private var finishing = false
+    @State private var guideID: UUID?
+    @State private var ownsRelaunch = false
+
+    private var asset: String {
+        switch source {
+        case .whatsapp: "WhatsAppMark"
+        case .imessage: "IMessageMark"
+        case .notes: "AppleNotesMark"
+        case .mail: "AppleMailMark"
+        }
+    }
+    private var subtitle: String {
+        switch source {
+        case .whatsapp, .imessage: "Choose the conversations Sentient learns from."
+        case .mail: "Choose the mail accounts Sentient learns from."
+        case .notes: "Bring your notes into your personal context."
+        }
+    }
+    private var nextTitle: String {
+        switch source {
+        case .whatsapp, .imessage: "Choose chats"
+        case .mail: "Choose accounts"
+        case .notes: "Connect Apple Notes"
+        }
+    }
+    private var primaryTitle: String {
+        readable ? nextTitle : (openedSettings ? "Continue" : "Enable access")
+    }
+    private var readyDescription: String {
+        switch source {
+        case .whatsapp, .imessage: "Choose the chats to include."
+        case .mail: "Choose the mail accounts to include."
+        case .notes: "Connect Apple Notes to include your notes."
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Connect \(source.title)").display(22)
-            Text("macOS protects \(source.title)’s local data with Full Disk Access. Allow Sentient in System Settings to choose what it can read from this source.")
-                .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Your selection stays optional. Granting access does not select any other app or folder.")
-                .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
-            if checked {
-                Text("Access is not ready yet. If you already allowed Sentient, finish any active tasks and relaunch the app. Also make sure \(source.title) has data synced to this Mac.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 14) {
+                ConnectorLogo(asset: asset, size: 44)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("\(onStopReading == nil ? "Connect" : "Reconnect") \(source.title)")
+                        .display(22).foregroundStyle(.white)
+                    Text(subtitle).font(.system(size: 12.5))
+                        .foregroundStyle(Theme.Ink.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: readable ? "checkmark.circle.fill" : "lock.shield")
+                        .font(.system(size: 18))
+                        .foregroundStyle(readable ? Theme.Ink.green : .white.opacity(0.7))
+                    Text(readable ? "Access ready" : "Full Disk Access")
+                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+                }
+                Text(readable ? readyDescription
+                     : "macOS requires this permission to read \(source.title)’s local data.")
+                    .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)
+                if openedSettings && !readable {
+                    Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
+                    Text("Drag Sentient into the list, then turn its switch on.")
+                        .font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(action: openGuide) {
+                        Label("Open Settings", systemImage: "arrow.up.right")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.white.opacity(0.75))
+                    .disabled(finishing || SafeAppRelaunch.shared.isPreparing)
+                }
+            }
+            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+
+            if checked && !readable {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Access isn’t ready yet.")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Ink.amber)
+                    Text("If Sentient is already enabled, restart it and make sure \(source.title) has synced data on this Mac.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                    SettingsPillButton(title: SafeAppRelaunch.shared.isPreparing ? "Restarting…" : "Restart Sentient") {
+                        guard !SafeAppRelaunch.shared.isPreparing else { return }
+                        ownsRelaunch = SafeAppRelaunch.shared.relaunchForPersonalSetup()
+                    }
+                    .disabled(!SafeAppRelaunch.shared.canRelaunch)
+                    if let reason = SafeAppRelaunch.shared.statusReason {
+                        Text(reason).font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Text("Granting access won’t select other apps or folders.")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 16) {
+                Button("Not now") { dismiss() }
+                    .buttonStyle(.plain).font(.system(size: 12.5))
+                    .foregroundStyle(Theme.Ink.body).keyboardShortcut(.cancelAction)
+                Spacer(minLength: 12)
+                Button(action: continueSetup) {
+                    HStack(spacing: 12) {
+                        Text(primaryTitle)
+                        Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.black)
+                    .padding(.horizontal, 22).frame(height: 42)
+                    .background(.white, in: Capsule()).contentShape(Capsule())
+                }
+                .buttonStyle(PressScaleStyle()).keyboardShortcut(.defaultAction)
+                .disabled(finishing || SafeAppRelaunch.shared.isPreparing)
+                .accessibilityIdentifier("sourceAccess.continue")
             }
             if let onStopReading {
                 Button("Stop reading \(source.title)", action: onStopReading)
-            }
-            Button("Open Full Disk Access Settings") { Permissions.openFullDiskAccessSettings() }
-            Button("Relaunch Sentient") { _ = SafeAppRelaunch.shared.relaunchForPersonalSetup() }
-                .disabled(!SafeAppRelaunch.shared.canRelaunch)
-            if let reason = SafeAppRelaunch.shared.statusReason {
-                Text(reason).font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-            }
-            HStack {
-                Button("Later") { dismiss() }.keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Check again") {
-                    if source.isReadable { onReady() }
-                    else { checked = true }
-                }.keyboardShortcut(.defaultAction)
+                    .buttonStyle(.plain).font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Ink.body)
             }
         }
-        .padding(30).frame(width: 440).background(Theme.bg)
+        .padding(30).frame(width: 460)
+        .background { PermissionWindowAtmosphere() }
+        .preferredColorScheme(.dark)
+        .disabled(finishing)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard openedSettings, !finishing else { return }
+            refreshAccess()
+        }
+        .onChange(of: SafeAppRelaunch.shared.isPreparing) { _, preparing in
+            if !preparing { ownsRelaunch = false }
+        }
+        .onDisappear {
+            closeOwnedGuide()
+            if ownsRelaunch, SafeAppRelaunch.shared.isPreparing, !SafeAppRelaunch.shared.isApplicationTerminating {
+                SafeAppRelaunch.shared.cancelPendingRelaunch()
+            }
+        }
+    }
+
+    private func openGuide() {
+        guard !finishing, !SafeAppRelaunch.shared.isPreparing else { return }
+        openedSettings = true
+        PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
+        guideID = PermissionGuide.shared.job?.id
+    }
+
+    private func refreshAccess() {
+        // Only the explicitly chosen source is probed. Drag completion never implies access.
+        readable = source.isReadable
+        if readable { checked = false; closeOwnedGuide() }
+    }
+
+    private func continueSetup() {
+        guard !finishing, !SafeAppRelaunch.shared.isPreparing else { return }
+        if !openedSettings && !readable { openGuide(); return }
+        refreshAccess()
+        guard readable else { checked = true; return }
+        finishing = true
+        onReady()
+    }
+
+    private func closeOwnedGuide() {
+        if let guideID, PermissionGuide.shared.job?.id == guideID { PermissionGuide.shared.close() }
+        guideID = nil
     }
 }

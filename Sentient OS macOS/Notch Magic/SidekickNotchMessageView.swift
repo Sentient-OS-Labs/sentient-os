@@ -28,10 +28,6 @@ struct SidekickNotchMessageView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.64))
                 Spacer()
-                Text(message.event.createdAt, style: .time)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.38))
-                    .accessibilityLabel("Received at \(message.event.createdAt.formatted(date: .omitted, time: .shortened))")
             }
             .frame(height: SidekickNotchMessageLayout.labelHeight)
             ScrollView(.vertical) {

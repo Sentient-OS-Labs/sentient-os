@@ -145,24 +145,13 @@ column name varies by macOS version, hence the `COALESCE`.
 
 ## SiYuan (`SiYuanSource`, `SiYuanNote`)
 
-A **More of your world** pill, shown when SiYuan is installed or its saved selection needs attention.
-The saved selection remains removable if its workspace disappears. An enabled available workspace
-counts once toward the three-source setup minimum and joins analysis without a broad FDA gate.
-One switch, `siyuan.enabled`, and
-no picker: every open notebook in every workspace is read. Workspaces come from SiYuan's own
-registry, `~/.config/siyuan/workspace.json`. Inside one, notes live at `data/<notebook-id>/<doc-id>.sy`,
-and a sub-document sits in a folder named after its parent document. Only `data/` is read, so SiYuan's
-internals (`history/` snapshots, which hold duplicate copies of edited notes, the sync `repo/`, `temp/`)
-never are. No Full Disk Access is needed.
+**Apps & notes** shows SiYuan when its registry at `~/.config/siyuan/workspace.json` points to a workspace with `conf/conf.json` and a `data` directory. The `siyuan.enabled` preference opts all open notebooks in those workspaces into analysis. The source counts once toward the three-source setup minimum and works without Full Disk Access. If a selected workspace disappears and none remain available, the picker keeps the option visible so the user can turn it off.
 
-- **A note is JSON, not text.** Each `.sy` file is a block tree named by block ID. `SiYuanNote` renders it to Markdown (headings, lists, tasks, quotes, callouts, code, math, tables, tabs). Task states come from the task marker child, with a fallback for older `ListData.Checked` notes. A database block carries `AttributeViewID` (or legacy `data-av-id` markup); its rows are read from `data/storage/av/<id>.json` and rendered as a table. Rendering and edit detection use the same parsed reference. The on-disk path is all IDs, so each note is framed as `SiYuan · Notebook › Parent › Title`.
-- **Skipped:** SiYuan's bundled User Guide notebooks (IDs read from the installed app, with a shipped fallback), closed notebooks, and title-only notes (sub-document folders, empty dailies).
-- **One note = one item**, through the file-flavoured triage prompt. Newest 1,000 by last edit, depth 8 below a notebook, body capped at 8,000 characters. Rendered at list time, like Apple Notes.
-- **Keyed on the last edit, unlike Apple Notes,** so an edited note IS re-summarized: SiYuan notes are living documents (a setup page rewritten when the setup changes). The edit time is the document's own `updated` stamp, which a sync rewrite does not move, or the save time of a database the note shows, if later. Editing a database row never touches the note's stamp.
-- **One checkpoint per document:** `siyuan:<workspace-hash>:<doc-id>`. Each newly discovered note gets its own initial read, even if its edit time predates another note's checkpoint (for example, reopening an old notebook or importing an old note). The workspace hash is SHA-256 of its canonical path, so copied workspaces do not share identities and symlink aliases are read only once. Existing notes retain their checkpoint when moved between notebooks within that workspace. The listing still has a global newest-1,000 cap. Builds that used the earlier single `siyuan` checkpoint will backfill once with the new keys.
+- The reader walks `data/<notebook-id>/<doc-id>.sy` and nested documents. It skips closed notebooks, the bundled User Guides and title-only notes. It reads up to 1,000 notes across workspaces, newest first, to a depth of eight. Each candidate includes up to 8,000 characters of text.
+- `SiYuanNote` renders each JSON block tree as Markdown for document triage. Task markers preserve completion state. Embedded databases use a structured attribute view ID or its legacy markup to find rows in `data/storage/av/<id>.json`. The document timestamp and database modification time both participate in edit detection.
+- Each document gets a checkpoint keyed by the hash of its canonical workspace path and its document ID. Reopening a notebook or importing an older note triggers a first read independently of newer notes. Separate workspace copies have distinct checkpoints, while symlink aliases resolve to the same workspace.
 
-Offline regression checks: `bash Scripts/test_siyuan.sh`. Synthetic workspaces exercise the real
-reader and connector; no model, account, user preferences or live workspace registry is used.
+Run `bash Scripts/test_siyuan.sh` to exercise the production reader and connector against synthetic notebooks.
 
 ## Apple Mail (`AppleMailSource`, `AppleMailMIME`)
 

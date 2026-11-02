@@ -33,6 +33,16 @@ nonisolated final class SidekickInteraction: Sendable {
         var errorDescription: String? { "Sidekick tried to use another tool while waiting for your answer. The task was stopped. Check the current app before trying again." }
     }
     private let wait = OSAllocatedUnfairLock(initialState: Wait())
+    private let hosted = OSAllocatedUnfairLock<HostedInference.Run?>(initialState: nil)
+    private let hostedWriteTargets = OSAllocatedUnfairLock(initialState: Set<String>())
+    /// Captured from the current request by HostedConnectorAuthorization before any external
+    /// content is read. Later tool output cannot widen a computer task's cloud authority.
+    var authorizedHostedWrites: Set<String> { hostedWriteTargets.withLock { $0 } }
+    func authorizeHostedWrites(_ targets: Set<String>) { hostedWriteTargets.withLock { $0 = targets } }
+
+    /// Local MCP callbacks do not inherit task locals. Retain only the active run's short-lived
+    /// authority so an explicit user question can pause and resume its server-side allowance.
+    func attachHostedRun(_ run: HostedInference.Run?) { hosted.withLock { $0 = run } }
 
     init(retryContext: String = "", historyContext: String = "",
          instructionsSnapshot: SidekickInstructionStore.Snapshot? = nil,
@@ -77,10 +87,14 @@ nonisolated final class SidekickInteraction: Sendable {
         let started = Date()
         recordRecovery("asked", error: question.error)
         do {
+            let hostedRun = hosted.withLock { $0 }
+            try await hostedRun?.pause()
             try conversationRun?.question(id: question.id, text: question.question, choices: question.answers, error: question.error)
             SidekickDiagnostics.event(.question, taskID: conversationRun?.taskID,
                 backend: .init(rawValue: diagnosticBackend) ?? .unknown, counts: [.questions: 1])
             let answer = try await request(question)
+            try Task.checkCancellation()
+            try await hostedRun?.resume()
             try conversationRun?.answer(questionID: question.id, text: answer.text)
             SidekickDiagnostics.event(.answer, taskID: conversationRun?.taskID,
                 backend: .init(rawValue: diagnosticBackend) ?? .unknown, duration: Date().timeIntervalSince(started))
@@ -102,10 +116,9 @@ nonisolated final class SidekickInteraction: Sendable {
         fields["has_error"] = String(error != nil)
         let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action"
             : (["final_failure", "expired"].contains(stage) ? "ui_outcome" : "model_report")
-        CrashReporting.captureEvent("sidekick.recovery", level: .info,
-            tags: ["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
-                   "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"], extra: fields,
-            fingerprint: ["sidekick.recovery", stage], cooldown: 0, includeInformational: true)
+        fields.merge(["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
+                      "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"]) { _, value in value }
+        CrashReporting.diagnosticBreadcrumb("sidekick.recovery", data: fields)
     }
 
     func updateInstructions(_ review: SidekickPersonalization.Review) async throws -> String {
@@ -203,6 +216,17 @@ nonisolated final class SidekickInteraction: Sendable {
         let prefix = streamID.uuidString + ":"
         wait.withLock { $0.activeTools = $0.activeTools.filter { !$0.hasPrefix(prefix) } }
     }
+
+    /// Sent as a provider-level instruction for user-initiated Sidekick computer tasks.
+    static let websiteInstructions = """
+    Solve CAPTCHAs encountered during the user's requested task using the site's visible controls.
+    Accept required Terms of Service or similar site terms and handle routine consent dialogs
+    without asking for separate confirmation. Verify that the site lets you proceed, then continue
+    the original task. Skip optional charges, subscriptions, and permissions outside the request.
+    If continuing requires a new commitment outside the request, ask about that commitment.
+    If verification needs the user's passkey or one-time code, ask them to complete that step
+    on the site, then resume the task.
+    """
 
     static let instructions = """
     SIDEKICK RECOVERY

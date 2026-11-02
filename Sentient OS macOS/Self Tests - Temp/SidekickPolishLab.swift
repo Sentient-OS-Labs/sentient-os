@@ -30,10 +30,6 @@ import WebKit
         let frame: CGRect
         var enabled: Bool? = nil
     }
-    @MainActor private final class MenuObservation {
-        var opened = 0
-        var names: [String] = []
-    }
 
     static func run(app: AppState, root: URL) async throws -> [String: Bool] {
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickapp",
@@ -137,6 +133,42 @@ import WebKit
         try await settle(450)
         captures.append(try await capture(notch, name: "04-notch-working", directory: directory))
         checks["notch_work_uses_real_activity"] = latest?.appIdentifier == "com.spotify.client"
+        var compactMetrics = metrics
+        compactMetrics.compactMode = true
+        notch.rootView = notchView(phase: .running, metrics: compactMetrics, activity: nil,
+                                  statusLine: "Thinking through your task")
+        try await settle(450)
+        captures.append(try await capture(notch, name: "04a-compact-thinking", directory: directory))
+        checks["compact_thinking_visible"] = elements(notch).contains { $0.label == "Thinking" }
+        let compactRecord = SidekickConversationStore.Record(sequence: 1, event: .init(taskID: UUID(), kind: .activity,
+            activity: .init(toolID: "compact-fixture", name: "sentient_native.click",
+                            arguments: #"{"app":"com.apple.Safari"}"#, status: .started)))
+        let compactActivity = SidekickActivityPresentation.steps([compactRecord]).first
+        var compactOpens = 0, compactStops = 0
+        notch.rootView = notchView(phase: .running, metrics: compactMetrics, activity: compactActivity,
+            statusLine: "→ sentient_native.click", onOpen: { compactOpens += 1 }, onStop: { compactStops += 1 })
+        try await settle(450)
+        captures.append(try await capture(notch, name: "04b-compact-clicking", directory: directory))
+        let compactElements = elements(notch)
+        let cameraCenter = notchWindow.convertToScreen(notch.bounds).midX
+        guard let open = compactElements.first(where: { $0.label == "Open Sidekick conversation in Sentient" }),
+              let stop = compactElements.first(where: { $0.label == "Stop current Sidekick task" }) else { throw Failure.accessibility }
+        checks["compact_controls_clear_camera"] = open.frame.minX >= cameraCenter + metrics.baseWidth / 2
+            && stop.frame.minX >= cameraCenter + metrics.baseWidth / 2
+        try postClick(window: notchWindow, screenPoint: CGPoint(x: open.frame.midX, y: open.frame.midY))
+        try await settle(100)
+        try postClick(window: notchWindow, screenPoint: CGPoint(x: stop.frame.midX, y: stop.frame.midY))
+        try await settle(100)
+        checks["compact_controls_work"] = compactOpens == 1 && compactStops == 1
+        notch.rootView = notchView(phase: .finishing(.success), metrics: compactMetrics, activity: compactActivity,
+                                  statusLine: "Done")
+        try await settle(450)
+        captures.append(try await capture(notch, name: "04c-compact-done", directory: directory))
+        let completedNotch = elements(notch)
+        checks["compact_done_visible"] = completedNotch.contains { $0.label == "Done" }
+        checks["compact_done_has_no_inactive_controls"] = !completedNotch.contains {
+            $0.label == "Stop current Sidekick task" || $0.label == "Open Sidekick conversation in Sentient"
+        }
         notchWindow.orderOut(nil)
         run.completeExternal(.success, line: "UI fixture complete", finalText: "STATUS: DONE", runID: run.runID)
         checks["simulation_stopped_without_provider"] = !run.isRunning && simulatedStops == 0
@@ -154,16 +186,30 @@ import WebKit
         }.map { ["identifier": $0.identifier, "label": $0.label, "role": $0.role,
                  "frame": [$0.frame.minX, $0.frame.minY, $0.frame.width, $0.frame.height]] }
         checks["settings_has_open_source_footer"] = settings.contains { $0.label == "Open source on GitHub" }
-        let menu = settings.first(where: {
-            ($0.identifier == "settings.menu.Sidekick shortcut" || $0.label == "Sidekick shortcut") && $0.frame.width >= 100
+        checks["settings_has_compact_notch_mode"] = settings.contains { $0.label == "Compact notch mode" }
+        guard let compactToggle = settings.first(where: {
+            $0.label == "Compact notch mode" && ["AXCheckBox", "AXSwitch"].contains($0.role)
+        }) else { throw Failure.accessibility }
+        let initialCompactMode = NotchPreferences.compactModeEnabled()
+        var appearanceUpdates = 0
+        let appearanceObserver = NotificationCenter.default.addObserver(forName: .notchAppearanceChanged,
+            object: nil, queue: .main) { _ in MainActor.assumeIsolated { appearanceUpdates += 1 } }
+        defer { NotificationCenter.default.removeObserver(appearanceObserver) }
+        try postClick(window: window, screenPoint: CGPoint(x: compactToggle.frame.midX, y: compactToggle.frame.midY))
+        try await settle(150)
+        checks["compact_toggle_saves_and_notifies"] = NotchPreferences.compactModeEnabled() != initialCompactMode
+            && appearanceUpdates == 1
+            && window.screen.map { NotchWindowController.metrics(for: $0).compactMode != initialCompactMode } == true
+        try postClick(window: window, screenPoint: CGPoint(x: compactToggle.frame.midX, y: compactToggle.frame.midY))
+        try await settle(150)
+        checks["compact_toggle_restores_regular"] = NotchPreferences.compactModeEnabled() == initialCompactMode
+            && appearanceUpdates == 2
+        checks["shortcut_has_full_width_hit_target"] = settings.contains(where: {
+            ($0.identifier == "settings.menu.Shared shortcut key" || $0.label == "Shared shortcut key") && $0.frame.width >= 100
         })
-        checks["shortcut_has_full_width_hit_target"] = menu != nil
-        guard let menu else { throw Failure.accessibility }
-        checks["shortcut_right_padding_opens_menu"] = try await openMenu(window: window, screenPoint: CGPoint(x: menu.frame.maxX - 3, y: menu.frame.midY))
-        checks["shortcut_left_padding_opens_menu"] = try await openMenu(window: window, screenPoint: CGPoint(x: menu.frame.minX + 4, y: menu.frame.midY))
         checks["shortcut_selection_preserved"] = UserDefaults.standard.string(forKey: ShortcutPreferences.storageKey) == shortcut
         checks["saved_instructions_preserved"] = try SidekickInstructionStore.read().text == memory
-        checks["five_own_window_captures"] = captures.count == 5
+        checks["eight_own_window_captures"] = captures.count == 8
         completed = true
         return checks
     }
@@ -1049,12 +1095,15 @@ import WebKit
             try recording.observe(raw, streamID: recording.taskID)
         }
     }
-    private static func notchView(phase: NotchPhase, metrics: NotchMetrics, activity: SidekickActivityPresentation.Step?) -> AnyView {
+    private static func notchView(phase: NotchPhase, metrics: NotchMetrics, activity: SidekickActivityPresentation.Step?,
+                                  statusLine: String? = nil, onOpen: @escaping () -> Void = {},
+                                  onStop: @escaping () -> Void = {}) -> AnyView {
         AnyView(ZStack(alignment: .top) {
             Color(white: 0.055)
             NotchContent(phase: phase, readBack: nil,
-                statusLine: phase == .running ? "→ sentient_native.get_app_state" : "", activity: activity,
-                demoText: phase == .typing ? "Help me with this" : nil, metrics: metrics)
+                statusLine: statusLine ?? (phase == .running ? "→ sentient_native.get_app_state" : ""), activity: activity,
+                demoText: phase == .typing ? "Help me with this" : nil, metrics: metrics,
+                onStop: onStop, onOpenConversation: onOpen)
         }.environment(\.colorScheme, .dark))
     }
     static func settle(_ milliseconds: Int) async throws {
@@ -1149,29 +1198,6 @@ import WebKit
         }
         walk(view, depth: 0)
         return result
-    }
-    private static func openMenu(window: NSWindow, screenPoint: CGPoint) async throws -> Bool {
-        let observation = MenuObservation()
-        let token = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { note in
-            MainActor.assumeIsolated {
-                guard let menu = note.object as? NSMenu else { return }
-                observation.opened += 1
-                observation.names = menu.items.map(\.title)
-                // Let AppKit enter tracking before closing it. Synchronous cancellation
-                // during didBeginTracking leaves the next click dismissing the old menu.
-                DispatchQueue.main.async { menu.cancelTracking() }
-            }
-        }
-        defer { NotificationCenter.default.removeObserver(token) }
-        let point = window.convertPoint(fromScreen: screenPoint)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) else { throw Failure.accessibility }
-            NSApp.postEvent(event, atStart: false)
-        }
-        try await settle(300)
-        return observation.opened > 0
     }
     static func capture(_ view: NSView, name: String, directory: URL, includingChild: NSWindow? = nil) async throws -> [String: Any] {
         guard let window = view.window, window.isVisible else { throw Failure.capture }

@@ -11,8 +11,8 @@
 //  A completed standalone tap reveals the notch; after the double-tap window it focuses the
 //  type field. A second tap drafts a reply without taking focus. Both actions share one saved
 //  key. Voice starts from the field's mic button. Prompt-bar path: submit(.promptBar).
-//  Card-fire path: beginExternalRun (a proactive card's fire — computer, gmail, or calendar — adopts
-//  the same run — ONE task at a time, app-wide, and the notch shows it).
+//  Card buttons submit a proactive reply through submit(.proactiveCard). Legacy external runs adopt
+//  the same run. ONE task at a time, app-wide, and the notch shows it.
 //  Every command is computer use, which raises the notch. A hotkey press during a running task
 //  does nothing on its own (the notch's STOP button, the bar's STOP, and Esc are the cancels);
 //  two presses are still a double tap. Doc: the two Documentation - Sidekick - *.md files here.
@@ -38,7 +38,7 @@ enum NotchPhase: Equatable {
 /// Where a task came from — voice gets a 4–9s read-back grace (scaled to length); typed doesn't.
 /// promptBar = the home command bar · notchTyped = the notch's tap-to-type field — split so the
 /// analytics can see Sidekick-only users who never open the home window.
-enum TriggerSource: String { case promptBar, notchTyped, voice }
+enum TriggerSource: String { case promptBar, notchTyped, voice, proactiveCard = "proactive_card" }
 
 /// Which display the notch overlay lives on, chosen at each interaction's front door. The hotkey and
 /// the home command bar keep everything on the MAIN (menu-bar) display. A click on the physical notch
@@ -55,6 +55,19 @@ final class CommandCoordinator {
 
     /// What the notch shows. (Rendering lands later; today this is driven + logged.)
     private(set) var phase: NotchPhase = .hidden
+    enum SetupCaption: String {
+        case sidekick = "Set up Sidekick"
+        case computerUse = "Set up computer use"
+    }
+
+    /// Presentation follows the visible permission UI, independent of agent progress.
+    var setupCaption: SetupCaption? {
+        guard phase == .running, run.isRunning, !run.isDemo else { return nil }
+        if NativeHelperPermissionNote.visibility.isVisible { return .computerUse }
+        let gate = ComputerUseGate.shared
+        if gate.isPresenting, !gate.showingVoiceRepair, !gate.isReadyForTask { return .sidekick }
+        return nil
+    }
     private(set) var notchMessage: SidekickConversationStore.Record?
     private(set) var messageReplyFocused = false
     private var attentionPolicy = SidekickAttentionPolicy(generation: nil, latestSequence: 0)
@@ -164,9 +177,14 @@ final class CommandCoordinator {
 
     // MARK: The one entry point — hotkey-voice AND the prompt bar both call this
 
+    func showSubmissionFailure(_ error: Error) {
+        flash((error as? LocalizedError)?.errorDescription ?? "Sidekick couldn’t open this request. Your draft has been kept.", for: 4)
+    }
+
     @discardableResult
     func submit(_ text: String, mode: AgentMode, source: TriggerSource,
-                reply: SidekickConversationEvent.ReplyReference? = nil) -> Bool {
+                reply: SidekickConversationEvent.ReplyReference? = nil,
+                onCompletion: ((CommandRunModel.Outcome) -> Void)? = nil) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !run.isRunning, !run.isClearingChat else { return false }
         returningFromRecovery = false
@@ -176,22 +194,31 @@ final class CommandCoordinator {
             flash(Self.needsPlusNotice, for: 2.0)
             return false
         }
-        if source == .promptBar { notchAnchor = .mainDisplay }
-        return launch(trimmed, mode: mode, source: source, reply: reply ?? run.conversation.replyReference)
+        if source == .promptBar || source == .proactiveCard { notchAnchor = .mainDisplay }
+        return launch(trimmed, mode: mode, source: source, reply: reply ?? run.conversation.replyReference,
+                      onCompletion: onCompletion)
     }
 
     /// Own the run immediately. Permission/setup waiting happens inside its cancellable task,
     /// so the notch stays visible and every other entry point sees the same one-task lock.
     private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource,
-                        reply: SidekickConversationEvent.ReplyReference? = nil) -> Bool {
+                        reply: SidekickConversationEvent.ReplyReference? = nil,
+                        onCompletion: ((CommandRunModel.Outcome) -> Void)? = nil) -> Bool {
         guard !run.isRunning, !run.isClearingChat else { return false }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
         // Core tier: THE Sidekick-usage count (count only, never the text) — one of the handful of
         // always-on telemetry signals disclosed in Settings.
         Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label], tier: .core)
-        run.start(trimmed, mode: mode, source: source.rawValue, reply: reply)
+        let preflight: (@MainActor () async throws -> Void)? = reply?.card.map { card in
+            { try await SidekickCardContext.validate(card) }
+        }
+        run.start(trimmed, mode: mode, source: source.rawValue, reply: reply,
+                  preflight: preflight, onCompletion: { outcome in
+            if let card = reply?.card { SidekickCardContext.finish(card, succeeded: outcome == .success) }
+            onCompletion?(outcome)
+        })
         guard run.isRunning else { setPhase(.running); runFinished(.failed); return false }
-        if source != .promptBar { SidekickDiscovery.recordNotchUse() }
+        if source == .voice || source == .notchTyped { SidekickDiscovery.recordNotchUse() }
         run.conversation.replyReference = nil
         InviteProgram.shared.record(.sidekick)
         // Every command is computer use, which raises the notch.

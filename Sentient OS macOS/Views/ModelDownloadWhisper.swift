@@ -14,6 +14,7 @@ import SwiftUI
 
 struct ModelDownloadWhisper: View {
     let download: ModelDownload
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     /// Nothing renders when there's nothing worth whispering about (idle/ready), or while the
     /// full-screen downloading view has the bar — the signature bar never shows twice on one screen.
@@ -42,7 +43,18 @@ struct ModelDownloadWhisper: View {
                 if case .failed = download.phase { paused } else { downloading }
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+                if reduceTransparency {
+                    shape.fill(Color(white: 0.07))
+                } else {
+                    // System-composited backdrop, bounded to this small card. Keep
+                    // bright film details subdued without blurring the webview itself.
+                    shape.fill(.regularMaterial)
+                        .overlay(shape.fill(.black.opacity(0.2)))
+                        .environment(\.colorScheme, .dark)
+                }
+            }
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(borderColor, lineWidth: 1))
             .transition(.opacity)

@@ -52,15 +52,21 @@ actor GiftLetter {
         let fm = FileManager.default
         guard fm.fileExists(atPath: vault.path) else { throw GiftError.noVault }
 
-        let giftFile = vault.appendingPathComponent(Self.fileName)
+        // Hosted synthesis can read and write only an isolated copy; even a malformed
+        // letter or tool request cannot mutate the user's live knowledge base.
+        let hosted = ModelBackend.current == .sentient
+        let workingVault = hosted ? try VaultGenerator.newStagingDir(seedFrom: vault) : vault
+        defer { if hosted { try? fm.removeItem(at: workingVault) } }
+        let giftFile = workingVault.appendingPathComponent(Self.fileName)
         try? fm.removeItem(at: giftFile)               // clear any stale copy before the run
         defer { try? fm.removeItem(at: giftFile) }     // never leave it behind, on ANY exit path
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(vaultPath: vault.path))
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(vaultPath: workingVault.path))
         inv.feature = "giftletter"
         inv.effort = .high                  // the gift should feel like magic — give it the deep pass
         inv.sandbox = .workspaceWrite       // it WRITES "Gift from Sentient.md" into the vault folder
-        inv.cwd = vault.path                // the knowledge base is the working dir → reads + writes here
+        inv.cwd = workingVault.path
+        if hosted { inv.hostedVaultRoot = workingVault.path }
         inv.webSearch = false               // grounded ONLY in their own life — no external facts
         inv.includeUserConfig = false       // hermetic — no user MCP servers, nothing leaks in
         inv.timeout = 1_200

@@ -14,6 +14,32 @@ nonisolated enum DirectMCPError: Error, LocalizedError {
     case authorizationDenied, timedOut, reconnectRequired, registrationExpired, accountSetupRequired, connectionChanged, noTools, policyUnavailable
     case keychain(OSStatus), network, http(Int), invalidResponse, tooLarge, busy, duplicateLabel, unconfirmedAction
 
+    /// Stable closed codes for diagnostics. Never stringify associated provider data.
+    var diagnosticCode: String {
+        switch self {
+        case .invalidMetadata: "invalid_metadata"
+        case .unsupportedProvider: "unsupported_provider"
+        case .unsupportedRegistration: "unsupported_registration"
+        case .invalidCallback: "invalid_callback"
+        case .authorizationDenied: "access_denied"
+        case .timedOut: "timed_out"
+        case .reconnectRequired: "reconnect_required"
+        case .registrationExpired: "registration_expired"
+        case .accountSetupRequired: "account_setup_required"
+        case .connectionChanged: "connection_changed"
+        case .noTools: "no_tools"
+        case .policyUnavailable: "policy_unavailable"
+        case .keychain: "keychain"
+        case .network: "network"
+        case .http: "http"
+        case .invalidResponse: "invalid_response"
+        case .tooLarge: "too_large"
+        case .busy: "busy"
+        case .duplicateLabel: "duplicate_label"
+        case .unconfirmedAction: "unconfirmed_action"
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidMetadata: "The service returned invalid login information."
@@ -56,12 +82,14 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
     /// Enable only after the provider's bounded content reader passes its live curation check.
     var kbVerified = false
 
+    #if DEBUG
     /// Operations whose full argument surface cannot be permitted by a name-only policy.
     var destructiveTools: Set<String> {
         guard slug == "notion" else { return [] }
         return ["notion-update-page", "notion-update-data-source", "notion-update-folder",
                 "notion-spawn-session", "notion-send-message-to-session", "notion-stop-session"]
     }
+    #endif
     /// Native knowledge plans can constrain arguments before any result reaches a model.
     /// These names are never added to the general MCP read attachment automatically.
     var nativeKnowledgeReads: Set<String> {
@@ -132,23 +160,26 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
         (policyRevision ?? 1) == Self.currentPolicyRevision && !tools.isEmpty && Set(policy.keys) == Set(tools.map(\.name))
             && policyFingerprint == DirectMCPTool.fingerprint(tools)
     }
-    static let currentPolicyRevision = 1
+    static let currentPolicyRevision = 2
     /// An authenticated account can be selected before its tools are prepared for a task.
-    var connected: Bool { state == .connected || usable }
-    var usable: Bool { state == .ready && policyValid && !actionNames.isEmpty }
+    var connected: Bool { state == .connected || state == .ready || state == .policyRequired }
+    var usable: Bool { state == .ready && !tools.isEmpty }
     var readNames: [String] {
-        guard policyValid else { return [] }
-        return tools.filter { category(for: $0) == .read }.map(\.name).sorted()
+        // The provider's reviewed reads remain usable when optional annotations are absent.
+        // New read tools can advertise themselves through the live MCP metadata.
+        let reviewed = provider?.reviewedReads ?? []
+        return tools.filter { !$0.destructiveHint && ($0.readOnlyHint || reviewed.contains($0.name)) }
+            .map(\.name).sorted()
     }
+    /// A failed, absent or stale classifier cache must never hide live advertised actions.
     var actionNames: [String] {
-        guard policyValid else { return [] }
-        return tools.filter { category(for: $0) != .destructive }.map(\.name).sorted()
+        return tools.map(\.name).sorted()
     }
-    /// Apply reviewed exclusions to old caches as well as freshly classified inventories.
-    /// Vendor hints can narrow a policy, never grant a capability on their own.
+    /// Compatibility metadata for inventory displays and explicit diagnostic fixtures.
+    /// Action access is independent of categories; background reads use reviewed permissions
+    /// and live readOnlyHint metadata.
     func category(for tool: DirectMCPTool) -> DirectMCPTool.Category {
-        if provider?.destructiveTools.contains(tool.name) == true || tool.destructiveHint { return .destructive }
-        return policy[tool.name] ?? .destructive
+        return readNames.contains(tool.name) ? .read : .write
     }
     var kbEligible: Bool {
         // Selection is user intent. Live grant and tool policy checks happen only on use.
@@ -163,7 +194,6 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
             required.insert("get_account_info")
         }
         return required.isSubset(of: Set(readNames))
-            && tools.filter { required.contains($0.name) }.allSatisfy(\.readOnlyHint)
     }
     var detected: ConnectorCensus.DetectedConnector {
         .init(slug: slug, displayName: displayName, origin: .direct, serverURL: provider?.endpoint.absoluteString,
