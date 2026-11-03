@@ -73,7 +73,8 @@ The prompt variants preserve attribution and use source-specific privacy rules:
   not justify a retained summary.
 
 The pipeline calls `decide(_:for:)`. For Apple Calendar, it checks raw input for high-risk identifiers
-and labelled credentials, checks output for credentials, and rejects explicit classifier overrides.
+and labelled credentials (English and Spanish labels such as passcode, PIN, contraseña and código de
+acceso), checks output for credentials, and rejects explicit classifier overrides.
 JSON fields are decoded before these checks. Calendar replies require a complete JSON object with
 string summary/title and explicit boolean junk/sensitive flags; missing or mistyped fields fail closed.
 Sensitive calendar outcomes also discard their title
