@@ -68,7 +68,7 @@ struct ModelDownloadWhisper: View {
 
     private var downloading: some View {
         VStack(alignment: .leading, spacing: 9) {
-            MonoCaps("Downloading on-device model", size: 9, tracking: 2.0, color: Theme.Ink.label)
+            MonoCaps("Downloading in the background", size: 9, tracking: 1.2, color: Theme.Ink.label)
             GlowProgressBar(value: fraction)
             HStack {
                 Text(gbLine)

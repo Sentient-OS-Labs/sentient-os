@@ -144,3 +144,28 @@ Fix permissions action instead of inferring Accessibility/Screen Recording label
 proof cache. Explicit diagnostics remain available with unknown helper status and check the real
 prerequisites themselves. A successful diagnostic records completed setup; confirmed native denial
 invalidates it. The native setup companion explains that the browser extension can be skipped.
+
+## Global quick-action shortcuts
+
+`Shortcuts/QuickActionShortcut.swift` resolves `⌘,` for Summarize and `⌘.` for Proofread
+against the active keyboard layout. Both require Command alone, without Shift or Option. The resolver
+prefers unshifted punctuation and then a shifted key legend (such as period on French AZERTY), but
+uses that lookup only to locate the key. Settings remains accessible from Home and the app menu,
+without a conflicting Command-Comma binding. Input methods without Unicode layout data use the
+underlying ASCII-capable layout. Unmappable punctuation or a custom layout that puts both actions
+on the same key remains unavailable instead of dispatching an unrelated action.
+
+`QuickActionHotkeys.swift` registers only those two chords with `RegisterEventHotKey`. It does not
+install a keyboard event tap or global key-down monitor and adds no Input Monitoring permission.
+Registrations are exclusive, follow layout changes, suspend during shortcut recording and inactive
+sessions/sleep, and are released on stop. Press/release state suppresses held-key repeats; fresh IDs
+reject queued events from an older registration. Conflicts leave the buttons usable and expose a
+shortcut explanation in their help text.
+
+`CommandCoordinator` routes the events through the existing actions. A global summary refreshes its
+display target and starts a separate summary window without taking keyboard focus, even while
+an earlier summary is loading; a global proofread prepares the current selection before dispatch and drops the
+preparation if input, phase or eligibility changes. Opening the notch already owns its original
+selection, so shortcuts there reuse that context. Home admission/reset controls registration.
+`test_quick_action_hotkeys.py` verifies mapping, native registration, Carbon dispatch, repeat/conflict
+handling and lifecycle; `test_notch_action_routing.py` verifies action routing and cancellation.

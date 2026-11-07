@@ -3,13 +3,11 @@
 import AppKit
 
 @MainActor struct SidekickNotchMessageLayout {
-    static let minimumHeight: CGFloat = 190
+    static let minimumHeight: CGFloat = 120
     static let maximumHeight: CGFloat = 286
-    static let labelHeight: CGFloat = 16
     static let sectionSpacing: CGFloat = 10
-    static let footerHeight: CGFloat = 30
     static let replyHeight: CGFloat = 40
-    static let topPad: CGFloat = 4
+    static let topPad: CGFloat = 0
     static let bottomPad: CGFloat = 10
     static let textVerticalPad: CGFloat = 3
 
@@ -18,7 +16,7 @@ import AppKit
     init(markdown: String, maximumSize: CGSize, cameraHeight: CGFloat,
          outerTopPad: CGFloat, outerBottomPad: CGFloat, horizontalPad: CGFloat) {
         let chrome = cameraHeight + outerTopPad + outerBottomPad
-            + Self.labelHeight + 3 * Self.sectionSpacing + Self.footerHeight + Self.replyHeight
+            + Self.sectionSpacing + Self.replyHeight
             + Self.topPad + Self.bottomPad + 2 * Self.textVerticalPad
         let width = max(1, maximumSize.width - 2 * horizontalPad)
         let textHeight = Self.measuredHeight(markdown, width: width)

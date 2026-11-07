@@ -1,137 +1,93 @@
-//
-//  VoiceCapture.swift
-//  Sentient OS macOS
-//
-//  The voice front-end for the notch's mic button: requests microphone + speech permission (once,
-//  lazily, on the first mic click), picks the OS-appropriate transcription engine (SpeechAnalyzer on
-//  macOS 26+, SFSpeechRecognizer on 15), and exposes start / stopAndTranscribe / cancel. Audio never
-//  touches disk — it streams through the on-device model in memory.
-//
-//  Key methods: prewarm() · start() · stopAndTranscribe() · cancel().
-//
-
+// Microphone permission and lifecycle for ElevenLabs Scribe dictation. A release invalidates
+// pending authorization before it can start a microphone; finalization uses captured audio only.
+// Doc: Documentation - Sidekick - General.md
 import Foundation
+import AppKit
 import AVFoundation
-import Speech
 
 @MainActor
 final class VoiceCapture {
-    private var engine: (any QuickTranscriptionEngine)?
-
-    /// Voice works on every supported macOS (15+): SpeechAnalyzer on 26+, SFSpeechRecognizer below.
     static let isAvailable = true
-
-    /// True only when BOTH mic and speech are ALREADY granted. A denied grant has no native prompt
-    /// left, so the coordinator routes a mic click to the permission window instead of `start()`.
-    static var isAuthorized: Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-            && SFSpeechRecognizer.authorizationStatus() == .authorized
+    static let maxCaptureDuration: TimeInterval = 180
+    static var isAuthorized: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
+    private var engine: ScribeRealtimeEngine?
+    private var generation = UUID()
+    private var stopRequested = false
+    private var authorize: () async -> Bool = { await VoiceCapture.requestPermissions() }
+    private var explain: () -> Bool = { VoiceCapture.explainCloudVoice() }
+    init() {}
+    #if DEBUG
+    /// Synthetic permission completions, without a TCC prompt, for lifecycle regression tests.
+    init(authorize: @escaping () async -> Bool, explain: @escaping () -> Bool) {
+        self.authorize = authorize; self.explain = explain
     }
-
-    /// How long one capture may run before we force-finalize — the active engine's hard limit.
-    static var maxCaptureDuration: TimeInterval {
-        if #available(macOS 26, *) { return SpeechAnalyzerEngine.maxUtteranceDuration }
-        return SFSpeechRecognizerEngine.maxUtteranceDuration
-    }
-
-    /// True while the on-device speech model is genuinely downloading (first run / post-OS-purge) —
-    /// a mic click is answered honestly instead of listening into a model that isn't there.
-    /// macOS 15's engine needs no model download.
-    static var isModelDownloading: Bool {
-        if #available(macOS 26, *) { return SpeechAnalyzerEngine.isModelDownloading }
-        return false
-    }
-
-    /// Install the on-device speech model ahead of first use (best-effort, off-main).
-    func prewarm() {
-        if #available(macOS 26, *) {
-            Task { await SpeechAnalyzerEngine.prewarm() }   // SFSpeechRecognizer needs no model prewarm
-        }
-    }
-
-    // MARK: Capture
+    #endif
+    var onTranscript: ((String) -> Void)?
+    var onLevel: ((Float) -> Void)?
+    var onReady: (() -> Void)?
+    var onFailure: ((Error) -> Void)?
+    var transcript: String { engine?.transcript ?? "" }
 
     func start() async throws {
+        let id = UUID(); generation = id; stopRequested = false
+        guard explain() else { throw CancellationError() }
+        // Clicking Use dictation can finish first-use permission setup after the mouse is
+        // released. Only a still-current hold may actually open the microphone below.
         guard await authorize() else { throw VoiceError.notAuthorized }
-        let engine = Self.makeEngine()
+        try Task.checkCancellation()
+        guard generation == id, !stopRequested else { throw CancellationError() }
+        let engine = ScribeRealtimeEngine()
+        engine.onTranscript = onTranscript; engine.onLevel = onLevel
+        engine.onReady = onReady; engine.onFailure = onFailure
         self.engine = engine
-        do {
-            try await engine.start()
-        } catch {
-            engine.cancel()   // a failed/bailed start still closes its analyzer session properly
-            self.engine = nil
-            throw error
-        }
+        do { try engine.start() }
+        catch { engine.cancel(); if generation == id { self.engine = nil }; throw error }
     }
 
+    func stopCapturing() {
+        stopRequested = true
+        engine?.stopCapturing()
+    }
     func stopAndTranscribe() async throws -> String {
+        stopCapturing()
         guard let engine else { return "" }
-        defer { self.engine = nil }
-        return Self.correctMishears(try await engine.stopAndTranscribe())
+        let id = generation
+        defer { if generation == id { self.engine = nil } }
+        return try await engine.finish()
     }
-
-    /// Fix the speech model's common brand mishears the moment transcription completes — before the
-    /// transcript is shown or fired. It reliably hears "Sentient" as "ascension"; swap it back. Whole-word
-    /// and case-insensitive, preserving the match's leading-letter case ("Ascension" → "Sentient").
-    static func correctMishears(_ text: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: "\\bascension\\b", options: [.caseInsensitive])
-        else { return text }
-        let result = NSMutableString(string: text)
-        for match in regex.matches(in: text, range: NSRange(location: 0, length: result.length)).reversed() {
-            let capitalized = result.substring(with: match.range).first?.isUppercase == true
-            result.replaceCharacters(in: match.range, with: capitalized ? "Sentient" : "sentient")
-        }
-        return result as String
-    }
-
     func cancel() {
-        engine?.cancel()
-        engine = nil
+        generation = UUID(); stopRequested = true
+        engine?.cancel(); engine = nil
     }
-
-    // MARK: Engine selection
-
-    private static func makeEngine() -> any QuickTranscriptionEngine {
-        if #available(macOS 26, *) { return SpeechAnalyzerEngine() }
-        return SFSpeechRecognizerEngine()
-    }
-
-    // MARK: Permissions (lazy, on the first mic click)
-
-    /// Microphone (always needed) + speech recognition (the Speech framework gate). Each prompts only
-    /// the first time. Returns false if either is denied / restricted.
-    private func authorize() async -> Bool {
-        guard await Self.requestMicrophone() else { Log("voice: microphone access denied"); return false }
-        guard await Self.requestSpeech() else { Log("voice: speech-recognition access denied"); return false }
-        return true
-    }
-
-    /// Request mic + speech, surfacing the system prompts on first ask. Public entry point for the dev
-    /// Permissions panel; the live capture path uses `authorize()`, which calls the same two requests.
     @discardableResult
     static func requestPermissions() async -> Bool {
-        guard await requestMicrophone() else { return false }
-        return await requestSpeech()
-    }
-
-    private static func requestMicrophone() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
         default: return false
         }
     }
+    private static func explainCloudVoice() -> Bool {
+        let key = "sidekick.elevenLabsVoiceExplained"
+        if UserDefaults.standard.bool(forKey: key) { return true }
+        let alert = NSAlert()
+        alert.messageText = "Speak to Sidekick"
+        alert.informativeText = "Hold the notch and speak. Release to send, or press Escape to cancel.\n\nSentient doesn’t save your recordings."
+        alert.addButton(withTitle: "Use dictation")
+        alert.addButton(withTitle: "Not now")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        UserDefaults.standard.set(true, forKey: key)
+        return true
+    }
+}
 
-    private static func requestSpeech() async -> Bool {
-        switch SFSpeechRecognizer.authorizationStatus() {
-        case .authorized: return true
-        case .notDetermined:
-            return await withCheckedContinuation { continuation in
-                SFSpeechRecognizer.requestAuthorization { status in
-                    continuation.resume(returning: status == .authorized)
-                }
-            }
-        default: return false
+nonisolated enum VoiceError: LocalizedError, Sendable {
+    case notAuthorized, noMicrophone, deviceChanged
+    var errorDescription: String? {
+        switch self {
+        case .notAuthorized: "Turn on microphone access to dictate to Sidekick."
+        case .noMicrophone: "No microphone audio is available. Check your input device and try again."
+        case .deviceChanged: "The microphone changed. Your available text has been kept."
         }
     }
 }

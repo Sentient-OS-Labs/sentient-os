@@ -70,7 +70,9 @@ struct OnboardingReadyView: View {
                     .padding(.top, 28)
                     .padding(.bottom, 20)
                     .frame(maxWidth: .infinity)
+                    .background(PersistentSourceScrollbar())
                 }
+                .scrollIndicators(.visible)
                 .scrollBounceBehavior(.basedOnSize)
                 .frame(width: viewport.size.width, height: viewport.size.height)
             }
@@ -111,6 +113,24 @@ struct OnboardingReadyView: View {
             .frame(maxWidth: .infinity)
             .fixedSize(horizontal: false, vertical: true)
             .background(Theme.bg)
+        }
+    }
+}
+
+/// Use a reserved scrollbar gutter even when macOS is set to hide overlay scrollbars.
+private struct PersistentSourceScrollbar: NSViewRepresentable {
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.configure() }
+    final class Probe: NSView {
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configure() }
+        override func viewDidMoveToSuperview() { super.viewDidMoveToSuperview(); configure() }
+        func configure() {
+            DispatchQueue.main.async { [weak self] in
+                guard let scroll = self?.enclosingScrollView else { return }
+                scroll.hasVerticalScroller = true
+                scroll.autohidesScrollers = false
+                scroll.scrollerStyle = .legacy
+            }
         }
     }
 }

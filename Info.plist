@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Dictation is independently deployed; this does not enable hosted inference. -->
+	<key>SentientDictationURL</key>
+	<string>https://sentient-doubletap-relay.sentient-doubletap-relay.workers.dev/hosted</string>
 	<!-- Supplied by the team's hosted deployment build; an unset value keeps the service unavailable. -->
 	<key>SentientInferenceURL</key>
 	<string>$(SENTIENT_INFERENCE_URL)</string>

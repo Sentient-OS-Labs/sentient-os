@@ -18,6 +18,7 @@ import SwiftUI
 struct NotchShape: Shape {
     var topCornerRadius: CGFloat
     var bottomCornerRadius: CGFloat
+    var isIsland = false
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { .init(topCornerRadius, bottomCornerRadius) }
@@ -25,6 +26,10 @@ struct NotchShape: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
+        if isIsland {
+            let radius = min(bottomCornerRadius, rect.height / 2)
+            return Path(roundedRect: rect, cornerRadius: radius)
+        }
         let top = max(0, min(topCornerRadius, rect.height, rect.width / 2))
         let bottom = max(0, min(bottomCornerRadius, rect.width / 2 - top, rect.height - top))
         var p = Path()
@@ -56,6 +61,7 @@ struct NotchShape: Shape {
 struct NotchSkirtShape: Shape {
     var topCornerRadius: CGFloat
     var bottomCornerRadius: CGFloat
+    var isIsland = false
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { .init(topCornerRadius, bottomCornerRadius) }
@@ -63,6 +69,10 @@ struct NotchSkirtShape: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
+        if isIsland {
+            let radius = min(bottomCornerRadius, rect.height / 2)
+            return Path(roundedRect: rect, cornerRadius: radius)
+        }
         let top = max(0, min(topCornerRadius, rect.height, rect.width / 2))
         let bottom = max(0, min(bottomCornerRadius, rect.width / 2 - top, rect.height - top))
         var p = Path()

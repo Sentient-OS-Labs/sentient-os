@@ -11,7 +11,6 @@
 import SwiftUI
 import AppKit
 import AVFoundation
-import Speech
 import UserNotifications
 
 struct HealthPane: View {
@@ -472,7 +471,7 @@ struct HealthPane: View {
     }
 
     private var voiceRow: some View {
-        StatusLine(title: "Microphone & Speech (optional)",
+        StatusLine(title: "Microphone (optional)",
                    health: micSpeech == .granted ? .ok : .warn,   // optional — Sidekick's voice; tap-to-type works without it
                    note: micSpeechNote,
                    tip: ComputerUseGate.micSpeechTip,
@@ -525,7 +524,7 @@ struct HealthPane: View {
         return helperProblem ? "Needs attention" : "Managed in the computer-use helper"
     }
 
-    // MARK: Microphone & Speech (one row — one call asks for both; optional, so yellow, never red)
+    // MARK: Microphone (one row — one microphone grant; optional, so yellow, never red)
 
     private var micSpeechNote: String {
         switch micSpeech {
@@ -542,12 +541,7 @@ struct HealthPane: View {
         case .notAsked:
             Task { _ = await VoiceCapture.requestPermissions(); await refresh() }
         case .denied:
-            // Deep-link to whichever grant is actually the blocker (mic first — it gates speech).
-            if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-                Permissions.openMicrophoneSettings()
-            } else {
-                Permissions.openSpeechRecognitionSettings()
-            }
+            Permissions.openMicrophoneSettings()
         }
     }
 
@@ -564,10 +558,9 @@ struct HealthPane: View {
 
     private func refreshMicSpeech() {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
-        let speech = SFSpeechRecognizer.authorizationStatus()
-        if mic == .authorized && speech == .authorized {
+        if mic == .authorized {
             micSpeech = .granted
-        } else if mic == .denied || mic == .restricted || speech == .denied || speech == .restricted {
+        } else if mic == .denied || mic == .restricted {
             micSpeech = .denied
         } else {
             micSpeech = .notAsked

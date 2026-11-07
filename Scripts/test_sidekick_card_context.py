@@ -50,6 +50,8 @@ func Log(_ line:String){}
 }
 @MainActor final class CommandCoordinator {
  let run=CommandRunModel();enum Phase {case running}
+ final class Proofread {var isRunning=false}
+ let proofread=Proofread();var voiceSessionID:UUID?
  func setReadBack(_ text:String){};func clearReadBack(){};func setPhase(_ phase:Phase){};func runFinished(_ outcome:CommandRunModel.Outcome){}
  // LAUNCH
 }
@@ -93,6 +95,11 @@ tests=r'''
   let coordinator=CommandCoordinator()
   ProactiveResearch.saved=ReadyResult(ready:[action],dropped:[])
   var completed=false
+  coordinator.proofread.isRunning=true
+  check(!coordinator.launch("Do this for me.",mode:.computer,source:.proactiveCard,reply:reply),"Proofreading retains the shared action lock")
+  coordinator.proofread.isRunning=false;coordinator.voiceSessionID=UUID()
+  check(!coordinator.launch("Do this for me.",mode:.computer,source:.proactiveCard,reply:reply),"Active dictation defers card dispatch")
+  coordinator.voiceSessionID=nil
   check(coordinator.launch("Do this for me.",mode:.computer,source:.proactiveCard,reply:reply,onCompletion:{_ in completed=true}),"Real coordinator launch accepts card as an ordinary request")
   check(coordinator.run.received==reply,"Coordinator forwards the durable card reply")
   try await coordinator.run.preflight?()

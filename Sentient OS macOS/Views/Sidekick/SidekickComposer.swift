@@ -13,6 +13,7 @@ struct SidekickComposer: View {
     @FocusState private var focused: Bool
     @State private var submissionError: String?
 
+    private var voice: ComposerDictation { coordinator.composerDictation }
     private var conversation: SidekickConversation { coordinator.run.conversation }
     private var recovery: SidekickRecovery { coordinator.run.recovery }
     private var notchHasKeyboard: Bool {
@@ -24,13 +25,13 @@ struct SidekickComposer: View {
                 set: { if answering { recovery.draft = $0 } else { conversation.draft = $0 }; submissionError = nil })
     }
     private var canSend: Bool {
-        !coordinator.run.isClearingChat && !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !coordinator.run.isClearingChat && (!text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voice.isActive)
             && (answering || !coordinator.run.isRunning)
     }
 
     var body: some View {
         VStack(spacing: 10) {
-            if let error = submissionError ?? conversation.storageError {
+            if let error = submissionError ?? voice.error ?? conversation.storageError {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.circle")
                     Text(error).fixedSize(horizontal: false, vertical: true)
@@ -66,14 +67,50 @@ struct SidekickComposer: View {
                     .transition(SidekickStyle.entrance(reduced))
                 }
                 HStack(alignment: .bottom, spacing: 14) {
-                    TextField(answering ? "Add your answer…" : "Ask Sidekick…", text: text, axis: .vertical)
-                        .textFieldStyle(.plain).font(.system(size: 15))
-                        .foregroundStyle(SidekickStyle.ink).tint(SidekickStyle.accent)
-                        .lineLimit(1...5).focused($focused).onSubmit(handleReturn)
-                        .padding(.vertical, 10)
-                        .accessibilityLabel(answering ? "Answer Sidekick" : "Message Sidekick")
-                        .accessibilityIdentifier("sidekick.composer")
-                        .help("Return to send. Shift-Return for a new line.")
+                    ZStack(alignment: .leading) {
+                        TextField(answering ? "Add your answer…" : "Ask Sidekick…", text: text, axis: .vertical)
+                            .textFieldStyle(.plain).font(.system(size: 15))
+                            .foregroundStyle(SidekickStyle.ink).tint(SidekickStyle.accent)
+                            .lineLimit(1...5).focused($focused).onSubmit(handleReturn)
+                            .disabled(voice.isActive)
+                            .padding(.vertical, 10)
+                            .accessibilityLabel(answering ? "Answer Sidekick" : "Message Sidekick")
+                            .accessibilityIdentifier("sidekick.composer")
+                            .help("Return to send. Shift-Return for a new line.")
+                            .opacity(voice.isActive && !voice.hasTranscript ? 0 : 1)
+                        if voice.isActive && !voice.hasTranscript {
+                            PromptDictationWaveform(levels: voice.levels)
+                        }
+                    }
+                    .animation(reduced ? nil : .easeOut(duration: 0.2), value: voice.isActive && !voice.hasTranscript)
+                    if !coordinator.run.isRunning || answering {
+                        Button {
+                            if voice.isActive { voice.stop() }
+                            else {
+                                guard coordinator.phase != .listening, coordinator.phase != .transcribing else { return }
+                                submissionError = nil
+                                let binding = text
+                                let question = recovery.content?.id
+                                let generation = conversation.generation
+                                voice.start(draft: binding.wrappedValue) { value in
+                                    guard recovery.content?.id == question, conversation.generation == generation,
+                                          !coordinator.run.isClearingChat else { voice.cancel(); return }
+                                    binding.wrappedValue = value
+                                }
+                            }
+                        } label: {
+                            Image(systemName: voice.isActive ? "stop.fill" : "mic.fill")
+                                .font(.system(size: voice.isActive ? 12 : 16, weight: .medium))
+                                .foregroundStyle(SidekickStyle.ink)
+                                .frame(width: 36, height: 36)
+                                .background(.white.opacity(voice.isActive ? 0.10 : 0.035), in: Circle())
+                        }
+                        .buttonStyle(SidekickPressStyle())
+                        .disabled(voice.stage == .finalizing || coordinator.phase == .listening || coordinator.phase == .transcribing)
+                        .accessibilityLabel(voice.isActive ? "Stop dictation" : "Start dictation")
+                        .accessibilityIdentifier("sidekick.dictation")
+                        .help(voice.isActive ? "Stop recording and keep the text" : "Dictate a message")
+                    }
                     if coordinator.run.isRunning && !answering {
                         Button(action: coordinator.stop) {
                             Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold))
@@ -145,7 +182,7 @@ struct SidekickComposer: View {
         }
         .disabled(coordinator.run.isClearingChat)
         .onChange(of: coordinator.run.isClearingChat) { _, clearing in
-            if clearing { focused = false; presentation.composerFocused = false; submissionError = nil }
+            if clearing { voice.cancel(); focused = false; presentation.composerFocused = false; submissionError = nil }
         }
         .onChange(of: conversation.generation) { _, _ in submissionError = nil }
         .animation(SidekickStyle.motion(reduced), value: recovery.content?.id)
@@ -165,17 +202,21 @@ struct SidekickComposer: View {
             focusComposer()
         }
         .onChange(of: notchHasKeyboard) { _, ownsKeyboard in
-            if ownsKeyboard { focused = false; presentation.composerFocused = false }
+            if ownsKeyboard { voice.cancel(); focused = false; presentation.composerFocused = false }
         }
         .onChange(of: focused) { _, value in presentation.composerFocused = value }
         .onChange(of: isPresented) { _, visible in
-            if !visible { focused = false; presentation.composerFocused = false }
+            if !visible { voice.cancel(); focused = false; presentation.composerFocused = false }
         }
-        .onChange(of: conversation.replyReference) { _, value in if value != nil && isPresented { focused = true } }
+        .onChange(of: conversation.replyReference) { _, value in
+            if value != nil { focusComposer() } // A notch reply must not focus the retained Home editor.
+        }
         .onChange(of: focusRequest) { _, _ in
             focusComposer()
         }
-        .onDisappear { presentation.composerFocused = false }
+        .onChange(of: recovery.content?.id) { _, _ in voice.cancel() }
+        .onChange(of: coordinator.run.isRunning) { _, running in if running && !answering { voice.cancel() } }
+        .onDisappear { voice.cancel(); presentation.composerFocused = false }
     }
 
     private func focusComposer() {
@@ -238,6 +279,10 @@ struct SidekickComposer: View {
 
     private func send() {
         guard isPresented, canSend else { return }
+        if voice.isActive {
+            voice.stop(sendWhenReady: { send() })
+            return
+        }
         let accepted = withAnimation(SidekickStyle.motion(reduced)) {
             Self.sendDraft(coordinator: coordinator, presentation: presentation)
         }

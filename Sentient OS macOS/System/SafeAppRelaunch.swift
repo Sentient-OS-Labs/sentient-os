@@ -9,6 +9,7 @@ final class SafeAppRelaunch {
     static let shared = SafeAppRelaunch()
     @ObservationIgnored private weak var appState: AppState?
     @ObservationIgnored private var preparation: Task<Void, Never>?
+    @ObservationIgnored private var preparationTimeout: Task<Void, Never>?
     @ObservationIgnored private var ticket: PermissionRelaunchHandoff.Ticket?
     private var preparationID: UUID?
     private(set) var failure: String?
@@ -16,6 +17,7 @@ final class SafeAppRelaunch {
     private var savedResume = false
     private var resumePersonalSetup = false
     private(set) var isApplicationTerminating = false
+    var hasPreparedRestart: Bool { isPreparing && ticket != nil }
     private init() {}
 
     func configure(_ state: AppState) { appState = state }
@@ -26,7 +28,7 @@ final class SafeAppRelaunch {
         if appState.isUninstalling || appState.processing.isSuspended { return "Wait for the current maintenance to finish." }
         if (appState.commandCoordinator.run.isRunning
             && !(allowPermissionWait && appState.commandCoordinator.run.canSavePermissionWaitForRelaunch))
-            || DoubleTap.shared.isDrafting {
+            || DoubleTap.shared.isDrafting || appState.commandCoordinator.summarize.isBusy || appState.commandCoordinator.proofread.isRunning {
             return "Finish or stop the current Sidekick task before relaunching."
         }
         if appState.processing.isBusy || PipelineActivity.shared.isRunning {
@@ -95,6 +97,11 @@ final class SafeAppRelaunch {
     }
 
     private func prepareRelaunch(id: UUID) async {
+        preparationTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(12)) } catch { return }
+            guard let self, self.preparationID == id, !self.isApplicationTerminating else { return }
+            self.cancelPendingRelaunch(reason: "Sentient could not finish restarting. Finish any open macOS permission prompt, then try Restart Sentient again.")
+        }
         defer { if preparationID == id { preparation = nil } }
         do {
             let prepared = try await PermissionRelaunchHandoff.prepare()
@@ -104,6 +111,7 @@ final class SafeAppRelaunch {
             // Native proof clients have a real subprocess lifetime even while no task is active.
             await NativePermissionCheck.shared.close()
             try Task.checkCancellation()
+            guard preparationID == id else { return }
             guard blockingReason == nil, let appState, prepared.isReady else {
                 throw PermissionRelaunchHandoff.Failure.notReady
             }
@@ -138,6 +146,7 @@ final class SafeAppRelaunch {
     }
 
     func cancelPendingRelaunch(reason: String? = nil) {
+        preparationTimeout?.cancel(); preparationTimeout = nil
         preparation?.cancel()
         preparationID = nil
         ticket?.cancel(); ticket = nil

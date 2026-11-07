@@ -5,31 +5,30 @@ import SwiftUI
 struct SidekickNotchMessageView: View {
     let message: SidekickConversationStore.Record
     let isTaskRunning: Bool
-    let onOpen: () -> Void
+    var isTaskFinishing = false
     let onReply: (String?) -> Void
     let onStop: () -> Void
+    let onMicPress: () -> Void
+    let onMic: () -> Void
     let onSelecting: (Bool) -> Void
+    var voice: DictationPresentation? = nil
+    var onVoiceSend: () -> Void = {}
+    var onVoiceStop: () -> Void = {}
     var draft: Binding<String> = .constant("")
     var replyFocused = false
     var replyingToSelection = false
     var onReplyFocusChanged: (Bool) -> Void = { _ in }
     var onSend: (String) -> Bool = { _ in false }
+    var composerCornerRadius: CGFloat = 12
     @FocusState private var fieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var canSend: Bool {
-        !isTaskRunning && !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        voice?.finalizing != true && (voice != nil || (!isTaskRunning && !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SidekickNotchMessageLayout.sectionSpacing) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(message.event.messageKind == .answer ? "Sidekick" : "An update from Sidekick")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.64))
-                Spacer()
-            }
-            .frame(height: SidekickNotchMessageLayout.labelHeight)
             ScrollView(.vertical) {
                 SidekickMarkdown(markdown: message.event.text, compact: true, onReply: {
                     onReply($0); fieldFocused = true
@@ -49,14 +48,39 @@ struct SidekickNotchMessageView: View {
                 .allowsHitTesting(false)
             }
             HStack(spacing: 10) {
-                TextField(replyingToSelection ? "Reply to selected text…" : "Reply to Sidekick…", text: draft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.94)).tint(.white)
-                    .focused($fieldFocused)
-                    .onSubmit(send)
-                    .accessibilityLabel("Reply to Sidekick")
-                    .accessibilityIdentifier("sidekick.notch.reply")
+                ZStack(alignment: .leading) {
+                    TextField(replyingToSelection ? "Reply to selected text…" : "Reply to Sidekick…",
+                              text: voice.map { value in Binding(get: { value.composedText(value.text) }, set: { _ in }) } ?? draft)
+                        .textFieldStyle(.plain).font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.94)).tint(.white)
+                        .focused($fieldFocused).onSubmit(send)
+                        .disabled(voice != nil)
+                        .opacity(voice?.text.isEmpty == true ? 0 : 1)
+                        .accessibilityLabel("Reply to Sidekick")
+                        .accessibilityIdentifier("sidekick.notch.reply")
+                    if let voice, voice.text.isEmpty {
+                        PromptDictationWaveform(levels: voice.levels)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: voice?.text.isEmpty == true)
+                NotchMicrophoneButton(onPress: { if voice != nil { onVoiceStop() } else { onMicPress() } },
+                    onActivate: { if voice != nil { onVoiceStop() } else { onMic() } }, recording: voice != nil)
+                    .frame(width: 18, height: 18).disabled((isTaskRunning && !isTaskFinishing) || voice?.finalizing == true)
+                if replyingToSelection {
+                    Button { onReply(nil) } label: {
+                        Image(systemName: "xmark").font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain).help("Reply to the whole message instead")
+                    .accessibilityLabel("Clear selected-text reply")
+                }
+                if isTaskRunning && !isTaskFinishing && message.event.messageKind == .update {
+                    Button(action: onStop) {
+                        Image(systemName: "stop.fill").font(.system(size: 9))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(NotchMessageButtonStyle(prominent: false))
+                    .help("Stop current task").accessibilityLabel("Stop current Sidekick task")
+                }
                 Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 12, weight: .semibold))
@@ -71,41 +95,10 @@ struct SidekickNotchMessageView: View {
             }
             .padding(.horizontal, 11)
             .frame(height: SidekickNotchMessageLayout.replyHeight)
-            .background(.white.opacity(fieldFocused ? 0.10 : 0.065), in: RoundedRectangle(cornerRadius: 12))
+            .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: composerCornerRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(.white.opacity(fieldFocused ? 0.32 : 0.14), lineWidth: 0.75)
-            }
-            .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.18), value: fieldFocused)
-            HStack(spacing: 8) {
-                Button(action: onOpen) {
-                    Label("Open in Sentient", systemImage: "arrow.up.forward.app")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 12)
-                        .frame(height: SidekickNotchMessageLayout.footerHeight)
-                }
-                .buttonStyle(NotchMessageButtonStyle(prominent: true))
-                .accessibilityHint("Open this exact response in your full conversation")
-                Spacer(minLength: 8)
-                if replyingToSelection {
-                    Button { onReply(nil) } label: {
-                        Label("Selected text", systemImage: "xmark")
-                            .font(.system(size: 10)).foregroundStyle(.white.opacity(0.55))
-                    }.buttonStyle(.plain).help("Reply to the whole message instead")
-                } else if isTaskRunning {
-                    Text("You can draft a reply")
-                        .font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
-                }
-                if isTaskRunning {
-                    Button(action: onStop) {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 9, weight: .semibold))
-                            .frame(width: SidekickNotchMessageLayout.footerHeight, height: SidekickNotchMessageLayout.footerHeight)
-                    }
-                    .buttonStyle(NotchMessageButtonStyle(prominent: false))
-                    .help("Stop current task")
-                    .accessibilityLabel("Stop current Sidekick task")
-                }
+                RoundedRectangle(cornerRadius: composerCornerRadius)
+                    .strokeBorder(.white.opacity(0.14), lineWidth: 0.75)
             }
         }
         .padding(.top, SidekickNotchMessageLayout.topPad)
@@ -122,12 +115,13 @@ struct SidekickNotchMessageView: View {
 
     private func send() {
         guard canSend else { return }
+        if voice != nil { onVoiceSend(); return }
         let text = draft.wrappedValue
         if onSend(text) { fieldFocused = false }
     }
 }
 
-private struct NotchMessageButtonStyle: ButtonStyle {
+struct NotchMessageButtonStyle: ButtonStyle {
     let prominent: Bool
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride

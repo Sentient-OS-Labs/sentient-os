@@ -18,7 +18,7 @@ safe=(APP/'System/SafeAppRelaunch.swift').read_text()
 SUPPORT=r'''
 import Foundation
 @MainActor final class NSApplication {
-    enum TerminateReply:Equatable {case terminateLater,terminateNow}
+    enum TerminateReply:Equatable {case terminateLater,terminateNow,terminateCancel}
     var replies:[Bool]=[]
     func reply(toApplicationShouldTerminate value:Bool) {replies.append(value)}
     var windows:[Window]=[]
@@ -26,6 +26,7 @@ import Foundation
 struct Window {struct ID {let rawValue:String};var identifier:ID?;var isVisible=false;var isMiniaturized=false}
 @MainActor let NSApp=NSApplication()
 @MainActor final class MainNavigation {
+    enum Page { case home, knowledge }; var page = Page.home
     static let shared=MainNavigation();var approved=true
     func confirmLeavingKnowledge(_ completion:(Bool)->Void) {completion(approved)}
 }
@@ -34,7 +35,7 @@ struct Window {struct ID {let rawValue:String};var identifier:ID?;var isVisible=
     func close() async {closes+=1;while hold {try? await Task.sleep(for:.milliseconds(5))}}
 }
 @MainActor final class SafeAppRelaunch {
-    static let shared=SafeAppRelaunch();var approves=true;var cancels=0;var approvals=0;var allowsAutomaticRelaunch=true
+    static let shared=SafeAppRelaunch();var hasPreparedRestart=false;var approves=true;var cancels=0;var approvals=0;var allowsAutomaticRelaunch=true
     func approveTermination()->Bool {approvals+=1;return approves}
     func cancelPendingRelaunch() {cancels+=1}
 }
@@ -80,6 +81,19 @@ TESTS=r'''
         relaunch.approves=false;_=delegate.applicationShouldTerminate(app);await settle()
         check(app.replies.last == false,"Late restart preparation failure keeps current app open")
         relaunch.approves=true
+        relaunch.hasPreparedRestart=true
+        let closedBefore=probe.closes
+        check(delegate.applicationShouldTerminate(app) == .terminateNow,
+              "prepared restart quits synchronously after its completed preparation")
+        check(probe.closes == closedBefore, "prepared restart does not drain the same client twice")
+        relaunch.approves=false
+        check(delegate.applicationShouldTerminate(app) == .terminateCancel,
+              "late work or expired restart ticket cancels a prepared quit")
+        relaunch.approves=true;MainNavigation.shared.page = .knowledge
+        check(delegate.applicationShouldTerminate(app) == .terminateLater,
+              "Knowledge editing retains its live leave approval")
+        await settle()
+        MainNavigation.shared.page = .home;relaunch.hasPreparedRestart=false
         let update=UpdateFixture();var installs=0
         update.pendingInstallHandler={installs+=1}
         check(update.canInstall,"Idle baseline can install")

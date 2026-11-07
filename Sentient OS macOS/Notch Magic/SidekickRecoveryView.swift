@@ -28,8 +28,12 @@ struct SidekickRecoveryLayout {
     let scrollHeight: CGFloat
     let errorHeight: CGFloat
     let answerWidth: CGFloat
+    let bottomPadding: CGFloat
+    let fieldRadius: CGFloat
 
     init(content: SidekickRecoveryContent, metrics: NotchMetrics) {
+        bottomPadding = metrics.hasPhysicalNotch ? Self.bottomPad : metrics.hPad - metrics.bottomPad
+        fieldRadius = metrics.hasPhysicalNotch ? 11 : metrics.islandCornerRadius - metrics.hPad
         let maximum = metrics.size(for: .recovery)
         let textWidth = maximum.width - 2 * (metrics.hPad + Self.scrollHPad)
         let buttonWidth = (textWidth - Self.answerSpacing) / 2
@@ -39,8 +43,8 @@ struct SidekickRecoveryLayout {
             max(18, Self.height($0, font: Self.answerFont, width: buttonWidth - 2 * Self.answerPadding))
                 + 2 * Self.answerPadding
         }.max() ?? 0
-        let chromeHeight = metrics.topRowHeight + metrics.topPad + metrics.bottomPad
-            + Self.topPad + Self.bottomPad + Self.fieldSpacing + Self.fieldHeight
+        let chromeHeight = metrics.headerContentHeight + metrics.topPad + metrics.bottomPad
+            + Self.topPad + bottomPadding + Self.fieldSpacing + Self.fieldHeight
         let availableScrollHeight = max(0, maximum.height - chromeHeight)
         let upgradeHeight = content.upgradeOffer.map {
             Self.height($0.explanation, font: Self.errorFont, width: textWidth)
@@ -170,15 +174,15 @@ struct SidekickRecoveryView: View {
             }
             .padding(8)
             .frame(height: SidekickRecoveryLayout.fieldHeight)
-            .background(.white.opacity(fieldFocused ? 0.10 : 0.06), in: RoundedRectangle(cornerRadius: 11))
+            .background(.white.opacity(fieldFocused ? 0.10 : 0.06), in: RoundedRectangle(cornerRadius: layout.fieldRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: 11)
+                RoundedRectangle(cornerRadius: layout.fieldRadius)
                     .strokeBorder(.white.opacity(fieldFocused ? 0.34 : 0.11), lineWidth: 0.75)
             }
             .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.18), value: fieldFocused)
         }
         .padding(.top, SidekickRecoveryLayout.topPad)
-        .padding(.bottom, SidekickRecoveryLayout.bottomPad)
+        .padding(.bottom, layout.bottomPadding)
         .preferredColorScheme(.dark)
         .accessibilityElement(children: .contain)
     }

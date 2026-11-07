@@ -67,6 +67,7 @@ final class AppState {
                 homePreparation = nil
             }
             UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
+            commandCoordinator.refreshQuickActionShortcuts()
             if hasCompletedOnboarding, !oldValue {
                 Analytics.signal("Onboarding.homeReached")
                 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil { startAfterHome() }

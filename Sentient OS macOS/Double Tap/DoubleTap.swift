@@ -78,7 +78,8 @@ final class DoubleTap {
     /// flight is ignored rather than restarted: cancelling the first run would fade the ring the
     /// second one just started, and the paste would arrive twice.
     func start(completion: @escaping @MainActor (Result) -> Void) {
-        guard task == nil else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
+        guard !Proofread.shared.isRunning else { completion(.stopped); return }
+        guard !isDrafting else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
         guard Self.isReady else { showSetupRequired(completion: completion); return }
         let provider = DoubleTapProvider.current
         let runID = DiagnosticHistory.begin(.doubleTap, provider: provider.rawValue,
@@ -211,7 +212,7 @@ final class DoubleTap {
                 if Task.isCancelled { return .stopped }
                 phase = .paste
                 Diagnostics.step(.paste)
-                guard ReplyPaste.insert(reply) else {
+                guard await ReplyPaste.insert(reply) else {
                     diagnosticReason = "paste_failed"; return .failed("could not paste reply")
                 }
                 return .pasted
@@ -242,7 +243,7 @@ final class DoubleTap {
 /// and Slack a typed Return SENDS, while a pasted newline is just a line break. Posting the key
 /// event rides Sentient's own Accessibility grant.
 private enum ReplyPaste {
-    @MainActor static func insert(_ text: String) -> Bool {
+    @MainActor static func insert(_ text: String) async -> Bool {
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
         pasteboard.clearContents()
@@ -260,18 +261,22 @@ private enum ReplyPaste {
             if let previous { pasteboard.setString(previous, forType: .string) }
             return false
         }
+        let clipboardVersion = pasteboard.changeCount
         for event in events {
             event.flags = .maskCommand
             event.post(tap: .cghidEventTap)
         }
         CrashReporting.diagnosticBreadcrumb("doubletap.paste_dispatched", data: ["delivery_verified": "false"])
         Log("⌘⌘ reply paste dispatched (\(text.count) chars)")
-        Task { @MainActor in
+        // An uncancelled cleanup task keeps the observable drafting task alive until the paste
+        // has consumed its clipboard. Neither another draft nor Proofread can overlap this leg.
+        let cleanup = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
-            guard let previous else { return }
+            guard let previous, pasteboard.changeCount == clipboardVersion else { return }
             pasteboard.clearContents()
             pasteboard.setString(previous, forType: .string)
         }
+        await cleanup.value
         return true
     }
 }

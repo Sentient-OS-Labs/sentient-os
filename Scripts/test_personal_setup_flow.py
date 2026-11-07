@@ -116,7 +116,9 @@ enum SourceSelection {
     let scheduler = OvernightScheduler()
     let commandCoordinator = Coordinator()
     let sidekickPresentation = SidekickPresentation()
-    @MainActor final class Coordinator { let run = Run() }
+    @MainActor final class Summary { var isBusy = false; var dismissals = 0; func dismiss() { isBusy = false; dismissals += 1 } }
+    @MainActor final class Proofread {var isRunning=false;func close(){isRunning=false}}
+    @MainActor final class Coordinator { let run = Run(); let summarize = Summary();let proofread=Proofread();func refreshQuickActionShortcuts(){};func cancelQuickActionPreparation(){} }
     @MainActor final class Run {
         var isRunning = false
         var canSavePermissionWaitForRelaunch=false
@@ -179,7 +181,7 @@ enum PermissionRelaunchDraft {
 }
 enum PermissionWaitDraft { static func clear() {} }
 enum SidekickInstructionStore { static func resetLearning() {} }
-@MainActor final class NativePermissionCheck { static let shared = NativePermissionCheck(); var isChecking=false; func close() async {}; func beginTeardown() async {}; func endTeardown() {} }
+@MainActor final class NativePermissionCheck { static let shared = NativePermissionCheck(); var isChecking=false; var holdClose=false; func close() async { while holdClose { try? await Task.sleep(for: .milliseconds(5)) } }; func beginTeardown() async {}; func endTeardown() {} }
 @MainActor final class ComputerUseDoctor { static let shared = ComputerUseDoctor(); var isRunning=false; func clear(defaults: UserDefaults) async {} }
 @MainActor enum HostedConnectorSetup {
     static var active = false
@@ -350,6 +352,9 @@ extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value 
         check(!SafeAppRelaunch.shared.relaunchForPersonalSetup() && NSApp.requests == 0,
               "permission relaunch refuses an active Sidekick task")
         app.commandCoordinator.run.isRunning = false
+        app.commandCoordinator.summarize.isBusy = true
+        check(!SafeAppRelaunch.shared.canRelaunch, "summary request keeps permission restart from interrupting it")
+        app.commandCoordinator.summarize.isBusy = false
         app.processing.isBusy = true
         check(!SafeAppRelaunch.shared.canRelaunch, "permission relaunch waits for analysis to drain")
         app.processing.isBusy = false; CodexSetup.shared.installing = true
@@ -393,6 +398,22 @@ extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value 
         check(!d.bool(forKey:PersonalSetupProgress.resumeKey) && PermissionRelaunchDraft.saved?.text == "unsent fixture",
               "generic permission restart preserves draft without reopening personal setup")
         SafeAppRelaunch.shared.cancelPendingRelaunch()
+        let requestsBeforeStall = NSApp.requests
+        NativePermissionCheck.shared.holdClose = true
+        _ = SafeAppRelaunch.shared.relaunchPreservingDraft()
+        try await Task.sleep(for: .milliseconds(140))
+        check(!SafeAppRelaunch.shared.isPreparing && SafeAppRelaunch.shared.failure != nil,
+              "stalled cleanup restores the restart button with a visible failure")
+        NativePermissionCheck.shared.holdClose = false
+        try await Task.sleep(for: .milliseconds(30))
+        check(NSApp.requests == requestsBeforeStall, "late cleanup cannot quit after restart timed out")
+        _ = SafeAppRelaunch.shared.relaunchPreservingDraft()
+        await SafeAppRelaunch.shared.fixtureWait()
+        check(NSApp.requests == requestsBeforeStall + 1, "restart can be retried after stalled cleanup")
+        try await Task.sleep(for: .milliseconds(140))
+        check(!SafeAppRelaunch.shared.isPreparing && SafeAppRelaunch.shared.failure != nil,
+              "ignored macOS quit request cannot leave Restart spinning forever")
+        SafeAppRelaunch.shared.cancelPendingRelaunch()
         d.set("imessage", forKey: SourceSelection.pendingProtectedSourceKey)
         d.set(true, forKey: "dbg.run.downloads")
         d.set(false, forKey: "dbg.run.desktop")
@@ -421,7 +442,7 @@ extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value 
 }
 '''
 
-source = '\n'.join((fixture, progress, plan, member(relaunch, '@MainActor @Observable\nfinal class SafeAppRelaunch'), reset, checks))
+source = '\n'.join((fixture, progress, plan, member(relaunch, '@MainActor @Observable\nfinal class SafeAppRelaunch').replace('.seconds(12)', '.milliseconds(80)'), reset, checks))
 with tempfile.TemporaryDirectory(prefix='sentient-personal-setup-') as directory:
     path = Path(directory)
     (path / 'main.swift').write_text(source)

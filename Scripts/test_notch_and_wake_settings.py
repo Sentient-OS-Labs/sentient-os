@@ -121,13 +121,20 @@ enum NotchPhase { case hidden, opening, typing, running, listening, transcribing
 final class PointerPanel { var ignoresMouseEvents = true }
 final class PointerRecovery { func setHovering(_ value: Bool) {} }
 final class PointerRun { let recovery = PointerRecovery() }
+final class PointerPress { var isTracking = false }
+final class PointerProofread { var isRunning = false }
+final class EntryPanel { var isVisible = false; var frame = NSRect.zero }
+final class EntryHandle { let panel = EntryPanel(); var isIsland = false; var displayID: UInt32 = 0 }
 final class PointerCoordinator {
     var phase = NotchPhase.hidden
     var notchButtonAvailable = true
     let run = PointerRun()
+    let notchPress = PointerPress()
+    let proofread = PointerProofread()
     func setMessagePreviewHovering(_ value: Bool) {}
 }
 final class PointerProbe {
+    var entryHandles: [UInt32: EntryHandle] = [:]
     let coordinator = PointerCoordinator()
     var panel: PointerPanel? = PointerPanel()
     var hovering = false
@@ -138,7 +145,7 @@ final class PointerProbe {
     let nearZone = NSRect(x: 0, y: 0, width: 100, height: 40)
     var hoverEntryRect = NSRect(x: 0, y: 0, width: 100, height: 40)
     func retuneMouseTimer() {}
-    func beginHover() { hovering = true }
+    func beginHover(on displayID: UInt32? = nil) { hovering = true }
     func endHover() { hovering = false; panel?.ignoresMouseEvents = true }
     func cursorNearNotch() -> Bool { cursorInside }
     func cursorOverSilhouette() -> Bool { cursorInside }

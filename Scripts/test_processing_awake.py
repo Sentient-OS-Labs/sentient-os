@@ -33,11 +33,13 @@ import Foundation
     static let shared = WakeHelperClient()
     var active = false
     var begins = 0, ends = 0, heartbeats = 0
+    var requestedTimeout = 0
     var blockBegin = false, blockHeartbeat = false, beginResult = true
     var beginPending: CheckedContinuation<Bool, Never>?
     var heartbeatPending: CheckedContinuation<Bool, Never>?
     func beginAwake(timeout: Int) async -> Bool {
         begins += 1
+        requestedTimeout = timeout
         active = true // The daemon can receive a request even if its reply times out.
         if blockBegin { return await withCheckedContinuation { beginPending = $0 } }
         return beginResult
@@ -80,7 +82,7 @@ import Foundation
 final class RootHeartbeat {
     let queue = DispatchQueue(label: "fixture.heartbeat")
     var prepared = true, removing = false, holdingAwake = false
-    var lastTimeout = 1800, timerStarts = 0
+    var lastTimeout = 600, timerStarts = 0
     func startDeadman(seconds: Int) { timerStarts += 1 }
     __HEARTBEAT__
     func check() async -> Bool {
@@ -103,11 +105,27 @@ final class RootHeartbeat {
         fatalError("Fixture did not reach its expected await")
     }
     static func main() async throws {
+        var film = OnboardingAwake()
+        for phase in [OnboardingAwake.Phase.playing, .ridingToInvitation, .ridingSidekick] {
+            film.phase = phase
+            check(film.holdsDisplay, "active film playback keeps the display awake")
+        }
+        for phase in [OnboardingAwake.Phase.loading, .parked, .awaitingNotch, .sidekickDone, .doubleTap, .unavailable] {
+            film.phase = phase
+            check(!film.holdsDisplay, "onboarding waits and lessons allow idle sleep")
+        }
+        film.replayingIntro = true
+        check(film.holdsDisplay, "replaying the film holds the display")
+        film.scenePhase = .inactive
+        check(!film.holdsDisplay, "inactive onboarding releases the display")
+        film.scenePhase = .active; film.isVisible = false
+        check(!film.holdsDisplay, "leaving onboarding releases the display even during playback")
         let helper = WakeHelperClient.shared
         let first = Coordinator()
         check(first.needsHold, "first full analysis on power requests closed-lid protection")
         check(await first.maintain(), "initial awake hold succeeds")
         check(helper.begins == 1 && helper.active, "one initial acquire")
+        check(helper.requestedTimeout == 600, "sleep safety timeout is ten minutes")
         check(await first.maintain(), "live heartbeat succeeds")
         check(helper.begins == 1, "heartbeat preserves the original awake ceiling")
         helper.active = false // Model a daemon restart that restored normal sleep.
@@ -168,6 +186,15 @@ final class RootHeartbeat {
 '''
 methods = "\n".join(member(coordinator, name) for name in (
     "private var needsAwakeProtection:", "private func maintainAwake(", "private func releaseAwake("))
+film = (APP / "Views/Onboarding/OnboardingFilmView.swift").read_text()
+film_fixture = "\nstruct OnboardingAwake {\n" + member(film, "private enum Phase").replace("private enum", "enum") + "\n" + r"""
+    enum ScenePhase { case active, inactive }
+    var isVisible = true
+    var scenePhase = ScenePhase.active
+    var replayingIntro = false
+    var phase = Phase.loading
+""" + member(film, "private var shouldKeepDisplayAwake:") + "\nvar holdsDisplay: Bool { shouldKeepDisplayAwake }\n}\n"
+fixture += film_fixture
 fixture = fixture.replace("__COORDINATOR__", methods).replace("__HEARTBEAT__", member(helper, "func heartbeat("))
 with tempfile.TemporaryDirectory(prefix="sentient-awake-tests-") as directory:
     root = Path(directory)

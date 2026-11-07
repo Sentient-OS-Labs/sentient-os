@@ -50,7 +50,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
         let env = ProcessInfo.processInfo.environment
         guard env["SENTIENT_SELFTEST"] == "sidekickapp", CommandLine.arguments.count == 1,
               let path = env["LAB_SIDEKICK_ROOT"], path.hasPrefix("/"),
-              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-discovery", "ui-invitation", "ui-small-onboarding", "ui-late-gift", "ui-personal-setup", "ui-personal-sources", "ui-connector-setup", "ui-stress", "live-workflows"].contains(stage),
+              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-dictation", "ui-voice-continuity", "ui-island-colors", "ui-notch-motion", "ui-surface-switching", "ui-summarize", "live-summary", "ui-proofread", "ui-discovery", "ui-invitation", "ui-small-onboarding", "ui-late-gift", "ui-personal-setup", "ui-personal-sources", "ui-connector-setup", "ui-stress", "live-workflows", "live-quick-actions"].contains(stage),
               let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = ModelBackend(rawValue: selected), provider != .custom else { throw Failure.configuration }
         let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
@@ -112,6 +112,9 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "live-workflows":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickLiveWorkflowLab.run(app: state, root: c.root)) { _, new in new }
+            case "live-quick-actions":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickQuickActionLab.run(app: state, root: c.root)) { _, new in new }
             case "ui-stress":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickTranscriptStressLab.run(app: state, root: c.root)) { _, new in new }
@@ -127,6 +130,23 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "ui-polish":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickPolishLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-proofread":
+                checks.merge(try await ProofreadLab.run(root: c.root)) { _, new in new }
+            case "live-summary":
+                checks.merge(try await SummaryLiveLab.run(root: c.root)) { _, new in new }
+            case "ui-summarize":
+                checks.merge(try await SummarizeLab.run(root: c.root)) { _, new in new }
+            case "ui-surface-switching":
+                let state = AppState(); app = state
+                checks.merge(try await NotchSurfaceSwitchingLab.run(app: state, root: c.root)) { _, new in new }
+            case "ui-notch-motion":
+                checks.merge(try await NotchOpeningLab.run(root: c.root)) { _, new in new }
+            case "ui-island-colors":
+                try await IslandColorComparison.capture(root: c.root)
+            case "ui-voice-continuity":
+                checks.merge(try await NotchVoiceContinuityLab.run(root: c.root)) { _, new in new }
+            case "ui-dictation":
+                checks.merge(try await SidekickDictationLab.run(root: c.root)) { _, new in new }
             case "ui-personal-setup":
                 // This runs after prepare() replaces standard defaults with the owned suite,
                 // before AppState/ProcessingCoordinator read their persisted milestones.

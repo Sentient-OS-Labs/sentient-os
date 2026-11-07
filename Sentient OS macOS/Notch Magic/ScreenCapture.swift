@@ -21,8 +21,101 @@
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
+import ScreenCaptureKit
 
 enum ScreenCapture {
+    /// Resolve the active app's frontmost ordinary window before the notch becomes key. Quartz
+    /// window/display bounds share a coordinate space, including displays above/left of primary.
+    @MainActor static func summaryDisplay() -> CGDirectDisplayID? {
+        let screens = NSScreen.screens
+        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+           let window = windows.first(where: {
+               ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0
+                   && ($0[kCGWindowAlpha as String] as? Double ?? 1) > 0
+           }), let bounds = window[kCGWindowBounds as String] as? [String: Any],
+           let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), !rect.isEmpty {
+            let ranked = screens.map { screen -> (CGDirectDisplayID, CGFloat) in
+                let intersection = CGDisplayBounds(screen.displayID).intersection(rect)
+                return (screen.displayID, intersection.isNull ? 0 : intersection.width * intersection.height)
+            }
+            if let best = ranked.max(by: { $0.1 < $1.1 }), best.1 > 0 { return best.0 }
+        }
+        return (screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main ?? screens.first)?.displayID
+    }
+
+    nonisolated enum SummaryFailure: LocalizedError, Equatable {
+        case permission, displayGone, capture
+        var errorDescription: String? {
+            switch self {
+            case .permission: "Allow Screen Recording, then return to the content you want summarized and try again."
+            case .displayGone: "That display is no longer available. Close this window and summarize your current screen."
+            case .capture: "Couldn’t capture this window. Bring it into view and try again."
+            }
+        }
+    }
+
+    /// One memory-only still of the selected document window, even if another app covers it.
+    /// Without a window target, capture the chosen display excluding our transient overlays.
+    @MainActor static func summaryImage(displayID: CGDirectDisplayID, windowPID: pid_t? = nil,
+                                        windowTitle: String? = nil, windowFrame: CGRect? = nil) async throws -> Data {
+        guard Permissions.hasScreenRecording() else { throw SummaryFailure.permission }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            try Task.checkCancellation()
+            guard let display = content.displays.first(where: { $0.displayID == displayID }) else { throw SummaryFailure.displayGone }
+            let excluded = Set(NSApp.windows.filter {
+                ["sentient.notch", "sentient.summary", "sentient.proofread"].contains($0.identifier?.rawValue ?? "")
+            }.map { CGWindowID($0.windowNumber) })
+            // Exclude the app dynamically, except for its ordinary windows. A second Summary
+            // opening while capture is pending must not appear inside the first screenshot.
+            let ownApps = content.applications.filter { $0.processID == getpid() }
+            let ordinaryWindows = content.windows.filter {
+                $0.owningApplication?.processID == getpid() && !excluded.contains($0.windowID)
+            }
+            let filter: SCContentFilter
+            if let windowPID, windowTitle != nil || windowFrame != nil {
+                let candidates = content.windows.filter {
+                    $0.owningApplication?.processID == windowPID && !excluded.contains($0.windowID)
+                }
+                let selected = SummaryWindowSelection.choose(candidates.map {
+                    .init(id: $0.windowID, pid: windowPID, title: $0.title, frame: $0.frame, layer: $0.windowLayer)
+                }, pid: windowPID, title: windowTitle, frame: windowFrame,
+                   appName: NSRunningApplication(processIdentifier: windowPID)?.localizedName)
+                guard let selected, let window = candidates.first(where: { $0.windowID == selected }) else {
+                    Log("summary screenshot unavailable: ambiguous or missing target window (candidates=\(candidates.count))")
+                    throw SummaryFailure.capture
+                }
+                filter = SCContentFilter(desktopIndependentWindow: window)
+            } else if ownApps.isEmpty {
+                filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { excluded.contains($0.windowID) })
+            } else {
+                filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: ordinaryWindows)
+            }
+            let config = SCStreamConfiguration()
+            let width = filter.contentRect.width * CGFloat(filter.pointPixelScale)
+            let height = filter.contentRect.height * CGFloat(filter.pointPixelScale)
+            let scale = min(1, 3_072 / max(width, height, 1))
+            config.width = max(1, Int(width * scale)); config.height = max(1, Int(height * scale))
+            config.showsCursor = false
+            config.ignoreShadowsSingleWindow = true
+            let frame = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            try Task.checkCancellation()
+            return try await Task.detached(priority: .userInitiated) {
+                let out = NSMutableData()
+                guard let destination = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { throw SummaryFailure.capture }
+                CGImageDestinationAddImage(destination, frame, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+                guard CGImageDestinationFinalize(destination), out.length > 0, out.length <= 4_500_000 else { throw SummaryFailure.capture }
+                return out as Data
+            }.value
+        } catch is CancellationError { throw CancellationError() }
+        catch let failure as SummaryFailure { throw failure }
+        catch {
+            if !Permissions.hasScreenRecording() { throw SummaryFailure.permission }
+            throw SummaryFailure.capture
+        }
+    }
+
     /// Capture every display to temp JPEGs for computer-use context — the MAIN display always first
     /// (`screencapture -D 1` is the main display by its own contract; a per-display failure just drops
     /// that frame). Empty = no Screen Recording grant or nothing captured (the command then runs

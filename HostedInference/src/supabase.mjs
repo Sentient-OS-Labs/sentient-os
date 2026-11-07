@@ -42,5 +42,6 @@ export function supabaseServices({ url, publishableKey, serviceRoleKey, fetcher 
     return result;
   };
   return { authenticate, ledger: { call: (operation,args) => callRPC('hosted_inference',operation,args) },
-    connectorLedger: { call: (operation,args) => callRPC('hosted_connectors',operation,args) } };
+    connectorLedger: { call: (operation,args) => callRPC('hosted_connectors',operation,args) },
+    dictationLedger: { call: (operation,args) => callRPC('hosted_dictation',operation,args) } };
 }

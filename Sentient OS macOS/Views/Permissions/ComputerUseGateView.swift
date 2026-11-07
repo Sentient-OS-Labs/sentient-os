@@ -24,7 +24,7 @@ struct ComputerUseGateView: View {
                 if let failure = SafeAppRelaunch.shared.failure { SettingsProse(failure) }
             }
             if gate.showingVoiceRepair { SettingsGroup(label: "Voice input") {
-                StatusLine(title: "Microphone & Speech",
+                StatusLine(title: "Microphone",
                            health: gate.micSpeech == .granted ? .ok : .warn,   // optional — amber, never blocking
                            note: micSpeechNote,
                            tip: ComputerUseGate.micSpeechTip,
@@ -76,12 +76,7 @@ struct ComputerUseGateView: View {
         case .notAsked:
             Task { _ = await VoiceCapture.requestPermissions(); gate.refresh() }
         case .denied:
-            // Deep-link to whichever grant is actually the blocker (mic first — it gates speech).
-            if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-                Permissions.openMicrophoneSettings()
-            } else {
-                Permissions.openSpeechRecognitionSettings()
-            }
+            Permissions.openMicrophoneSettings()
         }
     }
 

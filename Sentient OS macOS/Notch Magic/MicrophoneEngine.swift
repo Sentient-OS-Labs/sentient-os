@@ -2,9 +2,8 @@
 //  MicrophoneEngine.swift
 //  Sentient OS macOS
 //
-//  The process's microphone `AVAudioEngine`, made safe against input-device changes. Both speech
-//  engines (SpeechAnalyzerEngine on macOS 26+, SFSpeechRecognizerEngine on 15) tap the input node
-//  through this file instead of touching AVFAudio's tap API directly.
+//  The process's microphone `AVAudioEngine`, made safe against input-device changes. Dictation taps
+//  the input node through this file instead of touching AVFAudio's tap API directly.
 //
 //  Why it exists: `installTap(format:)` SETS the input node's output-bus format, and after the input
 //  hardware changes (AirPods on, headset unplugged, a Bluetooth mic dropping across sleep) AVFAudio
@@ -96,7 +95,7 @@ enum MicrophoneEngine {
     }
 
     /// The shared engine with a validated tap format, rebuilding once on a stale bus format. The
-    /// one call both speech engines make per capture.
+    /// one call dictation makes per capture.
     static func acquire() throws -> (engine: AVAudioEngine, format: AVAudioFormat) {
         var engine = shared()
         do {
@@ -110,20 +109,20 @@ enum MicrophoneEngine {
 
     /// Install the tap. On macOS 27+ (when built with the macOS 27 SDK) the throwing tap API turns
     /// a residual format mismatch into an error the caller can recover from; on 26.x only the raising
-    /// API exists, and `validatedInputFormat` is the guard. `block` receives a mutable PCM buffer on
-    /// both paths (the read-only buffer of the new API is copied — 4096 frames, negligible).
+    /// API exists, and `validatedInputFormat` is the guard. Small tap buffers keep the release
+    /// boundary close to the final syllable; network packets are assembled independently.
     static func installTap(on input: AVAudioInputNode, format: AVAudioFormat,
                            block: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws {
         input.removeTap(onBus: 0)   // defensive: a stale tap from an interrupted capture must not linger
         #if compiler(>=6.4)
         if #available(macOS 27, *) {
-            try input.installAudioTap(onBus: 0, bufferSize: 4096, format: format) { readOnly, _ in
+            try input.installAudioTap(onBus: 0, bufferSize: 1024, format: format) { readOnly, _ in
                 block(AVAudioPCMBuffer(copying: readOnly))
             }
             return
         }
         #endif
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in block(buffer) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in block(buffer) }
     }
 
     /// End a capture: remove the tap, stop, and reset the nodes so nothing carries over.

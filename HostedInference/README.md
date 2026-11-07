@@ -229,3 +229,38 @@ finite aggregate funding, provider billing reconciliation and a tested operation
 An anonymous installation credential is not a verified unique person. This code supplies no
 human-uniqueness guarantee. Keep production disabled until the team's enrollment abuse controls
 and funded rollout policy are ready; a 60-minute per-identity timer cannot substitute for them.
+
+## Covered screen and text actions
+
+The existing Double Tap Worker also serves `POST /v1/summarize` and `POST /v1/proofread` through
+`relay/dictation.mjs` and `relay/wrangler.dictation.json`. This deployment entry preserves the existing
+Double Tap route, dictation gateway and `Counter` Durable Object. It is separate from the full
+Anthropic hosted-inference gateway described above.
+
+| Route | Input | Server-owned model | Result |
+| --- | --- | --- | --- |
+| `/v1/summarize` | Primary document text/metadata plus accompanying Base64 JPEG and optional summary preference | GPT-6.1 Terra, Fast, low effort | Streamed document/video summary |
+| `/v1/proofread` | Selected text only | GPT-6 Luna, Fast, low effort | Streamed strict `corrected_text` JSON, applied only after completion |
+
+`SENTIENT_SUMMARIZE_ENABLED` and `SENTIENT_PROOFREAD_ENABLED` independently activate the routes.
+Both require the existing OpenAI secret, Counter binding, and positive hourly/daily limits. An
+explicit `GLOBAL_MONTHLY_CAP=0` preserves the operator's uncapped-month policy; a positive value
+adds the shared monthly ceiling. Missing, negative or invalid monthly configuration does not admit
+requests. All three OpenAI actions share the existing installation-counter namespace.
+
+The wrapper pins model, tier, instructions, schema/output limits and `store: false`. It validates
+actual request bytes before admission. Worker fetches use manual redirect handling and reject
+redirect responses without following them. Client cancellation and a server deadline bound the
+upstream request. Error responses expose only fixed status/code/parameter metadata, never the
+provider's message, credentials, screenshot or selected text. No request content is stored in counters.
+
+Before deployment, compare the active Worker's source/source map and non-secret settings against
+the intended bundle. Preserve existing bindings, secrets, routing, compatibility flags and limits.
+A dry-run bundle can be verified with a synthetic upstream before an explicitly authorized deployment.
+Verify the active version and flags afterward, and keep the prior version available for rollback.
+
+`npm test` covers these routes and legacy composition. `Scripts/test_screen_actions_live.py --live`
+provides opt-in, billable verification through the production Swift clients with four fixed synthetic
+inputs. It reuses a test installation credential in its artifact directory, rather than reading the
+user's Keychain. Native UI fixtures separately cover screen presentation, selected-text replacement,
+clipboard preservation and Undo. Live-provider checks do not deploy a desktop release.

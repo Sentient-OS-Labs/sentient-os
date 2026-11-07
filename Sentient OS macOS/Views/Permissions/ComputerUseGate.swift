@@ -5,7 +5,6 @@
 
 import AppKit
 import AVFoundation
-import Speech
 import SwiftUI
 
 @MainActor
@@ -23,7 +22,7 @@ final class ComputerUseGate {
     enum MicSpeechState { case granted, notAsked, denied }
     private(set) var micSpeech: MicSpeechState = .notAsked
 
-    /// The Microphone & Speech row's hover tip — one string for the gate window and Settings → Health.
+    /// The Microphone row's hover tip — one string for the gate window and Settings → Health.
     static let micSpeechTip = PrivacyCopy.voiceInput
 
     /// Sentient's own Screen Recording — the cua driver's EYES (per-window screenshots) and the
@@ -589,10 +588,9 @@ final class ComputerUseGate {
         }
         if capabilityFailure != nil, unresolvedCapabilityFailure == nil { capabilityFailure = nil }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
-        let speech = SFSpeechRecognizer.authorizationStatus()
-        if mic == .authorized && speech == .authorized {
+        if mic == .authorized {
             micSpeech = .granted
-        } else if mic == .denied || mic == .restricted || speech == .denied || speech == .restricted {
+        } else if mic == .denied || mic == .restricted {
             micSpeech = .denied
         } else {
             micSpeech = .notAsked

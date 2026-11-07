@@ -17,7 +17,7 @@ FILES = [
         "SidekickConversationTools.swift", "SidekickInteraction.swift",
         "SidekickToolServer.swift", "SidekickRecovery.swift",
         "SidekickInstructionStore.swift", "SidekickPersonalization.swift",
-        "SidekickTaskSummary.swift",
+        "SidekickTaskSummary.swift", "SidekickQuickActionTools.swift",
     )
 ] + [ROOT / "Sentient OS macOS/Diagnostics/ComputerUseDiagnosticConsent.swift",
      ROOT / "Sentient OS macOS/Cloud/AgentStatus.swift",
@@ -194,6 +194,56 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
             "arguments": ["app": "Synthetic", "password": "MUST_NOT_PERSIST", "accessibility_tree": "TREE_SECRET"]]
         if let result { item["result"] = result }
         return String(decoding: try json(["type": type, "item": item]), as: UTF8.self)
+    }
+
+    static func quickActions() async throws {
+        var summaries = 0, proofreads = 0
+        let actions = SidekickQuickActions(summarize: { preference, application in
+            summaries += 1
+            try check(preference == "brief" && application == "com.apple.Safari", "summary routing arguments preserved")
+            return .init(markdown: "**Exact summary**", source: "Loaded document")
+        }, proofread: { text in
+            proofreads += 1
+            try check(text == "  teh message\n", "proofread preserves exact input whitespace")
+            return "  the message\n"
+        })
+        let interaction = SidekickInteraction(quickActions: actions) { _ in SidekickAnswer(text:"",selectedAnswer:nil) }
+        let server = SidekickToolServer(interaction:interaction)
+        let connection = try await server.start()
+        try check(Set(SidekickQuickActionTools.names).isSubset(of:Set(connection.tools)), "quick action names reach transport allowlist")
+        let listed = try await send(server,request:json(["id":"list","method":"tools/list"]))
+        let names = (try result(listed)["tools"] as? [[String:Any]])?.compactMap{$0["name"] as? String} ?? []
+        try check(Set(SidekickQuickActionTools.names).isSubset(of:Set(names)), "quick action schemas advertised")
+        let summary = try await send(server,request:request("summarize_screen",["preference":"brief","application_id":"com.apple.Safari"]))
+        try check(try payload(summary)["displayed"] as? Bool == true, "summary returns displayed reader result")
+        let rpc = try request("proofread_text",id:"retry-proofread",["text":"  teh message\n"])
+        let first = try await send(server,request:rpc)
+        let second = try await send(server,request:rpc)
+        try check(first == second && proofreads == 1 && summaries == 1, "retried tool calls execute once")
+        let result = try payload(first)
+        try check(result["corrected_text"] as? String == "  the message\n" && result["applied"] as? Bool == false, "proofreader returns exact correction without claiming insertion")
+        for (name,args): (String,[String:Any]) in [("proofread_text",["text":""]),("proofread_text",["text":String(repeating:"x",count:12001)]),("summarize_screen",["application_id":"bad app / path"]),("summarize_screen",["unknown":true])] {
+            let response = try await send(server,request:request(name,args))
+            try check(try isError(response), "malformed quick action rejected before callback")
+        }
+        try check(proofreads == 1 && summaries == 1, "invalid requests never invoke services")
+        try check(interaction.promptInstructions.contains("proofread_text") && interaction.promptInstructions.contains("summarize_screen"), "routing guidance provided to every Sidekick engine")
+        await server.stop()
+        var started = false
+        let slow = SidekickQuickActions(summarize: { _,_ in
+            started = true
+            try await Task.sleep(for:.seconds(30))
+            return .init(markdown:"late",source:"late")
+        }, proofread: { _ in throw SidekickQuickActionTools.Failure.unavailable })
+        let slowServer = SidekickToolServer(interaction:SidekickInteraction(quickActions:slow) { _ in SidekickAnswer(text:"",selectedAnswer:nil) })
+        let failed = try await send(slowServer,request:request("proofread_text",["text":"text"]))
+        try check(try isError(failed), "service failure returns a tool error without claiming success")
+        let requestData = try request("summarize_screen",[:])
+        let pending = Task { try await send(slowServer,request:requestData) }
+        try await waitFor { started }
+        await slowServer.stop()
+        do { _ = try await pending.value; try check(false,"cancelled action returned a result") }
+        catch is CancellationError { try check(true,"server shutdown cancels the pending utility") }
     }
 
     static func protocolBoundaries(_ root: URL) async throws {
@@ -568,6 +618,7 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
     static func main() async throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try await protocolBoundaries(root)
+        try await quickActions()
         try await messaging(root)
         try await completion(root)
         try await history(root)
