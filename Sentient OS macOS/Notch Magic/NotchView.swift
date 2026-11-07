@@ -78,6 +78,23 @@ struct NotchMetrics: Equatable {
     var quickActionGap: CGFloat { quickActionsAvailable ? 10 : 0 }
     /// The typed prompt and the reply composer share one glass field shape.
     var composerCornerRadius: CGFloat { hasPhysicalNotch ? 12 : islandCornerRadius - hPad }
+
+    // The prompt wraps, and the notch grows with it a line at a time up to `maxDraftLines`; longer
+    // drafts scroll inside the field. View, click-through test and canvas all size from these.
+    static let promptFont = NSFont.systemFont(ofSize: 13)
+    var maxDraftLines: Int { 5 }
+    /// The field's text inset; the trailing side is shorter because the mic glyph sits inset in its slot.
+    var promptInsets: (leading: CGFloat, trailing: CGFloat, gap: CGFloat) { (12, 7, 10) }
+    var typingWidth: CGFloat { max(baseWidth + 240, 480) }
+    var promptLineHeight: CGFloat { let f = Self.promptFont; return ceil(f.ascender - f.descender + f.leading) }
+    func fieldHeight(lines: Int) -> CGFloat { fieldRowHeight + CGFloat(max(1, lines) - 1) * promptLineHeight }
+    func promptLineCount(_ text: String) -> Int {
+        guard !text.isEmpty else { return 1 }
+        let width = typingWidth - hPad * 2 - promptInsets.leading - promptInsets.trailing - promptInsets.gap - controlSlot
+        let height = (text as NSString).boundingRect(with: CGSize(width: max(width, 1), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: Self.promptFont]).height
+        return max(1, min(Int((height / promptLineHeight).rounded()), maxDraftLines))
+    }
     /// `baseHeight` (auxiliaryTopLeftArea) reports a hair shallower than the notch's real black cutout, so
     /// the opening state (sized to exactly baseHeight) falls short and the hardware lip peeks below. Add a
     /// small cover so it fully fills the hardware notch. (Other states are taller and already overshoot.)
@@ -155,7 +172,7 @@ struct NotchMetrics: Equatable {
     /// Size for a phase. Voice and submitted speech retain the same activity footprint.
     func size(for phase: NotchPhase, readBack: String? = nil, remembering: String? = nil,
               personalizing: Bool = false, recoveryContent: SidekickRecoveryContent? = nil,
-              messageContent: SidekickConversationStore.Record? = nil) -> CGSize {
+              messageContent: SidekickConversationStore.Record? = nil, draftLines: Int = 1) -> CGSize {
         if isCompact(for: phase) {
             return CGSize(width: compactLeadingWidth + compactCameraWidth + compactTrailingWidth,
                           height: compactRowHeight + (hasPhysicalNotch ? notchBottomCover : 0))
@@ -175,7 +192,7 @@ struct NotchMetrics: Equatable {
             return CGSize(width: dictationWidth, height: dictationHeight)
         case .typing:
             // Typing keeps its editable field below the camera.
-            return CGSize(width: max(baseWidth + 240, 480), height: headerContentHeight + fieldRowHeight + typingBottomPad + quickActionGap + quickActionsHeight)
+            return CGSize(width: typingWidth, height: headerContentHeight + fieldHeight(lines: draftLines) + typingBottomPad + quickActionGap + quickActionsHeight)
         case .running, .finishing:
             let caption: CGFloat
             if case .finishing(.failed) = phase { caption = captionHeight * 2 }        // room for the 2-line ✗ reason
@@ -224,7 +241,7 @@ struct NotchMetrics: Equatable {
     // MARK: Submitted transcript — retain the live row and its reading grace period
 
     /// Match the live transcript. Submission must not restyle or reflow the user's words.
-    private static let readBackFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    private static let readBackFont = NSFont.systemFont(ofSize: 13)
 
     private var readBackLineHeight: CGFloat {
         let f = Self.readBackFont
@@ -452,7 +469,8 @@ struct NotchContent: View {
         let hoverIdle = hovering && phase == .hidden     // the swollen click affordance — idle only
         let size = hoverIdle ? metrics.hoverSize
                              : metrics.size(for: layoutPhase, readBack: isVoice ? nil : readBack, remembering: remembering, personalizing: personalizing,
-                                            recoveryContent: recovery?.content, messageContent: displayedMessage)
+                                            recoveryContent: recovery?.content, messageContent: displayedMessage,
+                                            draftLines: metrics.promptLineCount(dictation.fieldText(phase: phase, draft: draftText)))
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: layoutPhase)
         let glowScale = metrics.glowScale(for: layoutPhase)
         let visible = phase != .hidden
@@ -875,27 +893,31 @@ struct NotchContent: View {
                     .id(content.id)
                     .transition(contentReveal)
             } else if layoutPhase == .typing {
-                typingField
-                    .disabled(!inputReady && !isVoice)
-                    .transition(contentReveal)
-                if metrics.quickActionsAvailable {
-                    HStack(spacing: 6) {
-                        notchAction("Summarize", shortcut: .summarize, identifier: "notch.summarize", action: onSummarize)
-                            .help(shortcutProblems[.summarize]?.explanation ?? "Summarize your visible screen with OpenAI through Sentient (\(QuickActionShortcut.summarize.label))")
-                        notchAction("Proofread", shortcut: .proofread, identifier: "notch.proofread", action: onProofread)
-                            .disabled(!inputReady)
-                            .help(shortcutProblems[.proofread]?.explanation ?? "Correct your selected text with OpenAI through Sentient (\(QuickActionShortcut.proofread.label))")
+                // Sending clears the field and chips quickly, before the read-back arrives, so the
+                // words are never on screen twice while the notch settles.
+                VStack(spacing: 0) {
+                    typingField
+                        .disabled(!inputReady && !isVoice)
+                    if metrics.quickActionsAvailable {
+                        HStack(spacing: 6) {
+                            notchAction("Summarize", shortcut: .summarize, identifier: "notch.summarize", action: onSummarize)
+                                .help(shortcutProblems[.summarize]?.explanation ?? "Summarize your visible screen with OpenAI through Sentient (\(QuickActionShortcut.summarize.label))")
+                            notchAction("Proofread", shortcut: .proofread, identifier: "notch.proofread", action: onProofread)
+                                .disabled(!inputReady)
+                                .help(shortcutProblems[.proofread]?.explanation ?? "Correct your selected text with OpenAI through Sentient (\(QuickActionShortcut.proofread.label))")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: metrics.quickActionsHeight)
+                        .padding(.top, metrics.quickActionGap)
+                        .disabled(isVoice)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: metrics.quickActionsHeight)
-                    .padding(.top, metrics.quickActionGap)
-                    .disabled(isVoice)
-
                 }
-
+                .transition(reduceMotion ? .opacity : .asymmetric(insertion: contentReveal,
+                                                                  removal: .opacity.animation(.easeOut(duration: 0.1))))
             } else if isVoice || retainsTranscript {
                 NotchVoiceCaption(presentation: dictation, submittedText: retainsTranscript ? readBack : nil)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(.opacity.animation(.easeOut(duration: 0.22).delay(reduceMotion ? 0 : 0.08)))
             } else if showsCaption {
                 caption
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -970,10 +992,13 @@ struct NotchContent: View {
     /// The mic is the way to talk instead; it dissolves the moment the draft has text, since the field
     /// is now a typed task. Its slot stays reserved so nothing else shifts.
     private var typingField: some View {
-        HStack(spacing: 10) {
+        // Every row is one text line tall, so the text block is exactly its lines and sits centred
+        // with the same inset above and below at any length; the controls ride the last line.
+        HStack(alignment: .bottom, spacing: metrics.promptInsets.gap) {
             if let error = dictation.error {
                 Image(systemName: "exclamationmark.circle")
                     .foregroundStyle(.white.opacity(0.65)).help(error).accessibilityLabel(error)
+                    .frame(height: metrics.promptLineHeight)
             }
             ZStack(alignment: .leading) {
                 if isVoice && dictation.composedText(dictation.text).isEmpty {
@@ -985,8 +1010,16 @@ struct NotchContent: View {
                         .foregroundStyle(.white.opacity(usesGlass ? 0.5 : 0.4))
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
+                        // It drifts aside as the first character lands, on the mic's spring, so both ends
+                        // of the field answer the keystroke as one motion; clearing brings it back.
+                        // Gone on the keystroke itself, so it never sits under the first character;
+                        // clearing the field brings it back on the mic's spring.
+                        .transition(.asymmetric(insertion: reduceMotion ? .opacity : .opacity.combined(with: .offset(x: 10)),
+                                                removal: .identity))
                 }
-                TextField("", text: isVoice ? Binding(get: { dictation.composedText(dictation.text) }, set: { _ in }) : draftBinding)
+                TextField("", text: isVoice ? Binding(get: { dictation.composedText(dictation.text) }, set: { _ in }) : draftBinding,
+                          axis: .vertical)
+                    .lineLimit(1...metrics.maxDraftLines)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(.white)
@@ -997,6 +1030,7 @@ struct NotchContent: View {
                     .opacity(isVoice && dictation.composedText(dictation.text).isEmpty ? 0 : 1)
                     .accessibilityLabel("Message Sidekick")
             }
+            .frame(minHeight: metrics.promptLineHeight)
             ZStack {
                 if isVoice || draftText.isEmpty {
                     NotchMicrophoneButton(onPress: { if isVoice { onStopListening() } else { onMicPress() } },
@@ -1006,11 +1040,11 @@ struct NotchContent: View {
                 }
             }
             .frame(width: metrics.controlSlot, height: metrics.controlSlot)
-            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.3, dampingFraction: 0.8), value: draftText.isEmpty)
+            .frame(height: metrics.promptLineHeight)
         }
-        // The mic slot's glyph sits inset, so the trailing edge is shorter to balance the text inset.
-        .padding(.leading, 12).padding(.trailing, 7)
-        .frame(height: metrics.fieldRowHeight)
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.3, dampingFraction: 0.8), value: draftText.isEmpty)
+        .padding(.leading, metrics.promptInsets.leading).padding(.trailing, metrics.promptInsets.trailing)
+        .frame(height: metrics.fieldHeight(lines: metrics.promptLineCount(dictation.fieldText(phase: phase, draft: draftText))))
         .notchComposerGlass(cornerRadius: metrics.composerCornerRadius, focused: fieldFocused)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: dictation.text.isEmpty)
     }
@@ -1387,7 +1421,7 @@ private struct NotchSendButton: View {
                 .background(Circle().fill(.white.opacity(!enabled ? 0.12 : hovering ? 1.0 : 0.88)))
                 .contentShape(Circle().inset(by: -6))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleStyle())
         .disabled(!enabled)
         .allowsHitTesting(enabled)
         .onHover { hovering = $0 }

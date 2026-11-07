@@ -38,6 +38,10 @@ final class DictationPresentation {
     func composedText(_ transcript: String) -> String {
         baseDraft + (baseDraft.isEmpty || baseDraft.last?.isWhitespace == true || transcript.isEmpty ? "" : " ") + transcript
     }
+    /// What the prompt field shows: the live dictation while listening, else the typed draft.
+    func fieldText(phase: NotchPhase, draft: String) -> String {
+        phase == .listening || phase == .transcribing ? composedText(text) : draft
+    }
     var error: String?
     private(set) var levels = Array(repeating: Float(0), count: 24)
     private var smoothed: Float = 0
@@ -59,6 +63,7 @@ struct NotchVoiceCaption: View {
     var submittedText: String? = nil
     private var text: String { submittedText ?? presentation.text }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var overflows = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -70,9 +75,11 @@ struct NotchVoiceCaption: View {
                     ScrollViewReader { scroll in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 0) {
+                                // The typed field's own face, so sending never re-weights the words.
                                 Text(text)
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.white.opacity(0.95)).lineLimit(1).fixedSize()
+                                    .onGeometryChange(for: Bool.self) { $0.size.width > geometry.size.width } action: { overflows = $0 }
                                 Color.clear.frame(width: 1, height: 1).id("latest")
                             }
                             .frame(minWidth: geometry.size.width, minHeight: geometry.size.height, alignment: .leading)
@@ -80,6 +87,16 @@ struct NotchVoiceCaption: View {
                         .onAppear { scroll.scrollTo("latest", anchor: .trailing) }
                         .onChange(of: text) { _, _ in scroll.scrollTo("latest", anchor: .trailing) }
                     }
+                    // A long line scrolled to its latest words fades in at the leading edge
+                    // instead of cutting a glyph in half.
+                    .mask {
+                        HStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: overflows ? 28 : 0)
+                            Color.black
+                        }
+                    }
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: overflows)
                 }
                 .transition(.opacity)
             }
