@@ -95,11 +95,7 @@ struct SidekickNotchMessageView: View {
             }
             .padding(.horizontal, 11)
             .frame(height: SidekickNotchMessageLayout.replyHeight)
-            .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: composerCornerRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: composerCornerRadius)
-                    .strokeBorder(.white.opacity(0.14), lineWidth: 0.75)
-            }
+            .notchComposerGlass(cornerRadius: composerCornerRadius, focused: fieldFocused)
         }
         .padding(.top, SidekickNotchMessageLayout.topPad)
         .padding(.bottom, SidekickNotchMessageLayout.bottomPad)

@@ -66,7 +66,21 @@ material clock, ambient clock and light strength; it does not brighten or restar
 Expanded surfaces use the always-active AppKit blur with a fixed dark tint and spectrum instead
 of the system glass lens, which changes tint with keyboard focus even with explicit appearance
 overrides. Compact external activity keeps native Liquid Glass without the extra blur.
-The reply field keeps the same fill and stroke while recording.
+The typed prompt and the reply field share `notchComposerGlass`: a thin pane with a top-lit fill
+and a 0.5 pt hairline, brighter on its top edge, on every surface including the hardware notch. The
+prompt's placeholder uses the field's own face and size, so typing never shifts it. The reply field
+keeps the same chrome while recording.
+
+The prompt's lifecycle is one continuous object. The placeholder leaves on the first keystroke itself
+(never under the first character) while the mic springs away and Send lights; clearing the field
+brings it back on the same spring. A long draft wraps, and the notch grows a line at a time on the
+morph spring up to `maxDraftLines`, then scrolls inside the field. Rows are one text line tall, so
+the text block keeps an equal inset above and below at any length. `promptLineCount` feeds
+`size(for:draftLines:)` from the view, the click-through test and the fixed canvas alike, so the
+silhouette, hit target and canvas always agree. Sending clears the field and chips in 0.1 s, before
+the read-back fades in, so the words are never on screen twice. Typed text, live speech and the
+read-back share one 13 pt regular face, and an overflowing read-back fades in at its leading edge
+instead of cutting a glyph.
 Inline transcription retains keyboard ownership through finalization so it never orders the
 panel out and back in. Stopping dictation returns to the same response with an editable draft.
 
@@ -118,10 +132,10 @@ render from the website with the actual native mark at 120, 40, 24 and 17 pt, pl
 
 ## Quick actions
 
-The typing layout includes a compact 24-point row beneath the prompt, with content-sized
-20-point Summarize and Proofread chips aligned to the field's leading edge. Their low-contrast
+The typing layout includes a 20-point row 10 points beneath the prompt, with content-sized
+Summarize and Proofread chips aligned to the field's leading edge, and 12 points below them. Their low-contrast
 capsule borders brighten on hover; there are no full-width dividers or split action panels.
-Each chip shows its global shortcut, `⌘,` or `⌘.`, with an accessibility hint and conflict help. Its size
+Each chip shows its global shortcut, `⌘,` or `⌘.`, set like a menu key equivalent, with an accessibility hint and conflict help. Its size
 participates in the same silhouette measurements, fixed-canvas sizing and cursor hit testing as the
 rest of the notch. The physical collapsed notch does not gain a permanent extra row.
 

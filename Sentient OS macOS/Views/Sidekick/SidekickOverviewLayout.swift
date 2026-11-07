@@ -16,6 +16,11 @@ nonisolated struct SidekickOverviewLayout {
     let page: Int
     let visibleRange: Range<Int>
     let positions: [CGPoint]
+    let heights: [CGFloat]
+    /// The height each card fills: the tallest measured card on its row.
+    let slotHeights: [CGFloat]
+    /// What each card adds to reach its slot; cards spend it above their actions.
+    var slack: [CGFloat] { zip(slotHeights, heights).map { $0 - $1 } }
 
     static func width(for size: CGSize, count: Int) -> CGFloat {
         let columns = min(max(count, 1), size.width >= 1_180 ? 3 : 2)
@@ -24,6 +29,7 @@ nonisolated struct SidekickOverviewLayout {
 
     init(size: CGSize, top: CGFloat, bottom: CGFloat, heights: [CGFloat], requestedPage: Int) {
         let count = heights.count
+        self.heights = heights
         columns = min(max(count, 1), size.width >= 1_180 ? 3 : 2)
         cardWidth = Self.width(for: size, count: count)
         region = CGRect(x: 0, y: top, width: size.width, height: max(0, bottom - top))
@@ -35,19 +41,27 @@ nonisolated struct SidekickOverviewLayout {
         page = min(max(0, requestedPage), pageCount - 1)
         let start = page * capacity
         visibleRange = start..<min(count, start + capacity)
+        // Capacity follows the deck's tallest card so pages stay stable, but each row is only as
+        // tall as its own tallest card: rows sit exactly `gap` apart and a row's cards share edges.
+        var rowHeights = [CGFloat](repeating: 0, count: (count + columns - 1) / columns)
+        for (index, height) in heights.enumerated() { rowHeights[index / columns] = max(rowHeights[index / columns], height) }
+        slotHeights = heights.indices.map { [columns] in rowHeights[$0 / columns] }
         let visibleRows = max(1, (visibleRange.count + columns - 1) / columns)
-        let usedHeight = CGFloat(visibleRows) * rowHeight + CGFloat(visibleRows - 1) * Self.gap
+        let pageRows = rowHeights.dropFirst(page * rows).prefix(visibleRows)
+        let usedHeight = pageRows.reduce(0, +) + CGFloat(max(0, pageRows.count - 1)) * Self.gap
         let startY = top + max(0, room - usedHeight) * 0.28
         var centers: [CGPoint] = []
         for index in heights.indices {
             let local = index % capacity
             let row = local / columns
             let column = local % columns
+            let firstRow = index / capacity * rows
+            let rowTop = rowHeights[firstRow..<(firstRow + row)].reduce(0, +) + CGFloat(row) * Self.gap
             // Center the shorter final row, including a lone welcome envelope.
             let itemsOnRow = max(1, min(columns, visibleRange.count - row * columns))
             let spread = CGFloat(itemsOnRow) * cardWidth + CGFloat(itemsOnRow - 1) * Self.gap
             centers.append(CGPoint(x: (size.width - spread) / 2 + CGFloat(column) * (cardWidth + Self.gap) + cardWidth / 2,
-                                   y: startY + CGFloat(row) * (rowHeight + Self.gap) + heights[index] / 2))
+                                   y: startY + rowTop + slotHeights[index] / 2))
         }
         positions = centers
     }
