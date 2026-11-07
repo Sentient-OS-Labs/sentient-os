@@ -34,7 +34,7 @@ struct NotchMetrics: Equatable {
     var compactMode = false
     var setupVisible = false
     var quickActionsAvailable = true
-    var quickActionsHeight: CGFloat { quickActionsAvailable ? 24 : 0 }
+    var quickActionsHeight: CGFloat { quickActionsAvailable ? 20 : 0 }
 
     func showingQuickActions(_ available: Bool) -> Self {
         var result = self; result.quickActionsAvailable = available; return result
@@ -73,9 +73,11 @@ struct NotchMetrics: Equatable {
     var controlSlot: CGFloat { hasPhysicalNotch ? 17 : hasHardwareIsland ? min(24, hardwareBarHeight - 8) : 24 }
     var topPad: CGFloat { 0 }
     var bottomPad: CGFloat { hasPhysicalNotch ? 4 : 2 } // response's inner 10 pt + 2 pt = its 12 pt side inset
-    var fieldRowHeight: CGFloat { hasPhysicalNotch ? 30 : 40 }
-    var typingBottomPad: CGFloat { hasPhysicalNotch ? bottomPad : hPad }
-    var quickActionGap: CGFloat { hasPhysicalNotch || !quickActionsAvailable ? 0 : 8 }
+    var fieldRowHeight: CGFloat { hasPhysicalNotch ? 34 : 40 }
+    var typingBottomPad: CGFloat { hasPhysicalNotch ? 12 : hPad }
+    var quickActionGap: CGFloat { quickActionsAvailable ? 10 : 0 }
+    /// The typed prompt and the reply composer share one glass field shape.
+    var composerCornerRadius: CGFloat { hasPhysicalNotch ? 12 : islandCornerRadius - hPad }
     /// `baseHeight` (auxiliaryTopLeftArea) reports a hair shallower than the notch's real black cutout, so
     /// the opening state (sized to exactly baseHeight) falls short and the hardware lip peeks below. Add a
     /// small cover so it fully fills the hardware notch. (Other states are taller and already overshoot.)
@@ -173,7 +175,7 @@ struct NotchMetrics: Equatable {
             return CGSize(width: dictationWidth, height: dictationHeight)
         case .typing:
             // Typing keeps its editable field below the camera.
-            return CGSize(width: max(baseWidth + 240, 480), height: headerContentHeight + fieldRowHeight + typingBottomPad + (hasPhysicalNotch ? 4 : quickActionGap) + quickActionsHeight)
+            return CGSize(width: max(baseWidth + 240, 480), height: headerContentHeight + fieldRowHeight + typingBottomPad + quickActionGap + quickActionsHeight)
         case .running, .finishing:
             let caption: CGFloat
             if case .finishing(.failed) = phase { caption = captionHeight * 2 }        // room for the 2-line ✗ reason
@@ -860,7 +862,7 @@ struct NotchContent: View {
                     replyingToSelection: messageReplySelection != nil,
                     onReplyFocusChanged: { onMessageReplyFocusChanged($0, message.event.id) },
                     onSend: { onMessageReplySubmit($0, message.event.id) },
-                    composerCornerRadius: metrics.hasPhysicalNotch ? 12 : metrics.islandCornerRadius - metrics.hPad)
+                    composerCornerRadius: metrics.composerCornerRadius)
                     // Layout at the final readable width before the shell reveals it. The
                     // contents never rewrap through the intermediate notch-morph widths.
                     .frame(width: size.width - metrics.hPad * 2,
@@ -875,7 +877,6 @@ struct NotchContent: View {
             } else if layoutPhase == .typing {
                 typingField
                     .disabled(!inputReady && !isVoice)
-                    .frame(height: metrics.fieldRowHeight)
                     .transition(contentReveal)
                 if metrics.quickActionsAvailable {
                     HStack(spacing: 6) {
@@ -909,12 +910,13 @@ struct NotchContent: View {
 
     private func notchAction(_ title: String, shortcut: QuickActionShortcut, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 7) {
-                Text(title).font(.system(size: 10.5, weight: .medium))
-                Text(shortcut.label).font(.system(size: 9.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(shortcutProblems[shortcut] == nil ? 0.35 : 0.25)).accessibilityHidden(true)
+            HStack(spacing: 5) {
+                Text(title).font(.system(size: 11, weight: .medium))
+                // Menu-style key equivalent: system glyphs on the label's baseline, not mono cells.
+                Text(shortcut.label).font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(shortcutProblems[shortcut] == nil ? 0.38 : 0.25)).accessibilityHidden(true)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 9)
             .frame(height: 20)
             .fixedSize(horizontal: true, vertical: false)
             .contentShape(Capsule())
@@ -977,9 +979,10 @@ struct NotchContent: View {
                 if isVoice && dictation.composedText(dictation.text).isEmpty {
                     PromptDictationWaveform(levels: dictation.levels)
                 } else if !isVoice && draftText.isEmpty {
+                    // The field's own face: typing replaces the prompt in place, with no face or baseline jump.
                     Text(dictation.error ?? "What can I take over for you?")
-                        .font(.system(size: 13, design: .serif)).italic()
-                        .foregroundStyle(.white.opacity(usesGlass ? 0.65 : 0.4))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(usesGlass ? 0.5 : 0.4))
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -1005,20 +1008,10 @@ struct NotchContent: View {
             .frame(width: metrics.controlSlot, height: metrics.controlSlot)
             .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.3, dampingFraction: 0.8), value: draftText.isEmpty)
         }
-        .padding(.horizontal, metrics.hasPhysicalNotch ? 0 : 11)
-        .padding(.vertical, metrics.hasPhysicalNotch ? 0 : 8)
-        .background {
-            if !metrics.hasPhysicalNotch {
-                RoundedRectangle(cornerRadius: metrics.islandCornerRadius - metrics.hPad, style: .continuous)
-                    .fill(.white.opacity(0.065))
-            }
-        }
-        .overlay {
-            if !metrics.hasPhysicalNotch {
-                RoundedRectangle(cornerRadius: metrics.islandCornerRadius - metrics.hPad, style: .continuous)
-                    .strokeBorder(.white.opacity(fieldFocused ? 0.26 : 0.14), lineWidth: 0.75)
-            }
-        }
+        // The mic slot's glyph sits inset, so the trailing edge is shorter to balance the text inset.
+        .padding(.leading, 12).padding(.trailing, 7)
+        .frame(height: metrics.fieldRowHeight)
+        .notchComposerGlass(cornerRadius: metrics.composerCornerRadius, focused: fieldFocused)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: dictation.text.isEmpty)
     }
 
@@ -1477,6 +1470,22 @@ private struct NotchPreviewStage<Content: View>: View {
 }
 #Preview("notice") {
     NotchPreviewStage { NotchContent(phase: .notice("didn’t catch that"), readBack: nil, statusLine: "", metrics: .preview) }
+}
+
+extension View {
+    /// The notch's input field: a thin pane lit from above, a whisper of fill under a hairline
+    /// that is brighter on its top edge. Focus lifts the hairline.
+    func notchComposerGlass(cornerRadius: CGFloat, focused: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return background(LinearGradient(colors: [.white.opacity(0.085), .white.opacity(0.035)],
+                                         startPoint: .top, endPoint: .bottom), in: shape)
+            .overlay {
+                shape.strokeBorder(LinearGradient(colors: [.white.opacity(focused ? 0.34 : 0.22),
+                                                           .white.opacity(focused ? 0.14 : 0.07)],
+                                                  startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
+            }
+            .animation(.easeOut(duration: 0.15), value: focused)
+    }
 }
 
 private struct NotchActionButtonStyle: ButtonStyle {

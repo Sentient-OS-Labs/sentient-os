@@ -126,6 +126,9 @@ height keeps multiline notices clear of cards and chat. The diagnostic legacy pr
 
 `SidekickOverviewLayout` fits measured card heights between chrome and the composer. It uses up to
 two columns below 1180pt and three above, at most two rows, 24pt gaps and widths capped at 400pt.
+The deck's tallest card sets the page capacity, but each row is as tall as its own tallest card, so
+rows sit exactly 24pt apart. Shorter cards take the row's slack above their actions: a row's cards
+share both edges and its CTAs share one line. Cards report their natural height, never the stretch.
 If another row will not fit, a pager exposes the remaining cards without shrinking the type.
 Previous/next have 44pt hit targets and hover feedback; a reserved 48pt band keeps them clear of cards.
 Only the current page is interactive or accessible. The final short row is centered; preview text
@@ -283,6 +286,8 @@ theater), accent, `isPlan` (a computer task with no recipient renders its draft 
 default. `BriefingCard` lives four lives: `sealed` (the wax-sealed envelope addressed to the user's first
 name; the flap swings open in 3D) → `offer` (the whole face tap-expands the letter; the fire CTA and
 "read more" keep their own actions) → `working(n)` (theater or the live `liveLines` + STOP) → `done`.
+The offer face is 18pt above the kicker (its own leading makes that read as the 20pt sides and
+bottom), then 9 / 8 / 14pt between kicker, serif title, body and a fixed 26pt actions row.
 
 ## The popovers (`HomePopovers`)
 
