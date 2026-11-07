@@ -64,6 +64,9 @@ enum Uninstall {
         helperWasSkipped = false
         Analytics.countUninstall()   // fire-and-forget; the teardown never waits on the network
         appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
+        appState?.commandCoordinator.cancelQuickActionPreparation()
+        appState?.commandCoordinator.proofread.close()
+        appState?.commandCoordinator.summarize.dismiss()
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
         var completedTeardown = false
         guard conversation.beginMaintenance() else {

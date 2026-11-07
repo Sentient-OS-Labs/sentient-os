@@ -195,10 +195,11 @@ struct SidekickSelectableMarkdown: NSViewRepresentable {
         var code: Bool
         var bold: Bool
         var alignment: NSTextAlignment
+        var bodyPointSize: CGFloat? = nil
         var pointSize: CGFloat {
             if code { return compact ? 11.5 : 12.5 }
             if let heading { return (compact ? 17 : 23) - CGFloat(min(max(heading - 1, 0), 4)) * (compact ? 1.2 : 2) }
-            return compact ? 12.5 : 14.5
+            return bodyPointSize ?? (compact ? 12.5 : 14.5)
         }
     }
     let fragment: SidekickMarkdownDocument.Fragment

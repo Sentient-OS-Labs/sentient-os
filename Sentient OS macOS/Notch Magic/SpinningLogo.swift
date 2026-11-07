@@ -2,11 +2,9 @@
 //  SpinningLogo.swift
 //  Sentient OS macOS
 //
-//  The 2D Sentient mark for the notch (matches the app icon): a THICK, vibrant ring of the AI spectrum
-//  (GlowHalo.stops — the real website-spinner stops) rendered SHARP so the colour reads boldly, over a
-//  soft additive bloom, with a thin white ring for shape and a white planet-dot. The spectrum slowly
-//  spins, FASTER when Sentient is acting (`fast`); the spin is anchored on every speed change so the
-//  colours never jump. Tiny + cheap — the heavy 3D Orb is too much at this size.
+//  Native rendering of the current website header's LogoMark.jsx. The source SVG's
+//  geometry, linear-gradient stops and Gaussian blur proportions are shared by the
+//  static and animated app marks. Only the diffuse halo rotates; the outline and dot stay fixed.
 //
 
 import SwiftUI
@@ -22,42 +20,11 @@ struct SpinningLogo: View {
 
     private static func period(fast: Bool) -> Double { fast ? 2 : 13 }   // seconds / revolution (2s = the fast "processing" spin)
 
-    /// The ring's palette: the brand spectrum (GlowHalo.stops) with ONE change — the pale warm-yellow
-    /// (#fde2a3) is deepened to a saturated gold. That stop is a very light cream AND it spans the wrap
-    /// seam (it's both the first stop and the duplicated last one), so it paints a wide pale arc that, at
-    /// this tight ring scale on OLED black, reads as a near-WHITE spot breaking the rainbow. Deepening just
-    /// that stop keeps the wheel fully colorful and truer to the app icon. The shared GlowHalo.stops is
-    /// untouched, so the edge glow / CTA / website spinner are unchanged. (Tune `gold` if it wants to be
-    /// lighter/deeper.)
-    private static let bandStops: [Color] = {
-        let gold = Color(red: 0.97, green: 0.70, blue: 0.24)   // deeper & more saturated than #fde2a3 → reads gold, not white
-        var s = GlowHalo.stops
-        s[0] = gold
-        s[s.count - 1] = gold                                  // the wrap seam shares the warm stop
-        return s
-    }()
-
     var body: some View {
         TimelineView(.animation(minimumInterval: fast ? 1.0 / 60.0 : 1.0 / 30.0, paused: paused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let angle = anchorAngle + (paused ? 0 : (t - anchorTime) / Self.period(fast: fast) * 360)
-            let spectrum = AngularGradient(colors: Self.bandStops, center: .center, angle: .degrees(angle))
-            ZStack {
-                // Big, bright colored neon glow — several ADDITIVE passes (wide → tight) so it really reads.
-                // 1. Soft colored bloom (additive) — the neon bleed around the ring.
-                Circle().stroke(spectrum, lineWidth: size * 0.22).blur(radius: size * 0.14).blendMode(.plusLighter)
-                // 2. The THICK, vibrant color band — the spectrum rendered SHARP + saturated. This is the
-                //    logo's real colour, bold and fully visible like the app icon (the old heavy blur was
-                //    washing it out).
-                Circle().stroke(spectrum, lineWidth: size * 0.17).blur(radius: size * 0.008)
-                // 3. A thin white ring — just for the shape (kept extra-fine; floor governs at notch size).
-                Circle().stroke(.white, lineWidth: max(0.75, size * 0.028)).blur(radius: size * 0.005)
-                // 4. The white planet — with a tiny additive glow so it reads as lit, not flat.
-                Circle().fill(.white).frame(width: size * 0.50, height: size * 0.50)
-                    .blur(radius: size * 0.07).blendMode(.plusLighter).opacity(0.6)
-                Circle().fill(.white).frame(width: size * 0.36, height: size * 0.36)
-            }
-            .frame(width: size, height: size)
+            WebsiteLogoMark(size: size, haloAngle: angle)
         }
         // The spin is wall-clock driven — never let a parent's animation (the notch morph) interpolate
         // the gradient angle, or a speed change reverse-spins it for the morph's duration.
@@ -72,6 +39,48 @@ struct SpinningLogo: View {
             if !wasPaused { anchorAngle += (t - anchorTime) / Self.period(fast: fast) * 360 }
             anchorTime = t
         }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Port of src/components/reusable/LogoMark.jsx in the website repository.
+/// `size` is the visible outer-ring diameter, matching the header's reserved logo slot;
+/// the SVG viewBox includes another ~48% of that diameter as glow room on each side.
+struct WebsiteLogoMark: View {
+    var size: CGFloat = 20
+    var haloAngle: Double = 0
+
+    private static let stops: [Gradient.Stop] = [
+        .init(color: Color(red: 253 / 255.0, green: 226 / 255.0, blue: 163 / 255.0), location: 0),
+        .init(color: Color(red: 1, green: 142 / 255.0, blue: 60 / 255.0), location: 0.14),
+        .init(color: Color(red: 1, green: 70 / 255.0, blue: 70 / 255.0), location: 0.28),
+        .init(color: Color(red: 232 / 255.0, green: 56 / 255.0, blue: 143 / 255.0), location: 0.42),
+        .init(color: Color(red: 155 / 255.0, green: 72 / 255.0, blue: 212 / 255.0), location: 0.572115),
+        .init(color: Color(red: 108 / 255.0, green: 92 / 255.0, blue: 229 / 255.0), location: 0.71),
+        .init(color: Color(red: 74 / 255.0, green: 144 / 255.0, blue: 226 / 255.0), location: 0.85),
+        .init(color: Color(red: 253 / 255.0, green: 226 / 255.0, blue: 163 / 255.0), location: 0.995192),
+    ]
+
+    var body: some View {
+        let diameter = 42.0098
+        let scale = size / diameter
+        ZStack {
+            Circle()
+                .fill(LinearGradient(stops: Self.stops,
+                    startPoint: UnitPoint(x: 0, y: (35.5433 - 20.1647) / diameter),
+                    endPoint: UnitPoint(x: (62.4934 - 20.1647) / diameter, y: (36.7669 - 20.1647) / diameter)))
+                .frame(width: size, height: size)
+                .rotationEffect(.degrees(haloAngle))
+                .blur(radius: 10.0824 * scale)
+            Circle().fill(.white.opacity(0.007))
+                .frame(width: 54.6127 * scale, height: 54.6127 * scale)
+                .blur(radius: 4.20098 * scale)
+            Circle().strokeBorder(.white, lineWidth: 2.10049 * scale)
+                .frame(width: size, height: size)
+            Circle().fill(.white)
+                .frame(width: 16.804 * scale, height: 16.804 * scale)
+        }
+        .frame(width: size, height: size)
         .allowsHitTesting(false)
     }
 }

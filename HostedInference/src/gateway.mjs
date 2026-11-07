@@ -5,6 +5,7 @@ import { PURPOSES, estimateCost, prepareMessage, readProductionConfig, validateC
 import { supabaseServices } from './supabase.mjs';
 import { createConnectorGateway } from './connectors/gateway.mjs';
 import { composioClient, readConnectorConfig } from './connectors/composio.mjs';
+import { createScribeGateway } from './scribe.mjs';
 
 const encoder = new TextEncoder();
 const responseJSON = body => Response.json(body, { headers: { 'cache-control': 'no-store' } });
@@ -317,6 +318,11 @@ export default {
     try {
       const services = supabaseServices({ url: env.SUPABASE_URL, publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
         serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY });
+      if (new URL(request.url).pathname.startsWith('/v1/dictation')) {
+        return await createScribeGateway({authenticate: services.authenticate, ledger: services.dictationLedger,
+          apiKey: env.ELEVENLABS_API_KEY, enabled: env.SCRIBE_ENABLED === 'true',
+          zeroRetention: env.SCRIBE_ZERO_RETENTION === 'true'})(request);
+      }
       if (new URL(request.url).pathname.startsWith('/v1/connectors')) {
         const config = readConnectorConfig(env);
         return await createConnectorGateway({ledger: services.connectorLedger, authenticate: services.authenticate,

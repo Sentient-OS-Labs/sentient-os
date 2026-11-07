@@ -23,6 +23,9 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil, defaults: UserDefaults = .standard) async -> Bool {
+        appState?.commandCoordinator.cancelQuickActionPreparation()
+        appState?.commandCoordinator.proofread.close()
+        appState?.commandCoordinator.summarize.dismiss()
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
         guard conversation.beginMaintenance() else { return false }
         defer { conversation.endMaintenance() }
@@ -78,6 +81,7 @@ enum FactoryReset {
             d.removeObject(forKey: key)
         }
         d.removeObject(forKey: "onboarding.step")
+        d.removeObject(forKey: "onboarding.downloadProgressRevealed")
         PersonalSetupProgress.reset(defaults: d)
         d.removeObject(forKey: SourceSelection.pendingProtectedSourceKey)
         PermissionRelaunchDraft.clear()

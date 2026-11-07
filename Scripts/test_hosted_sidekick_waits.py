@@ -239,7 +239,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-hosted-waits-") as directory:
     directory = Path(directory); source = directory / "Tests.swift"; binary = directory / "tests"
     source.write_text(STUBS + "\n" + models + "\n" + FIXTURE)
     subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "6", str(source),
-        str(APP / "Notch Magic/SidekickInteraction.swift"),
+        str(APP / "Notch Magic/SidekickInteraction.swift"), str(APP / "Notch Magic/SidekickQuickActionTools.swift"),
         str(APP / "Cloud/HostedInference/HostedInference.swift"),
         str(APP / "Cloud/HostedInference/HostedInferenceClient.swift"), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)

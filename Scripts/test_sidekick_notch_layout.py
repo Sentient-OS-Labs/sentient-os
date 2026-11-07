@@ -38,27 +38,27 @@ import AppKit
     static func main() {
         let fixture = "You're free **2:30–4:00 PM tomorrow**. That gives you a quiet 90-minute block after your design review.\n\nI can help protect that time when you're ready."
         let short = size(fixture)
-        check(short.width == 520 && short.height >= 190 && short.height < 250,
+        check(short.width == 520 && short.height >= 120 && short.height < 250,
               "actual two-paragraph preview sheds oversized empty reading space")
-        check((190...200).contains(size("Done.").height), "single native line reserves compact chrome without growing to maximum")
-        check(size("").height == 190, "empty response retains minimum stable controls")
+        check((120...130).contains(size("Done.").height), "single native line reserves compact chrome without growing to maximum")
+        check(size("").height == 120, "empty response retains minimum stable controls")
         check(size(fixture) == short, "cached repeated hit testing returns identical geometry")
         check(size(fixture, width: 360).height >= short.height, "narrower display never undermeasures wrapping")
         check(size(fixture).height == short.height, "width-specific cache does not corrupt original measurement")
 
         let plain = "A compact response with **important details**, café, and a link to [the source](https://example.com)."
         let native = nativeParagraph(plain, width: 484)
-        // Actual camera/header/footer/spacing/padding together occupy177 points. The native
+        // Actual camera/header/footer/spacing/padding together occupy 107 points. The native
         // renderer's independent NSTextView measurement must fit the layout's text allowance.
-        check(size(plain).height >= 177 + native, "native formatted paragraph fits without clipping")
-        check(size(plain).height <= 179 + native, "paragraph measurement does not introduce excess dead space")
+        check(size(plain).height >= 107 + native, "native formatted paragraph fits without clipping")
+        check(size(plain).height <= 109 + native, "paragraph measurement does not introduce excess dead space")
         let heading = "# A small heading"
-        check(size(heading).height >= 177 + 4 + nativeParagraph(heading, width: 484, heading: 1),
+        check(size(heading).height >= 107 + 4 + nativeParagraph(heading, width: 484, heading: 1),
               "heading uses shared compact font and heading inset")
         let list = "- A sufficiently long list item with its own marker that wraps around a narrow message preview without clipping the text beside it."
         check(size(list, width: 360).height >= size(list).height, "list indentation participates in wrapping")
         let quote = "> > Nested quotation that keeps its visible left inset when calculating the available message width."
-        check(size(quote, width: 360).height > 190, "nested quote is measured within its decoration inset")
+        check(size(quote, width: 360).height > 120, "nested quote is measured within its decoration inset")
 
         check(size(String(repeating: "x", count: 1_001)).height == 286, "long source bypasses parser and keeps bounded maximum")
         check(size(String(repeating: "😀", count: 501)).height == 286, "Unicode parse bound is conservative")

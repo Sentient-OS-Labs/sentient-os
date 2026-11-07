@@ -58,6 +58,8 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     @State private var showLocalWarning = false
     /// The local-reality popup fires once per picker visit, on the LM Studio tab.
     @State private var localWarningShown = false
+    @State private var connectionSourceBackend: ModelBackend?
+    @State private var selectedCloudSources: [String] = []
 
     /// The Test Model probe, narrated: nil = untested, "…" = running, ✓/✗ lines otherwise.
     @State private var testing = false
@@ -93,9 +95,18 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             // A quiet crossfade — no lateral slide: panels differ in height, and a slide on
             // top of the height change read as an abrupt jump (field feedback 2026-07-25).
             .transition(.opacity)
+
+            if let connectionSourceBackend, connectionTargetBackend.hasSubscriptionConnectors,
+               connectionTargetBackend != connectionSourceBackend,
+               !selectedCloudSources.isEmpty {
+                SettingsProse("You may need to set up \(ListFormatter.localizedString(byJoining: selectedCloudSources)) again with \(tab.label.replacingOccurrences(of: " Subscription", with: "")). Review these connections in Knowledge Sources after switching.")
+                    .frame(maxWidth: 640, alignment: .leading)
+            }
         }
         .animation(.easeInOut(duration: 0.25), value: tab)
         .onAppear {
+            connectionSourceBackend = backend
+            selectedCloudSources = selectedProviderSources()
             tab = activeTab.visibleTab
             apiKey = CustomProvider.apiKey ?? ""
         }
@@ -172,10 +183,6 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 if claude.preparing || claude.installing { MonoWaitLine("preparing claude code…") }
                 OnboardingStatusText(claude.installStatus)
 
-                SettingsDetails(title: "Using Gmail and Google Calendar") {
-                    SettingsProse("Connect them in Claude’s Settings → Connectors to use them in Sentient.")
-                }
-
             }
         }
         .onAppear {
@@ -194,6 +201,26 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             }
         }
         .onDisappear { claudePreparationTask?.cancel() }
+    }
+
+    private var connectionTargetBackend: ModelBackend {
+        switch tab {
+        case .chatgpt: .chatgpt
+        case .claude: .claude
+        case .sentient: .sentient
+        case .openRouter, .lmStudio, .custom: .custom
+        }
+    }
+
+    private func selectedProviderSources() -> [String] {
+        guard backend.hasSubscriptionConnectors else { return [] }
+        var names: [String] = []
+        if SourceSelection.isSelected("dbg.run.gmail") { names.append("Gmail") }
+        if SourceSelection.isSelected("dbg.run.calendar") { names.append("Google Calendar") }
+        names += ConnectorRegistry.kbEnabledConnectors()
+            .filter { $0.origin != .direct && $0.origin != .sentient }
+            .map(\.displayName)
+        return Array(Set(names)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     /// The Claude state machine: signed in (Use Claude in Settings; onboarding uses Continue) → browser

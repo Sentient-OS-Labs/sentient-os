@@ -22,8 +22,10 @@ enum PrivacyCopy {
     static let extendedAnalytics = "Additional usage counts, timings, and app health through TelemetryDeck."
     static let coreAnalytics = "Basic usage counts, Sidekick task outcomes and general interruption reasons, and short AI-written task descriptions are always enabled. Your AI is instructed to generalize descriptions and omit private details. Local checks enforce length and allowed characters. This switch controls only extended analytics."
     static let fullDiskAccess = "Lets Sentient’s on-device model analyze local files, Apple Mail, notes, and selected conversations. Your chosen AI organizes the useful summaries. Double Tap’s one-time writing examples are prepared separately and are yours to inspect and edit."
-    static let screenCapture = "Lets Sidekick and Double Tap understand the screen you’re asking about. Sidekick uses your selected AI. Double Tap uses its own drafting provider, including Sentient’s OpenAI API route with Zero Data Retention by default."
-    static let voiceInput = "Privacy-focused voice input, using Apple’s on-device speech recognition where supported. Your words become a Sidekick request."
+    static let screenCapture = "Lets Sidekick, Double Tap and Summarize understand the screen you’re asking about. Sidekick uses your selected AI. Double Tap uses its own drafting provider, including Sentient’s OpenAI API route with Zero Data Retention by default. Summarize sends a screenshot through Sentient’s relay to OpenAI."
+    static let proofreadContext = "Proofread sends only your selected text through Sentient’s relay to OpenAI. Accessibility lets Sentient read the selection and replace it with a completed correction after checking that the target is unchanged. Selection and correction data are kept in memory for this interaction, not saved to history. OpenAI’s processing and retention settings apply."
+    static let summarizeContext = "Summarize sends text from your active document, including available offscreen text, together with a screen snapshot through Sentient to OpenAI. Document text is the primary source; the snapshot adds visual context and fills gaps. For WhatsApp and Messages, it can read newer messages from the same local conversation when access is available. For YouTube, the video URL goes to Supadata to retrieve its original transcript. Your knowledge base is not included. Source content and summaries stay in memory while the window is open. Provider processing and retention settings apply."
+    static let voiceInput = "Sentient doesn’t save your recordings. Your words become a request to your chosen Sidekick AI, or to OpenAI through Sentient when you ask to summarize your screen or proofread selected text."
     static let frontierSummary = "Your Mac understands your local sources. Your chosen AI organizes that knowledge and helps get things done."
     static let frontierDetail = "Sentient’s on-device model prepares useful summaries from your local sources. Choose the AI that organizes your knowledge, prepares proactive suggestions, and powers Sidekick: your ChatGPT or Claude account, OpenRouter, or a compatible local model."
     static let sentientInference = "Sentient covers Anthropic inference for your knowledge, morning suggestions, and Sidekick. No ChatGPT or Claude subscription or API key is needed. Your knowledge stays in a folder on this Mac."
@@ -80,6 +82,11 @@ enum PrivacyCopy {
             "Zero Data Retention excludes eligible request content from OpenAI’s retained logs and stored responses. OpenAI API content is not used for training by default. OpenAI’s data controls explain the scope and exceptions.",
             "Prefer your own setup? In Settings → Double Tap, choose OpenAI, OpenRouter, or a compatible endpoint, including Ollama or LM Studio. When that endpoint runs a compatible model on your Mac, drafting stays on your Mac. If you choose a hosted endpoint, your chosen provider’s account settings, training choices, and retention policies apply.",
         ]),
+        Section(id: "proofread", title: "Corrections to selected text.", paragraphs: [proofreadContext]),
+        Section(id: "summarize", title: "A summary of your visible screen.", paragraphs: [
+            summarizeContext,
+            "Summarize uses Sentient’s covered OpenAI API route, independently of your selected Sidekick or Double Tap provider. Requests disable response storage. Usage limits share the relay’s installation credential; request content is not written to the relay’s counters or application logs.",
+        ]),
         Section(id: "writing", title: "Your voice, from a one-time snapshot.", paragraphs: [
             writingSamples,
             writingSources,
@@ -92,7 +99,7 @@ enum PrivacyCopy {
             "The service records access times, tool names, client information, and hashed note references to show sharing activity. Turning sharing off stops syncing and requests deletion of the hosted copy and its access history. Periodic cleanup also removes them after 30 days without a sync.",
         ]),
         Section(id: "voice", title: "Privacy-focused voice input.", paragraphs: [
-            "Sentient uses Apple’s on-device speech recognition where supported. When on-device recognition is unavailable, Apple’s speech service may process the audio. The resulting transcript becomes your Sidekick request and follows your chosen model’s processing settings.",
+            "Dictation sends microphone audio directly to ElevenLabs Scribe for live transcription. Sentient provides a temporary access token and records token issuance to manage usage limits. Audio is buffered in memory on your Mac and is not saved as a recording. ElevenLabs processing and retention settings apply. The resulting transcript becomes your Sidekick request and follows your chosen model’s processing settings. Requests to summarize the visible screen use the Summarize route described above.",
         ]),
         Section(id: "contact", title: "Send us feedback.", paragraphs: [
             "Onboarding asks for an email address before you choose your sources. Sentient saves it for occasional feedback invitations sent to a small sample of users. When you finish connecting Gmail or Outlook through a supported AI account, Sentient can also save that email address. This feedback list is separate from product analytics, including the generalized Sidekick task descriptions explained below. Any feedback email will include a way to opt out.",

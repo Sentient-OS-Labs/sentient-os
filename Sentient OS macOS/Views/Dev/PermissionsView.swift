@@ -116,7 +116,7 @@ struct PermissionsView: View {
 
     private var micPane: some View {
         pane(icon: "mic.fill", iconColor: micGranted ? Theme.verdictColor(.survivor) : Theme.accent,
-             title: "Microphone & Speech", granted: micGranted,
+             title: "Microphone", granted: micGranted,
              description: PrivacyCopy.voiceInput) {
             Button("Grant microphone…") {
                 Task {

@@ -158,6 +158,8 @@ help in the apps you're already using
 
 **Double Tap has a separate choice.** For low latency, we cover an OpenAI API route with **Zero Data Retention, free** for our first users. You can choose your own provider for Double Tap in **Settings → Double Tap**, including a compatible local model. A screenshot of the display under your pointer, your knowledge including one-time writing examples, and your instructions pass through our relay when you use the covered route to make an unsent draft.
 
+**Quick actions and voice use separate cloud services.** Press **⌘,** to summarize a document or conversation, or **⌘.** to proofread selected text. Summarize sends bounded source content and a window image through our relay to OpenAI; it can include offscreen text and a verified continuation of the active chat. YouTube summaries retrieve native transcripts through Supadata. Proofread sends only the selection for correction. Explicit voice dictation streams audio to ElevenLabs Scribe. These routes are independent of your Sidekick provider, and provider processing and retention settings apply.
+
 **Sharing with other AIs is optional.** Enable cloud MCP sharing to let compatible AI apps read your knowledge, including from your phone. Your Mac encrypts the folder with AES-256-GCM before upload. The relay stores encrypted knowledge without persisting the decryption key; your private link supplies the secret for authorized requests, which are served through in-memory decryption. Sharing includes your writing examples and files you add to the folder. Keep that link private.
 
 The app and supporting infrastructure are open source. No separate Sentient account is required, and we do not sell your personal information or share it for cross-site targeted advertising. [Explore privacy](https://sentient-os.ai/privacy-core), read the [full policy](https://sentient-os.ai/privacy), or inspect the [security and data-flow explanation](SECURITY.md).
@@ -166,7 +168,7 @@ The app and supporting infrastructure are open source. No separate Sentient acco
 
 The built-in model handles the high-volume reading. You can also run a **larger local model** for knowledge organization, proactive intelligence and Sidekick, plus a local drafting model for Double Tap. No ChatGPT or Claude subscription required.
 
-Once the models and runtimes are downloaded, all AI inference can happen locally, including offline. Browsing websites and sending email still need internet.
+Once the models and runtimes are downloaded, those local-model workflows can run offline. Summarize, Proofread and voice dictation use their separate cloud services. Browsing websites and sending email also need internet.
 
 To set it up:
 
@@ -217,14 +219,14 @@ Hosted connectors depend on the account and plan you connect. A limited ChatGPT 
 <details>
 <summary><b>does sentient record everything i do?</b></summary>
 
-No. It learns from the sources you enable, rather than continuously recording your screen. Invoking Sidekick or Double Tap can capture screenshots to understand the task in front of you. Sidekick also uses screenshots while carrying it out.
+No. It learns from the sources you enable, rather than continuously recording your screen. Invoking Sidekick, Double Tap or Summarize can capture screenshots to understand the task in front of you. Sidekick also uses screenshots while carrying it out.
 
 </details>
 
 <details>
 <summary><b>what actually leaves my mac?</b></summary>
 
-A chosen cloud AI processes context for its work, including summaries, knowledge and task screenshots. Double Tap's covered route passes screen and knowledge context through our relay to OpenAI with Zero Data Retention. You can select a local provider instead. Optional MCP sharing uploads an encrypted knowledge copy.
+A chosen cloud AI processes context for its work, including summaries, knowledge and task screenshots. Double Tap's covered route passes screen and knowledge context through our relay to OpenAI with Zero Data Retention. You can select a local provider for those workflows. Summarize and Proofread use their separate OpenAI relay routes, YouTube transcript retrieval uses Supadata, and explicit dictation sends audio to ElevenLabs. Optional MCP sharing uploads an encrypted knowledge copy.
 
 [The architecture above](#personal-ai-privacy-at-its-core) explains the separate paths. [The full policy](https://sentient-os.ai/privacy) also covers diagnostics and service records.
 

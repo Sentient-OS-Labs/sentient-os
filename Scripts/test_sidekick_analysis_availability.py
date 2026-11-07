@@ -69,8 +69,21 @@ final class Recovery {
     func reopen() { reopened += 1; isVisible = true }
 }
 final class Run { var isClearingChat = false; var isRunning = false; let recovery = Recovery() }
+final class Proofread {
+    var isRunning = false
+    func cancel() { isRunning = false }
+    func clearPreparedSelection() {}
+}
+enum ScreenCapture { static func summaryDisplay() -> UInt32 { 1 } }
+enum SummaryAccessibility { static func target() -> String? { "fixture" } }
+final class Dictation { func endContext() {} }
 final class CommandCoordinator {
     let run = Run()
+    let proofread = Proofread()
+    let dictation = Dictation()
+    var summaryDisplayID: UInt32?
+    var summaryTarget: String?
+    func prepareProofreadSelection() {}
     var phase = NotchPhase.hidden
     var phaseToken = 0
     var hotkeyPair = ShortcutTapPair()
@@ -248,8 +261,9 @@ final class ProcessingCoordinator {
         CodexAuth.knowledgeBaseOnly = true
         let planRestricted = CommandCoordinator()
         planRestricted.tap(1_300)
-        try await until { if case .notice = planRestricted.phase { return true }; return false }
-        check(ComputerUseGate.shared.refreshes == 0, "existing account-plan restriction survives analysis decoupling")
+        try await until { planRestricted.phase == .typing }
+        check(ComputerUseGate.shared.refreshes == 1 && DoubleTap.shared.captures == 0,
+              "knowledge-only plans can open the notch for independently covered quick actions")
     }
 
     static func plans() throws {

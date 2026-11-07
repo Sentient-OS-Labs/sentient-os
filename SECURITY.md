@@ -51,8 +51,22 @@ with Double Tap requests and the knowledge folder if sharing is enabled.
   examples, and instructions pass through the relay to produce an unsent draft. Users can choose
   their own provider, including a compatible model running locally. `store: false` is not, by itself,
   evidence of a provider's contractual retention policy.
-- **Voice:** uses Apple's on-device speech recognition where supported. If unavailable, Apple's
-  speech service may process audio. The transcript becomes a request to the chosen task model.
+- **Summarize:** sends bounded content from the requested document or conversation, source metadata
+  and an accompanying window image through Sentient's relay to OpenAI. Accessible offscreen text,
+  local PDF pages and a verified continuation of the same WhatsApp or Messages chat may be included.
+  YouTube summaries send the canonical video URL to Supadata to retrieve a native transcript.
+  This explicit action does not use the knowledge base or save its result into conversation history.
+- **Proofread:** sends selected text through Sentient's relay to OpenAI. Surrounding field content
+  stays local for target verification. Replacement requires a complete correction and a matching
+  original target; unsupported or changed targets receive a corrected-copy fallback.
+- **Voice:** sends microphone audio directly to ElevenLabs Scribe after an explicit dictation action.
+  Sentient's relay issues the short-lived access token. Finalized words can be edited before sending
+  or submitted by the hold-and-release gesture. Provider processing and retention settings apply;
+  the included configuration does not request zero retention for voice audio.
+
+Summarize and Proofread use covered cloud routes independently of the Sidekick provider. Their
+requests use `store: false`; this alone does not establish a provider retention contract. The relay
+stores bounded usage/accounting metadata, not captured documents, screenshots or corrections.
 
 These distinct paths are why a product-wide claim that all files, messages or screenshots can never
 leave the Mac would be inaccurate. Local source analysis, cloud drafting, user-requested actions and
@@ -92,8 +106,10 @@ Sentient's source reader only reads selected calendars.
 
 Sentient's Screen Recording permission supplies screen context. All current computer-use backends
 use OpenAI's signed native helper, with its own Accessibility and Screen Recording grants and
-Sentient's Automation permission. Double Tap additionally uses Sentient's Accessibility permission
-to paste a draft. Setup uses macOS consent surfaces; it does not modify TCC databases. Permissions can
+Sentient's Automation permission. Double Tap and Proofread use Sentient's Accessibility permission
+to paste requested text. Summarize uses Accessibility for document text and Screen Recording for its
+accompanying image. Available file access may extend a verified active conversation from local storage.
+Setup uses macOS consent surfaces; it does not modify TCC databases. Permissions can
 be revoked in System Settings → Privacy & Security.
 
 Overnight analysis prepares knowledge and suggested work. Proactive research uses read-only

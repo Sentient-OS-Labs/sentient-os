@@ -99,6 +99,13 @@ struct OnboardingShortcutInstruction: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                     }
+                    .phaseAnimator([0.0, 1.0, 0.0, 0.5, 0.0], trigger: hint.pulseCount) { content, lift in
+                        content
+                            .offset(y: reduceMotion ? 0 : -8 * lift)
+                            .scaleEffect(reduceMotion ? 1 : 1 + 0.18 * lift)
+                    } animation: { _ in
+                        .spring(duration: 0.18, bounce: 0.3)
+                    }
                 Text(" Command" + suffix).fixedSize()
             } else {
                 Text(key.spokenLabel + suffix).fixedSize()

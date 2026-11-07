@@ -484,22 +484,38 @@ import SQLite3
         let store = conversation.store!
         let baselineCalls = Fixture.providerCalls
         defer { Fixture.provider = nil; Fixture.providerCalls = baselineCalls }
+        try check(SidekickStartupCopy.phrases.count == 30 && Set(SidekickStartupCopy.phrases).count == 30,
+            "startup has thirty distinct captions")
+        for phrase in SidekickStartupCopy.phrases {
+            try check(SidekickStartupCopy.choose(excluding: phrase) != phrase, "startup avoids immediately repeating a caption")
+        }
+        var selectedCaption = ""
         Fixture.provider = { _ in
+            try check(model.isStarting && model.statusLine == selectedCaption,
+                "startup caption persists unchanged through preparation and provider startup")
             _ = try SidekickInteraction.current!.conversationRun!.message("Your verified result.", kind: .answer, priority: .high, completion: .done)
+            try check(model.isRunning && model.hasDeliveredFinalAnswer,
+                "final answer ends visible work while retaining the executor cleanup lock")
             return "Your verified result." // deliberately no STATUS footer
         }
         model.start("Use the explicit final-message outcome", mode: .computer)
+        selectedCaption = model.startupCaption
+        try check(model.isStarting && model.statusLine == selectedCaption, "startup caption is selected synchronously")
         let doneID = model.runID
         try await eventually { !model.isRunning }
+        try check(!model.isStarting, "completion turns off startup lighting")
+        try check(!model.hasDeliveredFinalAnswer, "idle state is not draining a previous answer")
         try check(try store.records(taskID: doneID).last?.event.outcome == .success && !model.recovery.isPending,
             "clean foreground run accepts explicit saved completion without STATUS footer")
         try check(try store.records(taskID: doneID).filter { $0.event.kind == .assistantMessage }.count == 1,
             "structured completion does not duplicate its answer")
         Fixture.provider = { _ in
             _ = try SidekickInteraction.current!.conversationRun!.message("I could not finish that action.", kind: .answer, priority: .high, completion: .couldNot)
+            try check(model.isRunning && model.hasDeliveredFinalAnswer, "honest failure answer also ends visible work")
             return "I could not finish that action."
         }
         model.start("Honest explicit incomplete outcome", mode: .computer)
+        try check(model.startupCaption != selectedCaption, "next task gets a fresh startup caption")
         let failedID = model.runID
         try await eventually { !model.isRunning }
         try check(try store.records(taskID: failedID).last?.event.outcome == .failed && model.recovery.isPending,
@@ -514,6 +530,20 @@ import SQLite3
         try await eventually { !model.isRunning }
         try check(try store.records(taskID: crashedID).last?.event.outcome == .failed,
             "foreground catch path never promotes saved completion after provider error")
+        model.recovery.cancel()
+        Fixture.provider = { _ in
+            let recorder = SidekickInteraction.current!.conversationRun!
+            _ = try recorder.message("The complete visible response.", kind: .answer, priority: .high)
+            try check(model.hasDeliveredFinalAnswer && model.isRunning,
+                "a written answer hides working controls even without a completion claim")
+            try check(recorder.completionStatus == nil,
+                "presentation never manufactures a successful completion claim")
+            try recorder.observe("{\"type\":\"item.started\",\"item\":{\"id\":\"new-work\",\"type\":\"command_execution\",\"command\":\"synthetic only\"}}", streamID: UUID())
+            try check(!model.hasDeliveredFinalAnswer, "subsequent real work invalidates the delivered-answer presentation")
+            return "The complete visible response."
+        }
+        model.start("Answer without completion claim", mode: .computer)
+        try await eventually { !model.isRunning }
         model.recovery.cancel()
         conversation.beginMaintenance(); await conversation.drainBackgroundWork(); conversation.closeForUninstall()
     }
@@ -1092,7 +1122,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-lifecycle-tests-") as director
     tmp = Path(directory)
     (tmp / "Support.swift").write_text(SUPPORT)
     (tmp / "Tests.swift").write_text(TESTS)
-    names = ["CommandRunModel.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
+    names = ["CommandRunModel.swift", "SidekickStartupCopy.swift", "SidekickQuickActionTools.swift", "SidekickConversation.swift", "SidekickConversationRun.swift", "SidekickConversationStore.swift", "SidekickContext.swift", "SidekickInteraction.swift", "SidekickRecovery.swift", "SidekickTaskEnd.swift"]
     sources = [APP / "Notch Magic" / name for name in names] + [APP / "Cloud/ChatGPTRecovery.swift", APP / "Cloud/AgentStatus.swift", APP / "Diagnostics/SidekickDiagnostics.swift", APP / "Diagnostics/ComputerUseDiagnosticConsent.swift", APP / "System/PermissionWaitDraft.swift", APP / "Views/Onboarding/OnboardingRestaurantStory.swift", ROOT / "Scripts/Fixtures/HostedInferenceStub.swift"]
     executable = tmp / "lifecycle-tests"
     subprocess.run(["xcrun", "swiftc", "-D", "DEBUG", "-swift-version", "5", "-default-isolation", "MainActor", "-strict-concurrency=complete", "-warnings-as-errors", "-parse-as-library", *map(str, sources), str(tmp / "Support.swift"), str(tmp / "Tests.swift"), "-o", str(executable)], check=True)

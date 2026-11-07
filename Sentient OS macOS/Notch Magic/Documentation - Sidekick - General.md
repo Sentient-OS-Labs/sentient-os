@@ -6,11 +6,11 @@ The aim is a small handoff in the middle of your day: finish a registration, wor
 follow up on an email, or carry information between apps without restating the whole background.
 The request still needs to make your intent clear, and results depend on the model and available context.
 
-Sidekick is also the shared status surface while a user-requested task runs. Hold the Sidekick key (right ⌘ by default, or right ⌥) anywhere on the Mac and talk; tap it to
-type; click the notch itself; or type in the home's command bar. Every door reaches the same backend
-(connector tools or computer use through the selected frontier engine, grounded in the knowledge base) and the same living notch.
-A proactive card's fire adopts the same run, so the notch, the command bar, and the card are three
-views of one task, and there is one shared computer/connector task at a time. Double Tap drafting has its own single-flight path.
+Sidekick is also the shared status surface while a user-requested task runs. Tap the Sidekick key
+(right Command by default) or click the notch to type. Hold the physical notch or use its microphone
+to dictate. Double-tapping the key drafts a reply through Double Tap. Ordinary commands share the
+selected frontier backend and computer-task run; the notch's Summarize and Proofread actions have
+small, dedicated request paths.
 
 This doc covers the brain and the backend: the coordinator, the run model, the hotkey, voice, the
 screen stills, and the prompt. The window, the click-through mechanics, and the visual are in
@@ -27,7 +27,7 @@ UI work; these backend seams already survive provider-process and Home-view life
 | `SidekickDiscovery.swift` | Local ready-hint acknowledgement keys and a bounded count of accepted notch/voice submissions, used to retire Home's learning cue. No task content or telemetry. |
 | `CommandRunModel.swift` | Sends ONE user task directly through `FrontierRun.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
 | `SidekickHotkeyMonitor.swift` | The zero-permission global hotkey: NSEvent `flagsChanged` monitors (global + local) reading the right-key device bit. Press / hold-confirmed / release. |
-| `VoiceCapture.swift` · `QuickTranscriptionEngine.swift` · `SpeechAnalyzerEngine.swift` · `SFSpeechRecognizerEngine.swift` | Voice: permissions, engine selection (SpeechAnalyzer on macOS 26+, SFSpeechRecognizer on 15), start / stop-and-transcribe / cancel. |
+| `VoiceCapture.swift` · `ScribeRealtimeEngine.swift` · `DictationAudio.swift` | Active dictation: microphone permission, ElevenLabs Scribe streaming, bounded finalization and cancellation. |
 | `ScreenCapture.swift` | A still of EVERY display at fire time (main first), attached to the codex run so "finish this" resolves against real pixels. |
 | `SidekickInteraction.swift` · `SidekickToolServer.swift` | Per-attempt recovery tools, instruction updates, reporting capability, waiting state and task/attempt correlation. |
 | `SidekickTaskSummary.swift` | Stages intent/final workflow phrases, validates their format locally and reports one task outcome and description without additional inference. |
@@ -38,7 +38,7 @@ UI work; these backend seams already survive provider-process and Home-view life
 ## The doors, and where they meet
 
 ```
-hotkey hold / tap ─► SidekickHotkeyMonitor ─┐
+hotkey tap ────────► SidekickHotkeyMonitor ─┐
 notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► FrontierRun.runAgentCommand
 home PromptBar ─────────────────────────────┘        │ owns phase (NotchPhase) + VoiceCapture
 card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run and transfers its Task to the app)
@@ -49,23 +49,37 @@ card fire ──► coordinator.beginExternalRun ──────────�
 `NotchPhase`: `hidden · opening · listening · transcribing · typing · running · finishing(outcome) ·
 notice(message)`.
 
-**The hotkey flow.** Press → the notch OPENS immediately (`.opening`; you are pulling it open) and the
-mic starts only if mic + speech are ALREADY authorized (a press never prompts). Still held at 250 ms →
-`.listening` (committed to voice; the first-ever permission prompt happens here, on a confirmed hold,
-never on a tap). Release after ≥ 0.25 s → `.transcribing` → the transcript is submitted as a voice
-command with a read-back; a quick tap instead → `.typing`, a focused text field in the notch; ⏎ submits,
-Esc / click-away / empty ⏎ / a hotkey tap dismisses. Every press first checks, in order: a running real
-task → **the universal STOP** (one key, one task; the onboarding demo is exempt); the armed onboarding
-demo; a stuck transcription → cancel; the onboarding policy (before the home screen a press does nothing,
-or shows "finish onboarding to use Sidekick" once the film's notch beat has played); the first-use permission gate
-(`ComputerUseGate.interceptBeforeStart`, so the notch never opens to listen when a required grant is
-missing). A 15 s watchdog bounds the transcription finalize (the speech-model download can park it), so
-the notch can never wedge; it cancels the capture and shows an honest notice.
+**Input and routing.** A completed shortcut tap waits for the Double Tap interval before opening
+the type field. Notch presses support click-to-type and hold-to-dictate. Voice stops recording before
+finalization; only the finished transcript is submitted. Escape and the explicit controls dismiss or
+cancel the active input. Ordinary Sidekick actions keep their existing permission/setup gates.
 
-**`submit(text, mode, source)`** is the one entry point for every command: it refuses while a run is
-live, applies the Home-admission backstop (the command bar has no press), passes the
-permission gate (`ComputerUseGate.intercept` holds the command and fires it on Continue), then
-`launch`: a `Command.submitted` core analytics signal, `run.start`, and `.running`.
+The typing notch has small Summarize and Proofread shortcut chips. Explicit
+voice and notch-typed requests route to these features before the ordinary provider gate. Mentions,
+negations, conversation replies and unrelated commands retain their existing semantics. No knowledge
+analysis or Sidekick subscription is required for these covered utility requests.
+
+Before the notch becomes key, `Proofread` captures the original selection. The field waits for that
+bounded read, and an intervening input/application change cancels the delayed focus transfer. The
+active display is also remembered for Summarize. Ordinary submissions and adopted actions reject
+while proofreading owns the editing path; Double Tap and Proofread exclude one another through paste
+cleanup. Summarize remains a separate read-only request.
+
+The main Sidekick agent also receives `summarize_screen` and `proofread_text` through its per-run
+`sentient_recovery` MCP server, shared by Home, notch replies and card tasks. Natural-language
+requests outside the quick matcher can therefore use the same specialist services. Summarize opens
+the normal reader and returns its text plus the captured app/window identity. The default target is
+the external app captured at invocation; an explicit observed application ID can select another
+running app. A Home request with no external target requires that explicit app choice.
+
+`proofread_text` returns the exact conservative correction from `ProofreadInference` and explicitly
+reports `applied=false`. The agent uses its ordinary editing tools to apply it only when requested and
+the original target is still valid. The tool itself never pastes or sends text. Per-run callbacks are
+fenced by the run ID; cancellation closes an in-flight Summary reader, and JSON-RPC retries reuse
+the same completed tool result. Background model work has no quick-action capability.
+
+See `../Summarize/Documentation - Summarize.md` and `../Proofread/Documentation - Proofread.md` for
+capture, data boundaries, completion and fallback behavior.
 
 **Adopted card runs.** `beginExternalRun(caption:onStopRequest:)` lets a proactive card's fire (any
 fireable method: computer, gmail, calendar; not research) adopt THE run: `run.adoptExternal` flips
@@ -77,14 +91,15 @@ be recreated without cancelling work; persisted card completion precedes releasi
 `stop()` cancels that owned task (the initial callback covers the interval before transfer).
 So `run.isRunning` locks
 every other entry point, other fireable cards dim, `beginExternalRun` returns false while anything runs,
-and every STOP surface (card, notch, bar, a fresh hotkey press) cancels the one task.
+and explicit Stop surfaces cancel the owned task.
 
 **Cancel and STOP.** `cancelCurrent()` backs out of whatever the notch is doing: dismiss the type field;
 abandon an open / listening / transcribing capture; or, ONLY while the voice transcript is still shown
 (the "you misheard me" moment), cancel the run and dismiss instantly with no flourish. Once the transcript
 dissolves into the working line, cancel leaves it alone. Two routes feed it: the notch window's LOCAL Esc
-monitor whenever Sentient is frontmost, and a fresh hotkey press over other apps (there is no global Esc;
-a keyDown tap is Input-Monitoring-gated). `stop()` unifies STOP, Esc, and the hotkey press.
+monitor when Sentient owns keyboard input, and the explicit Stop controls. There is no global Escape
+monitor. Proofread additionally treats a fresh Sidekick-key tap as cancellation; a single tap does
+not silently stop an ordinary running Sidekick task.
 
 **Completion.** `run.onFinished` → `.finishing(outcome)`: ✓ and stopped flourish for 1.5 s, a failure
 holds 5 s (its caption carries the ✗ reason). `message_user` final answers include the explicit
@@ -201,38 +216,28 @@ For user-initiated computer tasks, `SidekickInteraction.websiteInstructions` cov
 required site terms, and consent dialogs. Codex receives it as a developer instruction, and
 the Claude bridge appends the same text to its system prompt.
 
-## The hotkey (`SidekickHotkeyMonitor`)
+## Hotkey and dictation
 
-Two `NSEvent` monitors (`addGlobalMonitorForEvents` for events routed to other apps, `addLocalMonitor…`
-for when Sentient is frontmost), matching `flagsChanged` ONLY, funnel into one transition-guarded
-handler that reads the active key's device-dependent bit (right ⌘ `0x10`, right ⌥ `0x40`) so
-press/release self-heals if an event is dropped and the right key is told from its left twin.
-`holdThreshold` 0.25 s; `maxHold` (set from the active speech engine's cap) force-releases a stuck hold;
-a 1.5 s health tick installs the monitors post-launch, re-installs them if missing, and reconciles a
-missed release against the live modifier flags. `SidekickHotkey.current` reads `sidekick.hotkey`;
-`setKey` re-keys live when Settings posts `.sidekickHotkeyChanged`.
+`SidekickHotkeyMonitor` uses local/global `NSEvent.flagsChanged` monitors and the configured key's
+device bit. `ShortcutGesture` recognizes standalone taps and pairs; input counters prevent a key
+used in another shortcut from becoming a Sidekick gesture. Monitors install after launch. No global
+keyboard event tap is installed. A tap during Proofread cancels that operation; ordinary Sidekick
+work retains its explicit Stop controls.
 
-Two rules that came from the field and must not be undone:
-
-- **Never a `CGEventTap`.** Creating ANY keyboard-class tap, even listen-only and flagsChanged-only, contacts the Input Monitoring TCC service: a fresh Mac gets the "would like to receive keystrokes from any application" dialog and a system-set denial (the app listed, unchecked). The tap works anyway, which is how it hides on never-pristine dev Macs. NSEvent monitors carry the same modifier stream with zero TCC contact. And never monitor `keyDown` / `keyUp` globally: real keystrokes are the gated half.
-- **Install monitors AFTER the app finishes launching.** A monitor registered during app init (mid-`NSApplicationMain`, `NSApp` possibly nil) wedges event routing for the life of the process (windows draw, no input is ever delivered). `installMonitors` bails unless `NSApp?.isRunning == true`; the health tick installs on its first post-launch pass.
-
-## Voice (`VoiceCapture` and the engines)
-
-Permissions are lazy: mic + speech prompt on the first confirmed HOLD (`isAuthorized` lets a press
-start the mic silently only when both are already granted; a HOLD against a DENIED grant raises the
-permission window as a fix surface via `ComputerUseGate.presentVoiceFixIfDenied`). `prewarm()` installs
-the on-device speech model at arm time. `correctMishears` swaps the model's reliable mishear of
-"Sentient" as "ascension" before the transcript is shown or fired.
-
-- **`SpeechAnalyzerEngine` (macOS 26+):** on-device, in memory (no temp audio file). ONE shared `AVAudioEngine` for the process (a fresh engine per capture wedges CoreAudio input after rapid press/cancel churn); mic buffers converted to the analyzer's format and streamed in; on stop, a bounded finalize (5 s graceful, then `cancelAndFinishNow`) and a bounded results collection (2 s). Model readiness is memoized and single-flight (`installedLocales` is the only honest installed check; `assetInstallationRequest` returns a request even when installed), the install task is shielded from caller cancellation, and cancelled sessions are closed for real and chained so the next capture never queues behind a zombie. A capture that fed zero buffers returns "" immediately. Cap 180 s.
-- **`SFSpeechRecognizerEngine` (older supported macOS):** the classic buffer request, with
-  `requiresOnDeviceRecognition` enabled when the recognizer supports it; otherwise Apple's speech
-  service may process audio. A 5 s finalize timeout bounds completion. Cap 59 s.
-
-Both Info.plist usage strings (`NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription`)
-are set in the build settings; the Speech framework crashes without the latter. The Hardened Runtime
-needs the `com.apple.security.device.audio-input` entitlement for the mic prompt to appear at all.
+`NotchPressGesture` owns physical mouse-down/hold/release across changing views. `VoiceCapture` uses
+microphone authorization and ElevenLabs Scribe. Its first-use explanation discloses cloud audio
+transcription. Audio capture stops before any asynchronous finalization or model dispatch; a bounded
+finalize and session IDs reject stale results. Failed dictation preserves available words as a draft.
+Clicking the microphone latches recording; clicking its Stop control finalizes into the same
+editable prompt or reply. Send/Return explicitly submits. A held press sends on release near its
+origin; release more than 48 pt away keeps a draft instead. The duration limit also keeps a draft.
+A final answer hides the task Stop while backend cleanup still holds the execution lock. Reply
+recording can begin during that cleanup; dispatch waits briefly for it, retaining the draft if busy.
+The presentation signal is a saved answer with no substantive tools in flight, independent of the
+separate success/failure claim. New tool work or a question invalidates it. This distinction does not
+relax outcome verification or allow two agent executions. Answer previews never put a task Stop
+beside the dictation controls; progress-update previews may retain it while actual work continues.
+The active path does not request macOS Speech Recognition permission or use the older speech engines.
 
 ## Screen context (`ScreenCapture`)
 
@@ -278,7 +283,7 @@ onboarding and Settings. Debug skips submission. See the diagnostics guide and `
 ## Rules
 
 - One run at a time. Every new entry point must go through `submit` / `beginExternalRun`.
-- Never prompt for a permission on a press or a tap; only on a confirmed hold, and only through the gate.
+- Opening or hovering the notch does not prompt for permissions. Explicit dictation or action intent uses the corresponding permission flow.
 - Content-bearing logs (transcripts, prompts, codex output) are `#if DEBUG` only; log lengths in Release.
 
 ## Related docs
@@ -287,3 +292,23 @@ onboarding and Settings. Debug skips submission. See the diagnostics guide and `
 
 Computer-use runtime selection and its manual live in `FrontierRun`: native OpenAI tools through `codex exec` for every backend. Claude subscriptions use the local
 ClaudeSubscriptionBridge for inference; dedicated connector tasks stay on the structured Claude path. See `Driver/Documentation - Native Computer Use.md`.
+
+## Main-composer dictation
+
+The Home composer has a microphone beside Send. It becomes Stop while starting/recording;
+Stop finalizes into the editable draft without submitting. Send during dictation stops capture
+synchronously, waits for the final transcript, then uses the ordinary composer send path once.
+Interim transcripts append to the draft present at capture start without duplicating revisions.
+Errors retain available words. Changing the answer target, hiding Home, clearing chat or starting
+notch dictation cancels the local capture and rejects stale callbacks. `ComposerDictation.swift`
+uses the existing VoiceCapture/Scribe path; `test_composer_dictation.py` covers lifecycle behavior
+without audio or providers.
+
+
+### Speech vocabulary and retention
+
+Scribe realtime receives the preferred system language and keyterms `summarise`, `summarize`,
+`proofread`, `sentient os`, `sentient`, and `jesai`. The Cloudflare relay issues single-use tokens;
+the Mac connects directly to ElevenLabs. The included configuration sets `SCRIBE_ZERO_RETENTION=false`.
+Zero retention depends on provider account capabilities and must be verified for the deployed setup.
+The existing client fails closed on a retention warning when zero retention is requested.

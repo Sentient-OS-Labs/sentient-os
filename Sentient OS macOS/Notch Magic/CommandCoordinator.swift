@@ -46,12 +46,116 @@ enum TriggerSource: String { case promptBar, notchTyped, voice, proactiveCard = 
 /// aside — to the built-in display's real cutout, so the button works when an external display is
 /// primary. Sticky through .hidden, so the dismiss retract merges into the same bezel the session
 /// opened on. Read by NotchWindowController for placement.
-enum NotchAnchor { case mainDisplay, builtInNotch }
+enum NotchAnchor: Equatable { case mainDisplay, builtInNotch, display(CGDirectDisplayID) }
 
 @MainActor @Observable
 final class CommandCoordinator {
     /// The single shared run — the home command bar AND the hotkey both drive this exact instance.
     let run = CommandRunModel()
+    let summarize = SummarySessions()
+    let proofread = Proofread.shared
+    let quickActionHotkeys = QuickActionHotkeys()
+    private var quickActionTask: Task<Void, Never>?
+    private var quickActionID: UUID?
+
+    func refreshQuickActionShortcuts() {
+        let enabled = quickActionsAvailable && !ShortcutPreferences.isRecording
+        quickActionHotkeys.setEnabled(enabled)
+        if !enabled { cancelQuickActionPreparation() }
+    }
+
+    func cancelQuickActionPreparation() {
+        let hadPending = quickActionTask != nil
+        quickActionID = nil; quickActionTask?.cancel(); quickActionTask = nil
+        if hadPending, !proofread.isRunning { proofread.clearPreparedSelection() }
+    }
+
+    /// Global chords preserve the active app's focus and enter the same actions as the buttons.
+    func handleQuickActionShortcut(_ action: QuickActionShortcut) {
+        guard quickActionsAvailable, !ShortcutPreferences.isRecording, NSApp.modalWindow == nil,
+              !run.isClearingChat, voiceSessionID == nil, !proofread.isRunning,
+              !run.recovery.isPending, !DoubleTap.shared.isDrafting else { return }
+        #if DEBUG
+        guard !run.preventsTaskExecutionForUIFixture else { return }
+        #endif
+        cancelQuickActionPreparation()
+        interruptHotkeyGesture()
+        notchAnchor = .mainDisplay
+        if action == .summarize {
+            // The hidden notch's remembered display may belong to a previous interaction.
+            if phase != .typing { summaryDisplayID = ScreenCapture.summaryDisplay(); summaryTarget = SummaryAccessibility.target() }
+            _ = summarizeScreen()
+            return
+        }
+        guard !run.isRunning else { return }
+        let originalPhase = phase, activity = ShortcutActivity.current
+        if phase != .typing { prepareProofreadSelection() }
+        let id = UUID(); quickActionID = id
+        quickActionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.quickActionID == id {
+                    if !self.proofread.isRunning, originalPhase != .typing, self.phase == originalPhase {
+                        self.proofread.clearPreparedSelection()
+                    }
+                    self.quickActionID = nil; self.quickActionTask = nil
+                }
+            }
+            await self.proofread.waitForSelection()
+            guard !Task.isCancelled, self.quickActionID == id, self.phase == originalPhase,
+                  activity == ShortcutActivity.current, !self.proofread.captureWasInterrupted else { return }
+            _ = self.proofreadSelection()
+        }
+    }
+
+
+    @discardableResult
+    func proofreadSelection() -> Bool {
+        guard quickActionsAvailable, !run.isRunning, !run.isClearingChat, voiceSessionID == nil,
+              !DoubleTap.shared.isDrafting, !proofread.isRunning else { return false }
+        #if DEBUG
+        guard !run.preventsTaskExecutionForUIFixture else { return false }
+        #endif
+        pendingSingleTap?.cancel(); pendingSingleTap = nil; hotkeyPair.reset()
+        clearReadBack()
+        guard proofread.start(completion: { [weak self] caption in
+            if caption.isEmpty { self?.setPhase(.hidden) }
+            else { self?.flash(caption, for: 3) } }) else { return false }
+        setPhase(.notice("Proofreading…"))
+        return true
+    }
+
+    private func prepareProofreadSelection() {
+        #if DEBUG
+        guard !run.preventsTaskExecutionForUIFixture else { return }
+        #endif
+        proofread.prepareSelection()
+    }
+
+    private var summaryDisplayID: CGDirectDisplayID?
+    private var summaryTarget: SummaryAccessibility.Target?
+    func quickActionOrigin(for source: String) -> (target: SummaryAccessibility.Target?, display: CGDirectDisplayID?) {
+        let fromNotch = source == TriggerSource.voice.rawValue || source == TriggerSource.notchTyped.rawValue
+        let current = fromNotch ? (summaryTarget ?? SummaryAccessibility.target()) : SummaryAccessibility.target()
+        return (current?.pid == getpid() ? nil : current, fromNotch ? summaryDisplayID : ScreenCapture.summaryDisplay())
+    }
+    var quickActionsAvailable: Bool { Self.hasCompletedOnboarding && !onboardingDemoArmed }
+
+    @discardableResult
+    func summarizeScreen(preference: String = "") -> Bool {
+        guard quickActionsAvailable, !run.isClearingChat, voiceSessionID == nil else { return false }
+        #if DEBUG
+        guard !run.preventsTaskExecutionForUIFixture else { return false }
+        #endif
+        guard let display = summaryDisplayID ?? ScreenCapture.summaryDisplay() else {
+            flash("No screen is available to summarize."); return false
+        }
+        pendingSingleTap?.cancel(); pendingSingleTap = nil; hotkeyPair.reset()
+        proofread.clearPreparedSelection()
+        if !run.isRunning { clearReadBack(); setPhase(.hidden) }
+        summarize.start(displayID: display, preference: preference, target: summaryTarget ?? SummaryAccessibility.target())
+        return true
+    }
 
     /// What the notch shows. (Rendering lands later; today this is driven + logged.)
     private(set) var phase: NotchPhase = .hidden
@@ -86,6 +190,7 @@ final class CommandCoordinator {
     /// The current interaction's display anchor (see NotchAnchor) — set at every front door, sticky
     /// until the next interaction starts.
     private(set) var notchAnchor: NotchAnchor = .mainDisplay
+    private(set) var notchFocusRequest = 0
 
     /// Onboarding's film step arms this while the film is parked on its invitation: the next
     /// notch click OR hotkey press plays the scripted Sidekick demo on the user's real notch
@@ -112,7 +217,12 @@ final class CommandCoordinator {
     private let voice = VoiceCapture()
     private var hotkeyChangeObserver: NSObjectProtocol?
 
-    private var listening = false           // a voice session is live (start → finalize / cancel)
+    let dictation = DictationPresentation()
+    let composerDictation = ComposerDictation()
+    let notchPress = NotchPressGesture()
+    private var voiceSessionID: UUID?
+    private var voiceFinalizeTask: Task<Void, Never>?
+    private var voiceLimitTask: Task<Void, Never>?
     private var voiceStartTask: Task<Void, Never>?
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
@@ -127,6 +237,13 @@ final class CommandCoordinator {
         run.conversation.onRefresh = { [weak self] in self?.routeAttention() }
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
         run.onRecoveryResumed = { [weak self] in self?.setPhase(.running) }
+        run.makeQuickActions = { [weak self] source in
+            guard let self else {
+                return SidekickQuickActions(summarize: { _,_ in throw SidekickQuickActionTools.Failure.unavailable },
+                                            proofread: { _ in throw SidekickQuickActionTools.Failure.unavailable })
+            }
+            return self.quickActions(for:source)
+        }
         run.recovery.onChange = { [weak self] in
             guard let self else { return }
             if self.run.recovery.isPending {
@@ -164,13 +281,14 @@ final class CommandCoordinator {
             self.doubleTapDemoKeyChanged?(down)
         }
         hotkey.onInterruption = { [weak self] in self?.interruptHotkeyGesture() }
+        quickActionHotkeys.onAction = { [weak self] action in self?.handleQuickActionShortcut(action) }
         refreshHotkeys()
         hotkey.start()
+        quickActionHotkeys.start()
         hotkeyChangeObserver = NotificationCenter.default.addObserver(
             forName: .shortcutsChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshHotkeys() }
         }
-        voice.prewarm()
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
         Log("CommandCoordinator armed (shared Sidekick and Double Tap key · voice available: \(VoiceCapture.isAvailable))")
     }
@@ -186,15 +304,24 @@ final class CommandCoordinator {
                 reply: SidekickConversationEvent.ReplyReference? = nil,
                 onCompletion: ((CommandRunModel.Outcome) -> Void)? = nil) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !run.isRunning, !run.isClearingChat else { return false }
+        guard !trimmed.isEmpty, !run.isRunning, !run.isClearingChat, !proofread.isRunning, voiceSessionID == nil else { return false }
         returningFromRecovery = false
         // A rejected submission must preserve the draft and pending recovery.
         if interceptForOnboarding() { return false }
+        if (source == .voice || source == .notchTyped), reply == nil,
+           run.conversation.replyReference == nil, ProofreadRequest.matches(trimmed) {
+            return proofreadSelection()
+        }
+        if (source == .voice || source == .notchTyped), reply == nil,
+           run.conversation.replyReference == nil, let preference = SummaryRequest.match(trimmed) {
+            return summarizeScreen(preference: preference)
+        }
         if CodexAuth.knowledgeBaseOnly {
             flash(Self.needsPlusNotice, for: 2.0)
             return false
         }
         if source == .promptBar || source == .proactiveCard { notchAnchor = .mainDisplay }
+        proofread.clearPreparedSelection()
         return launch(trimmed, mode: mode, source: source, reply: reply ?? run.conversation.replyReference,
                       onCompletion: onCompletion)
     }
@@ -204,7 +331,7 @@ final class CommandCoordinator {
     private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource,
                         reply: SidekickConversationEvent.ReplyReference? = nil,
                         onCompletion: ((CommandRunModel.Outcome) -> Void)? = nil) -> Bool {
-        guard !run.isRunning, !run.isClearingChat else { return false }
+        guard !run.isRunning, !run.isClearingChat, !proofread.isRunning, voiceSessionID == nil else { return false }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
         // Core tier: THE Sidekick-usage count (count only, never the text) — one of the handful of
         // always-on telemetry signals disclosed in Settings.
@@ -236,6 +363,8 @@ final class CommandCoordinator {
     /// (an adopted card fire included — run.stop() routes to the card's own cancel). Reached from the
     /// notch's and the bar's STOP buttons and from Esc at the transcript beat; never from the hotkey.
     func stop() {
+        cancelQuickActionPreparation()
+        if proofread.isRunning { proofread.cancel(); return }
         if returningFromRecovery {
             deferredSubmission = nil
             setPhase(.hidden)
@@ -250,9 +379,7 @@ final class CommandCoordinator {
         guard !run.isClearingChat else { throw CommandRunModel.ClearChatFailure.busy }
         deferredSubmission = nil; returningFromRecovery = false
         hotkeyPair.reset()
-        listening = false
-        voiceStartTask?.cancel(); voiceStartTask = nil
-        voice.cancel()
+        cancelDictation()
         demoTask?.cancel(); demoTask = nil; demoDraft = nil
         clearReadBack()
         setPhase(.hidden) // also invalidates delayed voice/opening/finishing callbacks
@@ -272,7 +399,7 @@ final class CommandCoordinator {
     @discardableResult
     func beginExternalRun(caption: String, request: String? = nil, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
                           onStopRequest: @escaping @MainActor () -> Void) -> Bool {
-        guard !run.isRunning, !run.isClearingChat else { return false }
+        guard !run.isRunning, !run.isClearingChat, !proofread.isRunning, voiceSessionID == nil else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
         run.adoptExternal(caption: caption, request: request, retryContext: retryContext, onRetry: onRetry, onStopRequest: onStopRequest)
@@ -343,12 +470,13 @@ final class CommandCoordinator {
             keys = [ShortcutPreferences.current]
         }
         hotkey.setKeys(keys)
+        refreshQuickActionShortcuts()
     }
 
     private func interruptHotkeyGesture() {
         pendingSingleTap?.cancel(); pendingSingleTap = nil
         hotkeyPair.reset()
-        if phase == .opening { setPhase(.hidden) }
+        if phase == .opening { proofread.clearPreparedSelection(); setPhase(.hidden) }
     }
 
     /// Completed standalone taps arrive here. Both actions use the same key; the first
@@ -358,6 +486,7 @@ final class CommandCoordinator {
         guard !ShortcutPreferences.isRecording, doubleTapDemoKeyChanged == nil,
               !DoubleTap.shared.isDrafting else { return }
         guard key == ShortcutPreferences.current else { return }
+        if proofread.isRunning { proofread.cancel(); return }
         if run.recovery.isPending, DoubleTap.isReady {
             handleSingleTap(activity: activity, waitForDoubleTap: false)
             return
@@ -418,11 +547,8 @@ final class CommandCoordinator {
         }
         notchAnchor = .mainDisplay
         guard !interceptForOnboarding() else { hotkeyPair.reset(); return }
-        guard !CodexAuth.knowledgeBaseOnly else {
-            hotkeyPair.reset()
-            flash(Self.needsPlusNotice, for: 2.0)
-            return
-        }
+        summaryDisplayID = ScreenCapture.summaryDisplay(); summaryTarget = SummaryAccessibility.target()
+        prepareProofreadSelection()
         ComputerUseGate.shared.refresh()
         guard waitForDoubleTap else {
             setPhase(.typing)
@@ -442,60 +568,122 @@ final class CommandCoordinator {
         }
     }
 
-    // MARK: Voice (the field's mic button)
+    // MARK: Dictation (notch hold and the field's microphone)
 
-    /// The mic button in the type field: open the mic. A click is the deliberate voice intent, so
-    /// this is where the first-ever mic + speech prompt happens (never on a key press). Mic or
-    /// speech DENIED → no native prompt can re-appear, so the permission window rises as the fix
-    /// surface (non-blocking — voice is optional). A genuine first-run model download → say so
-    /// instead of pretending to listen (the mic tap only installs after the model lands, so
-    /// anything spoken now would be silently lost).
-    func startListening() {
-        guard !run.isClearingChat else { return }
-        guard phase == .typing, !onboardingDemoArmed, !listening else { return }
-        if !VoiceCapture.isAuthorized, ComputerUseGate.shared.presentVoiceFixIfDenied() {
-            setPhase(.hidden)
-            Log("mic click answered with the permission window — mic/speech denied")
-            return
-        }
-        if VoiceCapture.isModelDownloading {
-            flash("still downloading the voice model", for: 2.0)
-            Log("mic click answered with a download notice — speech model installing")
-            return
-        }
-        setPhase(.listening)
-        startCapture()
-        // The engine's hard limit (3 min on SpeechAnalyzer, 59 s on SFSpeechRecognizer): a capture
-        // that's still open at the cap is finalized as if stop had been clicked — never dropped.
-        let token = phaseToken
-        let cap = VoiceCapture.maxCaptureDuration
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(cap))
-            guard let self, self.phaseToken == token, self.phase == .listening else { return }
-            Log("listening cap (\(Int(cap))s) — finalizing")
-            self.finalizeVoice()
-        }
-        Log("mic click → listening")
+    /// A physical hold enters directly without opening a typing field or changing hotkeys.
+    @discardableResult
+    func beginNotchDictation(anchor: NotchAnchor = .builtInNotch) -> Bool {
+        guard notchButtonAvailable, (phase == .hidden || phase == .typing || phase == .message),
+              (!run.isRunning || (phase == .message && run.hasDeliveredFinalAnswer)), !run.isClearingChat,
+              !run.recovery.isPending, !onboardingDemoArmed, Self.hasCompletedOnboarding else { return false }
+        notchAnchor = anchor
+        return beginDictation()
     }
 
-    /// The stop button (or ⏎) while listening: finalize the transcript and fire it as the task.
-    /// Returns whether it consumed the event (so the window's key monitor can swallow the ⏎).
-    @discardableResult
-    func finishListening() -> Bool {
-        guard phase == .listening else { return false }
-        finalizeVoice()
+    func notchMouseDown(anchor: NotchAnchor = .builtInNotch) {
+        notchPress.begin(tap: { [weak self] in self?.notchClicked(anchor: anchor) },
+            hold: { [weak self] in self?.beginNotchDictation(anchor: anchor) ?? false },
+            release: { [weak self] in self?.finishListening() },
+            releaseAway: { [weak self] in self?.finishListening(send: false) })
+    }
+
+    func microphoneMouseDown() {
+        // The mic itself is explicit voice intent: reveal dictation on mouse-down. A quick
+        // click latches recording; holding uses the same release-to-send behavior as the notch.
+        guard (phase == .typing || phase == .message), beginDictation(), let id = voiceSessionID else { return }
+        notchPress.begin(tap: {},
+            hold: { [weak self] in
+                guard let self else { return false }
+                return self.voiceSessionID == id && self.phase == .listening
+            }, release: { [weak self] in
+                guard let self, self.voiceSessionID == id else { return }
+                self.finishListening()
+            }, releaseAway: { [weak self] in
+                guard let self, self.voiceSessionID == id else { return }
+                self.finishListening(send: false)
+            }, cancelOnEarlyDrag: false)
+    }
+
+    func startListening() {
+        guard phase == .typing || phase == .message else { return }
+        _ = beginDictation()
+    }
+
+    private func beginDictation() -> Bool {
+        composerDictation.cancel()
+        guard (!run.isRunning || (phase == .message && run.hasDeliveredFinalAnswer)),
+              !run.isClearingChat, !run.recovery.isPending, !proofread.isRunning,
+              !onboardingDemoArmed, voiceSessionID == nil else { return false }
+        guard !interceptForOnboarding() else { return false }
+        if phase != .typing {
+            summaryDisplayID = ScreenCapture.summaryDisplay(); summaryTarget = SummaryAccessibility.target()
+            prepareProofreadSelection()
+        }
+        if !VoiceCapture.isAuthorized, ComputerUseGate.shared.presentVoiceFixIfDenied() { return false }
+        let id = UUID(); voiceSessionID = id
+        let reply = phase == .message ? notchMessage : nil
+        if let reply {
+            prepareMessageReply(nil, messageID: reply.event.id)
+            messageTimer?.cancel(); messageTimer = nil
+        }
+        let context: DictationPresentation.Context = reply.map { .reply($0) }
+            ?? (phase == .typing ? .composer : .activity)
+        dictation.reset(context: context, baseDraft: phase == .typing || reply != nil ? run.conversation.draft : "")
+        setPhase(.listening)
+        voice.onTranscript = { [weak self] text in
+            guard let self, self.voiceSessionID == id else { return }
+            self.dictation.text = text
+        }
+        voice.onLevel = { [weak self] level in
+            guard let self, self.voiceSessionID == id, self.phase == .listening else { return }
+            self.dictation.push(level)
+        }
+        voice.onReady = { [weak self] in
+            guard let self, self.voiceSessionID == id else { return }
+            self.dictation.connected = true
+        }
+        voice.onFailure = { [weak self] error in
+            guard let self, self.voiceSessionID == id else { return }
+            self.dictationFailed(error, id: id)
+        }
+        voiceStartTask = Task { [weak self] in
+            guard let self, self.voiceSessionID == id, self.phase == .listening else { return }
+            do {
+                await self.proofread.waitForSelection()
+                guard self.voiceSessionID == id, self.phase == .listening else { return }
+                try await self.voice.start()
+                guard self.voiceSessionID == id, self.phase == .listening else { return }
+                self.dictation.capturing = true
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            } catch {
+                guard self.voiceSessionID == id else { return }
+                if error is CancellationError { self.cancelDictation(); self.setPhase(.hidden) }
+                else { self.dictationFailed(error, id: id) }
+            }
+        }
+        voiceLimitTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(VoiceCapture.maxCaptureDuration)) } catch { return }
+            guard let self, self.voiceSessionID == id, self.phase == .listening else { return }
+            self.finalizeVoice(send: false)
+        }
         return true
     }
 
-    /// Open the mic (idempotent). On first-ever use this is what prompts — so it's gated to the mic click.
-    private func startCapture() {
-        guard !listening else { return }
-        listening = true
-        voiceStartTask = Task { [weak self] in
-            guard let self else { return }
-            do { try await self.voice.start() }
-            catch { self.voiceStartFailed(error) }
+    @discardableResult
+    func finishListening(send: Bool = true) -> Bool {
+        guard phase == .listening, voiceSessionID != nil else { return false }
+        // A release during first-use permission setup has no audio to finalize. Permission
+        // may finish in its own dialog, but this gesture must never open the mic afterwards.
+        if !dictation.capturing {
+            let reply = dictation.replyMessage
+            voice.stopCapturing()
+            cancelDictation()
+            if let reply { restoreDictationEditor(reply: reply) }
+            else { setPhase(.hidden) }
+            return true
         }
+        finalizeVoice(send: send)
+        return true
     }
 
     // MARK: Double Tap (DoubleTap.swift)
@@ -507,6 +695,7 @@ final class CommandCoordinator {
     /// the onboarding, plan, and permission doors) the reveal retracts first; from a running task
     /// the notch is left exactly as it was.
     private func fireDoubleTap() {
+        proofread.clearPreparedSelection()
         hotkeyPair.reset()
         // Never paste into the Sidekick field or disturb an active voice capture.
         guard phase != .typing, phase != .listening, phase != .transcribing else { return }
@@ -522,80 +711,101 @@ final class CommandCoordinator {
         }
     }
 
-    private func finalizeVoice() {
+    private func finalizeVoice(send: Bool) {
+        guard let id = voiceSessionID, phase == .listening else { return }
+        // This must precede every await, animation or network operation.
+        voice.stopCapturing()
+        dictation.capturing = false
+        dictation.finalizing = true
+        voiceLimitTask?.cancel(); voiceLimitTask = nil
         setPhase(.transcribing)
-        let token = phaseToken
-
-        // Watchdog — the last-resort backstop: the finalize itself is <2s, and the old trap
-        // (voice.start() parked on the asset daemon EVERY press — assetInstallationRequest returns
-        // a request even when the model is installed) is gone now that readiness is memoized and
-        // gated on installedLocales. What's left is the rare genuine stall (a first-run download
-        // reaching a capture, a wedged finalize). Still transcribing after 15s → cancel the capture
-        // and say so honestly. The notch must never wedge.
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(15))
-            guard let self, self.phaseToken == token, self.phase == .transcribing else { return }
-            let downloading = VoiceCapture.isModelDownloading
-            if !downloading { Diagnostics.report(.inputFailed, phase: .finalize, reason: "transcription_deadline", source: "voice", counts: [.deadlineMS: 15_000]) }
-            Log("✗ transcription timed out — cancelling the capture (\(downloading ? "model still downloading" : "capture stalled"))")
-            self.listening = false
-            self.voiceStartTask?.cancel(); self.voiceStartTask = nil
-            self.voice.cancel()
-            self.voice.prewarm()   // best-effort: keep a genuine model install moving (no-op when ready)
-            self.flash(downloading ? "voice isn’t ready yet, try again in a moment" : "voice got stuck — try again")
-        }
-
-        Task { [weak self] in
+        voiceFinalizeTask = Task { [weak self] in
             guard let self else { return }
-            await self.voiceStartTask?.value     // ensure capture actually started (or failed)
-            guard self.listening else { return } // a start failure already set a notice/hidden phase
-            guard self.phaseToken == token else { return }   // timed out / Esc'd while waiting
+            let deadline = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(12)) } catch { return }
+                guard let self, self.voiceSessionID == id else { return }
+                self.dictationFailed(DictationFailure.timedOut, id: id)
+            }
+            defer { deadline.cancel() }
+            await self.voiceStartTask?.value
+            guard self.voiceSessionID == id else { return }
             do {
                 let text = try await self.voice.stopAndTranscribe()
-                guard self.phaseToken == token else { return }   // timed out / Esc'd mid-finalize
-                self.listening = false
-                if text.isEmpty {
-                    Log("🗣️ heard nothing")
-                    self.flash("didn’t catch that")
-                } else {
-                    Log("🗣️ heard (\(text.count) chars)")   // B7: length, not the raw transcript
-                    #if DEBUG
-                    Log("   heard ↓ \(text)")
-                    #endif
-                    self.submit(text, mode: .computer, source: .voice)
+                guard self.voiceSessionID == id else { return }
+                let reply = self.dictation.replyMessage
+                let keepsDraft = self.dictation.keepsDraft
+                let request = self.dictation.composedText(text)
+                // A final answer can appear before its provider finishes cleanup. Capture
+                // may begin immediately, but never launch overlapping agent executions.
+                if send && self.run.hasDeliveredFinalAnswer {
+                    let drainingRun = self.run.runID
+                    for _ in 0..<100 {
+                        guard self.run.isRunning, self.run.runID == drainingRun else { break }
+                        try await Task.sleep(for: .milliseconds(20))
+                        guard self.voiceSessionID == id else { return }
+                    }
+                }
+                self.voiceSessionID = nil
+                self.dictation.finalizing = false
+                self.voiceStartTask = nil; self.voiceFinalizeTask = nil
+                if !send || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.run.conversation.draft = request
+                    self.restoreDictationEditor(reply: reply)
+                } else if !self.submit(request, mode: .computer, source: .voice) {
+                    self.run.conversation.draft = request
+                    self.dictation.error = "Your spoken request has been kept. Send it when you’re ready."
+                    self.restoreDictationEditor(reply: reply)
+                } else if keepsDraft {
+                    self.run.conversation.draft = ""
                 }
             } catch {
-                guard self.phaseToken == token else { return }   // the watchdog already spoke
-                self.listening = false
-                Diagnostics.report(.inputFailed, phase: .finalize, error: error, source: "voice")
-                Log("✗ transcription failed — \(ErrorLabel(error))")
-                self.flash("didn’t catch that")
+                guard self.voiceSessionID == id else { return }
+                self.dictationFailed(error, id: id)
             }
         }
     }
 
-    private func voiceStartFailed(_ error: Error) {
-        listening = false
-        voiceStartTask = nil
-        voice.cancel()
-        if error is CancellationError { return }   // an intentional bail (Esc / a hotkey press / watchdog) — not a failure
-        if case VoiceError.notAuthorized = error {
-            flash("turn on the microphone to talk to Sentient")
-            return
-        }
-        Diagnostics.report(.inputFailed, phase: .start, error: error, source: "voice")
-        Log("voice start failed — \(ErrorLabel(error))")
-        // Only speak up if we're still in the voice moment — a late failure must never clobber a
-        // newer phase (the watchdog's notice, an open type field, a running task).
-        switch phase {
-        case .listening, .transcribing: break
-        default: return
-        }
-        if case VoiceError.noMicrophone = error {
-            flash("no microphone found")
+    private func restoreDictationEditor(reply: SidekickConversationStore.Record?) {
+        if let reply {
+            notchMessage = reply
+            setPhase(.message)
+            // Keep the recovered transcript on screen while the user edits it.
+            setMessageReplyFocused(true, messageID: reply.event.id)
         } else {
-            flash("voice got stuck — try again")   // the engine was marked for a rebuild; the next hold starts clean
+            setPhase(.typing)
         }
+    }
+
+    private func keepDictationDraft(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let existing = run.conversation.draft
+        run.conversation.draft = existing.isEmpty ? text : existing + "\n" + text
+    }
+
+    private func dictationFailed(_ error: Error, id: UUID) {
+        guard voiceSessionID == id else { return }
+        let reply = dictation.replyMessage
+        keepDictationDraft(dictation.text)
+        let message: String
+        if let failure = error as? DictationFailure { message = failure.localizedDescription }
+        else if let failure = error as? VoiceError { message = failure.localizedDescription }
+        else { message = "Dictation isn’t available right now. Your available text has been kept." }
+        cancelDictation()
+        dictation.error = message
+        restoreDictationEditor(reply: reply)
+        Log("dictation failed (available text retained)")
+    }
+
+    private func cancelDictation() {
+        proofread.clearPreparedSelection()
+        voiceSessionID = nil
+        notchPress.cancel()
+        voiceStartTask?.cancel(); voiceStartTask = nil
+        voiceFinalizeTask?.cancel(); voiceFinalizeTask = nil
+        voiceLimitTask?.cancel(); voiceLimitTask = nil
+        voice.cancel()
+        dictation.capturing = false
+        dictation.finalizing = false
     }
 
     // MARK: Tap-to-type (the notch's text field)
@@ -646,6 +856,8 @@ final class CommandCoordinator {
     /// Esc · click-away · empty-⏎ — close the type field with no action.
     func dismissTyping() {
         guard phase == .typing else { return }
+        cancelQuickActionPreparation()
+        proofread.clearPreparedSelection()
         deferredSubmission = nil
         setPhase(.hidden)
         Log("notch typing dismissed")
@@ -655,7 +867,8 @@ final class CommandCoordinator {
 
     /// NotchWindowController's seam for the hover state (it owns the cursor geometry; the view
     /// renders the swell + shadow off this).
-    func setNotchHovering(_ hovering: Bool) {
+    func setNotchHovering(_ hovering: Bool, anchor: NotchAnchor? = nil) {
+        if hovering, let anchor { notchAnchor = anchor }
         guard notchHovering != hovering else { return }
         notchHovering = hovering
     }
@@ -664,9 +877,9 @@ final class CommandCoordinator {
     /// type field. Mirrors hotkeyTapped's doors without the double-tap wait (a click can only mean
     /// the field): the knowledge-base-only aside, then the field. Permissions are checked when
     /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
-    func notchClicked() {
+    func notchClicked(anchor: NotchAnchor = .builtInNotch) {
         guard NotchPreferences.clickEnabled() else { return }
-        openNotchInput(anchor: .builtInNotch, door: "notch click")
+        openNotchInput(anchor: anchor, door: "notch click")
     }
 
     /// An explicit Home action is available even when idle notch clicks pass to other apps.
@@ -676,19 +889,21 @@ final class CommandCoordinator {
     }
 
     private func openNotchInput(anchor: NotchAnchor, door: String) {
-        guard !run.isClearingChat else { return }
-        guard doubleTapDemoKeyChanged == nil else { return }
-        if run.recovery.isPending { run.recovery.reopen(); return }
+        guard !run.isClearingChat, doubleTapDemoKeyChanged == nil else { return }
+        // One draft/question/reader can move between entry points without being recreated.
+        if phase == .typing || phase == .message || run.recovery.isPending {
+            notchAnchor = anchor
+            notchFocusRequest &+= 1
+            if run.recovery.isPending { _ = run.recovery.reopen() }
+            return
+        }
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = anchor
         if onboardingDemoArmed { beginNotchDemo(door: door); return }
         // Before home: silence pre-beat (the swell is off then anyway), the aside after.
         if interceptForOnboarding() { return }
-        if CodexAuth.knowledgeBaseOnly {
-            flash(Self.needsPlusNotice, for: 2.0)
-            Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
-            return
-        }
+        summaryDisplayID = ScreenCapture.summaryDisplay(); summaryTarget = SummaryAccessibility.target()
+        prepareProofreadSelection()
         setPhase(.typing)
         Log("\(door) → typing")
         #if DEBUG
@@ -790,6 +1005,7 @@ final class CommandCoordinator {
     /// via a hotkey press for the listening and transcribing beats (hotkeyTapped).
     @discardableResult
     func cancelCurrent() -> Bool {
+        if proofread.isRunning { proofread.cancel(); return true }
         if phase == .message { dismissMessagePreview(); return true }
         if phase == .recovery { run.recovery.dismiss(); return true }
         switch phase {
@@ -801,9 +1017,7 @@ final class CommandCoordinator {
             dismissTyping()
             return true
         case .listening, .transcribing:
-            listening = false
-            voiceStartTask?.cancel(); voiceStartTask = nil
-            voice.cancel()
+            cancelDictation()
             setPhase(.hidden)
             Log("notch voice capture cancelled")
             return true
@@ -922,6 +1136,7 @@ final class CommandCoordinator {
 
     private func setPhase(_ newPhase: NotchPhase) {
         phase = newPhase
+        if newPhase != .listening && newPhase != .transcribing { dictation.endContext() }
         phaseToken &+= 1
         Log("notch → \(newPhase)")
         if newPhase != .message {

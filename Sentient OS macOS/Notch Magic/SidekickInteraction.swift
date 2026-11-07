@@ -20,6 +20,7 @@ nonisolated final class SidekickInteraction: Sendable {
     let personalization: SidekickPersonalization?
     let taskSummary: SidekickTaskSummary?
     let conversationRun: SidekickConversationRun?
+    let quickActions: SidekickQuickActions?
     let computerUseCheckConsent = ComputerUseDiagnosticConsent()
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
@@ -49,6 +50,7 @@ nonisolated final class SidekickInteraction: Sendable {
          personalization: SidekickPersonalization? = nil,
          taskSummary: SidekickTaskSummary? = nil,
          conversationRun: SidekickConversationRun? = nil,
+         quickActions: SidekickQuickActions? = nil,
          diagnosticTaskID: UUID = UUID(), diagnosticAttempt: Int = 1,
          request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
         self.diagnosticTaskID = diagnosticTaskID; self.diagnosticAttempt = diagnosticAttempt
@@ -56,6 +58,7 @@ nonisolated final class SidekickInteraction: Sendable {
         self.instructionsSnapshot = instructionsSnapshot; self.personalization = personalization
         self.taskSummary = taskSummary
         self.conversationRun = conversationRun
+        self.quickActions = quickActions
     }
     /// A snapshot taken before this request was recorded, shared by computer and connector legs.
     var promptInstructions: String {
@@ -64,6 +67,7 @@ nonisolated final class SidekickInteraction: Sendable {
             + "\n\n" + (instructionsSnapshot?.promptBlock ?? "")
             + "\n\n" + (personalization?.promptInstructions ?? "")
             + (taskSummary == nil ? "" : "\n\n" + SidekickTaskSummary.promptInstructions)
+            + (quickActions == nil ? "" : "\n\n" + SidekickQuickActionTools.instructions)
     }
 
     var hasActiveTools: Bool { wait.withLock { !$0.activeTools.isEmpty } }

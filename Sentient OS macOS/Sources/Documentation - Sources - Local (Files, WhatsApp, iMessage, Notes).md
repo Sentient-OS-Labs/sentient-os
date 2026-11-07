@@ -215,3 +215,12 @@ problems in the picker. See the ingestion doc for the atomic coverage checkpoint
 ## Related docs
 
 `Ingestion/Documentation - Ingestion Pipeline.md` (how these are driven), `Engine/Documentation - On-Device Engine & Triage.md` (the prompts they feed), `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md`, `Views/Documentation - Views - Home, Processing & Shared UI.md` (`ChatPicker`, the source chips).
+
+
+### On-demand conversation summaries
+
+The Summarize feature has a separate, narrow reader in `Summarize/SummaryConversationStore.swift`.
+It uses a short SQLite read-only transaction to identify the active conversation using AX anchors
+and to read only its newer messages. It does not use the ingestion snapshots, scan other chats into
+the summary, change read state, or copy a whole message database. Ingestion retains its existing
+WAL-copy workflow. Apple message body decoding is shared through `MessageBody.swift`.

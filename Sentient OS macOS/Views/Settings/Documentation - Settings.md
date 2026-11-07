@@ -1,6 +1,6 @@
 # Settings (Views/Settings/)
 
-The two-pane Settings page in the main window (opened from Home's gear or ⌘,): a scrollable sidebar of eight
+The two-pane Settings page in the main window (opened from Home's gear or the app's Settings menu item): a scrollable sidebar of eight
 pages grouped under App, Personalization, and Support, with an About footer
 (a quiet Invite friends row, followed by version/build and a heart-marked Open source link),
 the selected pane on the right, and the trust ribbon riding only the two panes where the files story is

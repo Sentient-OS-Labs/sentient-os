@@ -22,6 +22,7 @@ import WebKit
 
 struct OnboardingFilmView: View {
     let onContinue: () -> Void
+    @AppStorage("onboarding.downloadProgressRevealed") private var downloadProgressRevealed = false
 
     #if DEBUG
     /// Preview the restaurant film at its invitation park using isolated test preferences.
@@ -37,6 +38,9 @@ struct OnboardingFilmView: View {
     /// performance while the film is parked on the invitation (click the notch / press right ⌘).
     @Environment(AppState.self) private var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var awake = DisplayAwake()
+    @State private var isVisible = false
 
     private var inviting: Bool { phase == .awaitingNotch && appState.commandCoordinator.phase == .hidden }
 
@@ -58,9 +62,25 @@ struct OnboardingFilmView: View {
     private enum Phase {
         case loading, playing, parked, ridingToInvitation, awaitingNotch,
              ridingSidekick, sidekickDone, doubleTap, unavailable
+
+        var playsAutomatically: Bool {
+            switch self {
+            case .playing, .ridingToInvitation, .ridingSidekick: true
+            default: false
+            }
+        }
     }
     @State private var phase: Phase = .loading
     @State private var replayingIntro = false
+
+    private var shouldKeepDisplayAwake: Bool {
+        isVisible && scenePhase == .active && (phase.playsAutomatically || replayingIntro)
+    }
+
+    private func updateDisplayAwake() {
+        if shouldKeepDisplayAwake { awake.begin(reason: "Onboarding demo playback") }
+        else { awake.end() }
+    }
 
     /// didFinish fired — arms the fallback fade for a "ready"-less page (older deploy).
     @State private var finishedLoad = false
@@ -225,9 +245,13 @@ struct OnboardingFilmView: View {
     var body: some View {
         stage
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: inviting)
+        .onAppear { isVisible = true; updateDisplayAwake() }
+        .onChange(of: shouldKeepDisplayAwake) { _, _ in updateDisplayAwake() }
         // The film step leaving (Continue, back) must never strand an armed demo — the
         // notch goes back to its real behavior the moment onboarding moves on.
         .onDisappear {
+            isVisible = false
+            awake.end()
             replayingIntro = false
             appState.commandCoordinator.disarmOnboardingNotchDemo()
         }
@@ -326,6 +350,7 @@ struct OnboardingFilmView: View {
     /// Continue opens the native Double Tap lesson, which owns its own completion gate.
     private func advanceFromPark() {
         guard !replayingIntro else { return }
+        downloadProgressRevealed = true
         switch phase {
         case .parked:
             setPhase(.ridingToInvitation)
@@ -412,7 +437,10 @@ struct OnboardingFilmView: View {
             Spacer()
             Text("An AI that knows your life, and acts on it.")
                 .display(30)
-            OnboardingNextButton(title: "Continue", action: { setPhase(.doubleTap) })
+            OnboardingNextButton(title: "Continue", action: {
+                downloadProgressRevealed = true
+                setPhase(.doubleTap)
+            })
             Spacer()
             OnboardingTrustFooter()
         }

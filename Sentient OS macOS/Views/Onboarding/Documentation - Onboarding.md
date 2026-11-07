@@ -190,7 +190,7 @@ policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `
 ## Things that happen around the steps
 
 - AppState starts shared Codex CLI/native preparation at launch. Compatible installations are reused. The local model starts downloading during the intro into app-owned Application Support without FDA; it never gates Home or Sidekick. Claude Code remains engine-specific.
-- `DisplayAwake` holds the screen on during the introduction and model connection; Home ends that hold.
+- `DisplayAwake` holds the screen on only during active foreground film playback or replay. Paused screens, the interactive lesson, inactive scenes, and leaving the film release the hold.
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
 - Sidekick is available after the model connection and remains available during personal setup. The film retains its isolated notch demo and the existing pre-Home gesture policy.
 - The DEBUG "SKIP INTRO" handle jumps straight to the frontier-model picker from any intro phase,

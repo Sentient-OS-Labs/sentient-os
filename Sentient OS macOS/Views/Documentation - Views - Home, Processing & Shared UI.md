@@ -17,6 +17,7 @@ serif italic display, no borrowed brand hues.
 
 | File | Job |
 |---|---|
+| `ReadingPanel.swift` | Native shell for ephemeral Summary and Proofread readers; stable sizing, nonactivating focus and Escape/Command-W dismissal. |
 | `RootView.swift` | The main window's switchboard: introduction/model → Home, with retained Settings and Knowledge pages. Routes optional setup and analysis to separate windows, and owns background whispers, the update gate and Dev Tools. |
 | `HomeView.swift` | THE home: chrome, measured caution placement, paged card spreads, chat, the empty state, the retained legacy diagnostic preview, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
 | `HomePersonalSetup.swift` | Sidekick-first invitation, four draft-only suggestions, the optional personal-setup reward panel, and local feature examples. No source access or task execution. |

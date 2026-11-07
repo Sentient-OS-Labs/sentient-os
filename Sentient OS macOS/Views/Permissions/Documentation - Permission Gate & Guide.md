@@ -20,6 +20,7 @@ only check permission state and never request consent. Three pieces:
 | `NativePermissionSetup.swift` | Records native setup and recovery history for diagnostics. Never gates chat admission. Legacy drag/click receipts are ignored. |
 | `ComputerUseUpgrade.swift` | Persistent upgrade coordination, native setup window, installation, readiness, release, and reset. |
 | `ComputerUseWindowGuard.swift` | Excludes regular scene content during setup and registers its AppKit window for hiding. |
+| `QuickActionPermissionView.swift` | Shared Summarize/Proofread setup: feature-specific rows, live grant refresh, Done and explicit close. |
 | `PermissionGuide.swift` | `guide(pane, dragging:)`: open the pane and raise the panel; drag vs instruction mode; close. |
 | `PermissionDragPanel.swift` | The borderless, non-activating panel that flies from the pressed button to just below the Settings window and follows it; the Finder-shaped drag source. |
 | `SettingsWindowTracker.swift` | Follows the System Settings window: a 30 Hz zero-permission `CGWindowList` poll plus AX observers when available; 12 misses = Settings closed → the panel dismisses. |
@@ -35,6 +36,14 @@ labels, and uses **Grant** buttons for
 remaining steps. Release hides verified rows; Debug deliberately shows all rows. Settings keeps its full permission layout. Double Tap uses the same compact layout and Grant
 buttons for Sentient’s own Accessibility and Screen Recording. Its Done button still requires
 both real grants; once ready, a short hint tells the user to focus their reply field and tap again.
+
+Summarize and Proofread reuse `PermissionSetupView` and `SentientAppPermissionRows` inside their
+existing panels. `QuickActionPermissionView` shows only Screen Recording or Accessibility,
+respectively. A nil row state means the feature does not require that grant, including in Debug.
+The shared shell accepts the available panel size; long content scrolls in smaller windows.
+Real permission checks refresh while visible and when Sentient becomes active. Done rechecks the
+grant and closes setup without replaying the request; explicit close remains available throughout.
+Release hides granted rows, while the ready hint explains how to start a fresh action.
 
 When a user clicks **Grant**, the shared permission rows move their setup window to the left
 of its current screen before opening System Settings, making room for the authentication dialog.
@@ -201,7 +210,10 @@ back to front.
 
 `CommandCoordinator.submit` (the bar, Sidekick, notch typing), `ForYouModel.run` (real cards), `AppState` and all regular app scenes
 (`ComputerUseUpgrade` plus `ComputerUseWindowGuard`), onboarding's permissions step (FDA drag, Login Items
-instruction), and Settings → Health (FDA, Accessibility, Screen Recording).
+instruction), and Settings → Health (FDA, Accessibility, Screen Recording). Summarize and Proofread
+also use the guide from their setup Grant rows, carrying `Bundle.main.bundleURL` for
+Screen Recording and Accessibility respectively. Their reading panels move aside before Settings
+opens. These actions do not grant access or automatically retry the screen/text request.
 
 ## Related docs
 

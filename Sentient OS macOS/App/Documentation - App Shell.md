@@ -24,6 +24,8 @@ this is the wiring.
 - **Proactive · Execute** and **Overnight Processing**: dev-only windows opened from Dev Tools.
 - **MenuBarExtra**: `MenuBarView` with the orb mark as a template icon.
 
+The app menu keeps **Settings…** available without a keyboard shortcut; global `⌘,` belongs to Summarize.
+
 `SentientOSApp.isHomeWindow(_:)` recognizes the home window by its identifier prefix; `DockPolicy` and `MenuBarView.openHome()` use it.
 
 ## The launch sequence (`AppState.init`)

@@ -30,6 +30,8 @@ struct RootView: View {
 
     /// Observed for the shared onboarding/Home download status card.
     @State private var download = ModelDownload.shared
+    @AppStorage("onboarding.downloadProgressRevealed") private var downloadProgressRevealed = false
+    @AppStorage("onboarding.step") private var onboardingStep = 0
     @State private var backgroundSetupHeight: CGFloat = 0
     @State private var homeBottomDockHeight: CGFloat = 0
 
@@ -111,7 +113,10 @@ struct RootView: View {
         .onPreferenceChange(HomeBottomDockHeightKey.self) { homeBottomDockHeight = $0 }
         .overlay(alignment: appState.hasCompletedOnboarding ? .bottomTrailing : .bottomLeading) {
             VStack(alignment: appState.hasCompletedOnboarding ? .trailing : .leading, spacing: 10) {
-                if navigation.page == .home { ModelDownloadWhisper(download: download) }
+                if navigation.page == .home,
+                   appState.hasCompletedOnboarding || onboardingStep > 0 || downloadProgressRevealed {
+                    ModelDownloadWhisper(download: download)
+                }
                 if computerSetup.isInstalling && navigation.page == .home {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small).scaleEffect(0.6)
@@ -130,6 +135,7 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.35), value: computerSetup.isInstalling)
         .animation(.easeInOut(duration: 0.35), value: download.phase)
+        .animation(.easeInOut(duration: 0.35), value: downloadProgressRevealed)
         .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)

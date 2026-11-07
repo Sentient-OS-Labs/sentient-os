@@ -16,6 +16,7 @@ import AppKit
 import SwiftUI
 
 func Log(_ text: String) {}
+final class Proofread { static let shared = Proofread(); var isRunning = false }
 enum DoubleTapProvider: String { case sentient; static var current: Self { .sentient }; var model: String { "fixture" } }
 enum Diagnostics {
     enum Phase: String { case capture }
@@ -74,6 +75,13 @@ final class DoubleTap {
         }
         func notice() -> NSWindow? { NSApp.windows.first { String(describing: type(of: $0)) == "DoubleTapNoticePanel" } }
         let run = DoubleTap(), originalKey = NSApp.keyWindow
+        Proofread.shared.isRunning = true
+        var blockedCompletions = 0
+        run.start { result in if case .stopped = result { blockedCompletions += 1 } }
+        check(blockedCompletions == 1 && !run.isDrafting && run.providerCalls == 0
+              && DoubleTapPermissionGate.shared.calls == 0,
+              "active proofreading blocks drafting before setup or permissions")
+        Proofread.shared.isRunning = false
         var completions = 0
         run.start { _ in completions += 1 }
         check(run.isDrafting, "setup feedback owns the Double Tap task lock immediately")

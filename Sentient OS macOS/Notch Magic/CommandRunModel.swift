@@ -29,7 +29,16 @@ final class CommandRunModel {
     static let offlineMessage = "You might be offline. Retrying..."
 
     var isRunning = false
+    /// A delivered final answer ends the visible work, not the executor's cleanup lock.
+    /// New activity invalidates the claim in the conversation recorder.
+    var hasDeliveredFinalAnswer: Bool {
+        _ = conversation.revision
+        _ = conversation.latestActivity
+        return isRunning && conversationTask?.hasDeliveredAnswer == true
+    }
     private(set) var isPreparing = false
+    private(set) var isStarting = false
+    private(set) var startupCaption = "Getting things ready…"
     private var permissionWait: PermissionWaitDraft.Snapshot?
     private var permissionWaitCleanupFailed = false
     private(set) var isClearingChat = false
@@ -58,6 +67,7 @@ final class CommandRunModel {
     private var requestCompletion: ((Outcome) -> Void)?
     let recovery = SidekickRecovery()
     @ObservationIgnored var onRecoveryResumed: (() -> Void)?
+    @ObservationIgnored var makeQuickActions: ((String) -> SidekickQuickActions)?
     private(set) var interaction: SidekickInteraction?
     private(set) var runID = UUID()
     @ObservationIgnored private var retryAction: ((String) -> Void)?
@@ -136,7 +146,9 @@ final class CommandRunModel {
         remembering = nil
         rememberClear?.cancel()
         isPreparing = true
-        statusLine = "Preparing Sidekick…"
+        isStarting = true
+        startupCaption = SidekickStartupCopy.choose(excluding: startupCaption)
+        statusLine = startupCaption
         watchConnectivity()
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         // prepareRecovery captured the previous requests before this run enters history.
@@ -162,7 +174,7 @@ final class CommandRunModel {
                         try await HostedInference.withRun(purpose: .sidekick) { @MainActor [weak self] in
                         guard self?.runID == generation else { throw CancellationError() }
                         owner.isPreparing = false
-                        owner.statusLine = "Starting Sidekick…"
+                        owner.statusLine = owner.startupCaption
                         try await HostedConnectorAuthorization.authorize(task0)
                         try Task.checkCancellation()
                         // Capture after required permissions settle. Frames go to the user's
@@ -290,6 +302,7 @@ final class CommandRunModel {
             instructionsSnapshot: snapshot, personalization: personalization,
             taskSummary: source == "proactive_card" ? nil : SidekickTaskSummary(),
             conversationRun: conversationTask,
+            quickActions: makeQuickActions?(source),
             diagnosticTaskID: diagnosticTaskID, diagnosticAttempt: diagnosticAttempt) { [weak self] question in
             guard let self, self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
@@ -459,7 +472,7 @@ final class CommandRunModel {
         stopWatchingConnectivity(); clearRemembering()
         statusClearTask?.cancel(); statusClearTask = nil
         task = nil; externalStop = nil; activeCardID = nil; requestCompletion = nil
-        isPreparing = false; isPersonalizing = false; isExternal = false; isDemo = false
+        isPreparing = false; isStarting = false; isPersonalizing = false; isExternal = false; isDemo = false
         isOffline = false; statusLine = ""; recent = []; section = ""
         SidekickDiagnostics.event(.chatClear, source: .reset,
             duration: ProcessInfo.processInfo.systemUptime - began)
@@ -482,6 +495,7 @@ final class CommandRunModel {
         isDemo = false
         isOffline = false
         isExternal = true
+        isStarting = false
         externalStop = onStopRequest
         isRunning = true
         recent = []
@@ -534,6 +548,7 @@ final class CommandRunModel {
         retryAction = nil; interaction = nil
         mode = .computer
         isDemo = true
+        isStarting = false
         isOffline = false
         statusClearTask?.cancel()
         isRunning = true
@@ -607,6 +622,7 @@ final class CommandRunModel {
         statusLine = line
         isRunning = false
         isPreparing = false
+        isStarting = false
         isExternal = false
         externalStop = nil
         task = nil
@@ -681,6 +697,7 @@ final class CommandRunModel {
         if t.hasPrefix("→ Gmail.") || t.hasPrefix("→ gmail.") {
             let tool = t.split(separator: ".", maxSplits: 1).last.map(String.init) ?? ""
             if ["get_", "list_", "search_"].contains(where: { tool.hasPrefix($0) }) {
+                isStarting = false
                 if recent.last != "Reading Gmail" {
                     recent.append("Reading Gmail")
                     if recent.count > 2 { recent.removeFirst() }
@@ -692,8 +709,10 @@ final class CommandRunModel {
 
         // The confirmation-policy dump's tail lingers — show a clean status for that whole loading beat.
         if t.range(of: "avoid redundant confirmations", options: .caseInsensitive) != nil {
-            recent = ["Thinking through your task"]
-            statusLine = "Thinking through your task"
+            if isStarting {
+                recent = [startupCaption]
+                statusLine = startupCaption
+            }
             return
         }
 
@@ -707,6 +726,7 @@ final class CommandRunModel {
         }
 
         guard let shown = Self.barLine(t, section: section) else { return }   // drop chrome / echo / output
+        isStarting = false
         recent.append(shown)
         if recent.count > 2 { recent.removeFirst() }
         statusLine = recent.joined(separator: "\n")
@@ -715,6 +735,7 @@ final class CommandRunModel {
     /// Hold the "Remembering" state on the note codex is reading, refreshing a ≥1.5s minimum so the bloom
     /// animation completes even when only a single file is read.
     private func setRemembering(_ note: String) {
+        isStarting = false
         remembering = note
         rememberClear?.cancel()
         rememberClear = Task { [weak self] in

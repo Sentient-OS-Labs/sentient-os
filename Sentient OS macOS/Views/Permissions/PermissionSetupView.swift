@@ -12,6 +12,7 @@ struct PermissionSetupView<Content: View>: View {
     let onContinue: () -> Void
     var compact = false
     var edgeGlow = false
+    var availableSize: CGSize? = nil
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -37,7 +38,8 @@ struct PermissionSetupView<Content: View>: View {
         .padding(.horizontal, compact ? 32 : 44)
         .padding(.top, compact ? 26 : 34)
         .padding(.bottom, 24)
-        .frame(width: compact ? 480 : 560)
+        .frame(width: availableSize?.width ?? (compact ? 480 : 560))
+        .frame(minHeight: availableSize?.height, alignment: .top)
         .background {
             if edgeGlow { PermissionWindowAtmosphere() }
             else { Color.black }
@@ -87,11 +89,11 @@ struct PermissionSetupGroup<Content: View>: View {
     }
 }
 
-/// A nil Accessibility state omits that row when only Sentient's screen context is required.
+/// A nil state omits that grant when the feature only needs the other permission.
 /// These grants always belong to Sentient itself, independently of the computer-use helper.
 struct SentientAppPermissionRows: View {
     var accessibility: Bool?
-    let screen: Bool
+    var screen: Bool?
     var accessibilityTitle = "Accessibility (act in your apps)"
     var accessibilityTip = "Lets Sentient read windows and act inside your apps in the background."
     var compact = false
@@ -107,37 +109,11 @@ struct SentientAppPermissionRows: View {
     }
 
     var body: some View {
-        if PermissionSetupPresentation.showsGrant(screen, compact: compact)
+        if screen.map({ PermissionSetupPresentation.showsGrant($0, compact: compact) }) == true
             || accessibility.map({ PermissionSetupPresentation.showsGrant($0, compact: compact) }) == true
             || showsAutomation {
             PermissionSetupGroup(label: "Sentient Permissions", compact: compact) {
                 VStack(alignment: .leading, spacing: 2) {
-                    if let accessibility, PermissionSetupPresentation.showsGrant(accessibility, compact: compact) {
-                        StatusLine(title: accessibilityTitle,
-                                   health: accessibility ? .ok : .bad,
-                                   note: accessibility ? "granted" : (compact ? "" : "not granted"),
-                                   tip: accessibilityTip,
-                                   fixTitle: compact ? "Grant" : "Allow…") {
-                            guard !accessibility else { return }
-                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
-                            onPermissionChange?()
-                            PermissionGuide.shared.guide(.accessibility, dragging: Bundle.main.bundleURL)
-                        }
-                    }
-                    if PermissionSetupPresentation.showsGrant(screen, compact: compact) {
-                        StatusLine(title: compact ? "Screen Recording" : "Screen Recording (see the screen)",
-                                   health: screen ? .ok : .bad,
-                                   note: screen ? "granted" : (compact ? "" : "not granted"),
-                                   tip: PrivacyCopy.screenCapture,
-                                   fixTitle: compact ? "Grant" : "Allow…") {
-                            guard !screen else { return }
-                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
-                            onPermissionChange?()
-                            // Sentient may not be in Tahoe's list yet. The guide carries its app bundle.
-                            PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL,
-                                                         onDrop: onScreenRecordingDrop)
-                        }
-                    }
                     if showsAutomation, let automation {
                         StatusLine(title: "Automation",
                                    health: automation == .granted ? .ok : .bad,
@@ -153,6 +129,33 @@ struct SentientAppPermissionRows: View {
                             SettingsProse("In System Settings → Privacy & Security → Automation, enable the computer-use helper under Sentient OS.")
                         }
                     }
+                    if let accessibility, PermissionSetupPresentation.showsGrant(accessibility, compact: compact) {
+                        StatusLine(title: accessibilityTitle,
+                                   health: accessibility ? .ok : .bad,
+                                   note: accessibility ? "granted" : (compact ? "" : "not granted"),
+                                   tip: accessibilityTip,
+                                   fixTitle: compact ? "Grant" : "Allow…") {
+                            guard !accessibility else { return }
+                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
+                            onPermissionChange?()
+                            PermissionGuide.shared.guide(.accessibility, dragging: Bundle.main.bundleURL)
+                        }
+                    }
+                    if let screen, PermissionSetupPresentation.showsGrant(screen, compact: compact) {
+                        StatusLine(title: compact ? "Screen Recording" : "Screen Recording (see the screen)",
+                                   health: screen ? .ok : .bad,
+                                   note: screen ? "granted" : (compact ? "" : "not granted"),
+                                   tip: PrivacyCopy.screenCapture,
+                                   fixTitle: compact ? "Grant" : "Allow…") {
+                            guard !screen else { return }
+                            PermissionSetupPresentation.moveAsideForSystemPrompt(NSApp.keyWindow)
+                            onPermissionChange?()
+                            // Sentient may not be in Tahoe's list yet. The guide carries its app bundle.
+                            PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL,
+                                                         onDrop: onScreenRecordingDrop)
+                        }
+                    }
+
                 }
             }
         }

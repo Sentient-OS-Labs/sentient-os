@@ -29,6 +29,10 @@ struct OnboardingResetChecks {
         DirectMCPConnections.shared.fail = true
         let failed = await FactoryReset.run(appState: app, defaults: defaults)
         try check(!failed, "Failed cleanup must return false")
+        try check(app.commandCoordinator.cancelledPreparations == 1
+                  && app.commandCoordinator.proofread.closed == 1
+                  && app.commandCoordinator.summarize.dismissed == 1,
+                  "Reset must dismiss transient quick actions before clearing personal state")
         try check(defaults.bool(forKey: "onboarding.emailSubmitted"), "Failed reset lost email completion")
         try check(defaults.integer(forKey: "onboarding.step") == 4, "Failed reset rewound setup")
         try check(app.hasCompletedOnboarding, "Failed reset changed the live screen")
@@ -132,6 +136,12 @@ enum CodexAuth {
     let processing = ProcessingCoordinator.shared
     @MainActor final class Coordinator {
         let run = Run()
+        var cancelledPreparations = 0
+        func cancelQuickActionPreparation() { cancelledPreparations += 1 }
+        let proofread = Proofread()
+        let summarize = Summaries()
+        final class Proofread { var closed = 0; func close() { closed += 1 } }
+        final class Summaries { var dismissed = 0; func dismiss() { dismissed += 1 } }
         @MainActor final class Run {
             let conversation = SidekickConversation.shared
             func stop() {}

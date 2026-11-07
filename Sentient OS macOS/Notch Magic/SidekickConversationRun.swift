@@ -28,6 +28,14 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         return recordedCompletion
     }
 
+    /// Presentation can stop showing "working" once an answer is delivered, even
+    /// if the agent omitted its separate outcome claim. This never marks a run successful.
+    var hasDeliveredAnswer: Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed, (try? store.generation) == generation else { return false }
+        return answerDelivered && !tools.values.contains { $0.status == .started && !Self.isBookkeeping($0.name) }
+    }
+
     init(store: SidekickConversationStore, taskID: UUID, generation: UUID,
          backend: String = "unknown", source: String = "unknown") {
         self.store = store; self.taskID = taskID; self.generation = generation

@@ -1,6 +1,7 @@
 // Optional personal-context setup lives in its own window, so Home, the notch, and a live
 // Sidekick conversation keep their lifetime while connections and permissions are chosen.
 import SwiftUI
+import AppKit
 
 struct PersonalSetupView: View {
     static let windowID = "personal-setup"
@@ -40,6 +41,7 @@ struct PersonalSetupView: View {
         }
         .frame(minWidth: 700, minHeight: 560)
         .background(Theme.bg).preferredColorScheme(.dark)
+        .background(PersonalSetupWindowFit())
         .accessibilityIdentifier("personalSetup.window")
         .onAppear {
             guard appState.hasCompletedOnboarding else {
@@ -51,5 +53,39 @@ struct PersonalSetupView: View {
             _ = PersonalSetupProgress.consumeRelaunchResume()
         }
         .allowsHitTesting(appState.hasCompletedOnboarding)
+    }
+}
+
+private struct PersonalSetupWindowFit: NSViewRepresentable {
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) {}
+    static func dismantleNSView(_ view: Probe, coordinator: ()) { view.stop() }
+
+    final class Probe: NSView {
+        private var observers: [NSObjectProtocol] = []
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stop()
+            guard let window else { return }
+            for name in [NSWindow.didChangeScreenNotification, NSApplication.didChangeScreenParametersNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name,
+                    object: name == NSWindow.didChangeScreenNotification ? window : nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.fit() }
+                })
+            }
+            DispatchQueue.main.async { [weak self] in self?.fit() }
+        }
+        private func fit() {
+            guard let window, !window.styleMask.contains(.fullScreen), let screen = window.screen else { return }
+            let available = screen.visibleFrame
+            let width = min(window.frame.width, available.width)
+            let x = min(max(window.frame.minX, available.minX), available.maxX - width)
+            let frame = NSRect(x: x, y: available.minY, width: width, height: available.height)
+            if window.frame != frame { window.setFrame(frame, display: true) }
+        }
+        func stop() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+        }
     }
 }

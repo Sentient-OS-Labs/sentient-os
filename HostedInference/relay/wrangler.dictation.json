@@ -1,0 +1,54 @@
+{
+  "name": "sentient-doubletap-relay",
+  "account_id": "e65b423ba148b9082355ab457f5083a9",
+  "main": "dictation.mjs",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "placement": {
+    "mode": "smart"
+  },
+  "vars": {
+    "DAILY_CAP": "100",
+    "GLOBAL_MONTHLY_CAP": "0",
+    "HOURLY_CAP": "60",
+    "MAX_IMAGE_BASE64_BYTES": "2000000",
+    "MAX_KNOWLEDGE_BASE_BYTES": "700000",
+    "MODEL": "gpt-6-sol",
+    "SUPABASE_URL": "https://hjqedlalhfoxwehxhton.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_MFHS0LDzdAW1lGyEf1MUig_BzqObIr9",
+    "SCRIBE_ENABLED": "true",
+    "SCRIBE_ZERO_RETENTION": "false",
+    "SENTIENT_SUMMARIZE_ENABLED": "true",
+    "SENTIENT_PROOFREAD_ENABLED": "true"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COUNTERS",
+        "class_name": "Counter"
+      }
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": false
+    }
+  },
+  "exports": {
+    "Counter": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "compatibility_flags": [
+    "enable_request_signal"
+  ],
+  "keep_vars": true
+}

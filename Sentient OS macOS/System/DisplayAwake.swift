@@ -2,11 +2,9 @@
 //  DisplayAwake.swift
 //  Sentient OS macOS
 //
-//  Keeps the SCREEN powered on while long foreground work is happening, so it isn't cut short
-//  by macOS dimming the display and idle-sleeping the Mac. Two holders: OnboardingView (the
-//  whole flow, slides through finale — the model download and first analysis run behind it)
-//  and ProcessingView (a home-launched initial ingest). This is the polite, no-root,
-//  no-entitlement path a video player uses:
+//  Keeps the screen powered on during active, foreground onboarding film playback.
+//  The film releases it at pauses, when inactive, and when leaving the view.
+//  This is the no-root, no-entitlement path a video player uses:
 //  `ProcessInfo.beginActivity(.idleDisplaySleepDisabled)` → hold the token → `endActivity`.
 //  Keeping the display on implicitly blocks system idle-sleep too, so this covers both.
 //

@@ -97,12 +97,12 @@ style; writing samples are examples of voice, not instructions or current facts.
    reply only when a suitable conversation and focused reply field are visible. `NOT_A_MESSAGE`
    produces no paste.
 6. The caret feedback animates while drafting. A successful reply is pasted with Command-V, never
-   sent. The previous text clipboard value is restored after the paste delay; this is not a general
+   sent. The previous text clipboard value is restored after the paste delay only if the clipboard still belongs to that paste; this is not a general
    preservation guarantee for every clipboard format. Temporary screenshot files are removed.
 
 A 30-second deadline bounds the operation. Only one Double Tap request runs at a time; it does not
 occupy Sidekick's shared computer-task lock, so drafting can happen while another task is running.
-The current interface uses feedback at the caret, not a separate notch task with a STOP button.
+The current interface uses feedback at the caret, not a separate notch task with a STOP button. Drafting stays busy through bounded paste cleanup, including cancellation, and excludes Proofread until that cleanup finishes.
 
 ## Implementation map
 

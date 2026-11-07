@@ -19,39 +19,12 @@
 //
 
 import Foundation
-import Security
 
 enum DoubleTapInference {
-    /// The deployed Worker (its name, then the account's workers.dev subdomain). Dev Tools can
-    /// override it (`doubletap.relayURL`) to point at a preview or a local `wrangler dev`
-    /// (`http://localhost:8787`).
-    static let defaultRelayURL = "https://sentient-doubletap-relay.sentient-doubletap-relay.workers.dev"
-    static let relayURLKey = "doubletap.relayURL"
-    static var relayURL: URL? {
-        let override = UserDefaults.standard.string(forKey: relayURLKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let raw = override.isEmpty ? defaultRelayURL : override
-        return raw.isEmpty ? nil : URL(string: raw)
-    }
-
-    /// The relay identity: 32 random bytes, base64url, minted once into the Keychain. It is the
-    /// user's only name to the relay (no accounts); the Worker keeps a hash of it as the counter
-    /// key and never stores the secret itself.
-    static let relayIdentityAccount = "doubletap.relay.identity"
-    static var relayIdentity: String {
-        if let existing = Keychain.read(relayIdentityAccount), !existing.isEmpty { return existing }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        if status != errSecSuccess {
-            Diagnostics.report(.keychainFailed, phase: .random, reason: "relay_identity", counts: [.osStatus: Int(status)])
-        }
-        let minted = Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        Keychain.set(relayIdentityAccount, minted)
-        return minted
-    }
+    // Preserve the existing Dev Tools keys while sharing the covered transport identity.
+    static let defaultRelayURL = ScreenRelay.defaultURL
+    static let relayURLKey = ScreenRelay.urlKey
+    static var relayURL: URL? { ScreenRelay.url }
 
     /// Nil when the selected route can run; otherwise the ✗ caption naming what is missing.
     static var configurationProblem: String? {
@@ -182,7 +155,7 @@ enum DoubleTapInference {
         case .sentient:
             guard let base = relayURL else { throw Failure.relay("relay URL not set (Dev Tools)") }
             request = try relayRequest(base: base, image: screenshot, knowledgeBase: packed.text,
-                                       customInstructions: customInstructions, identity: relayIdentity)
+                                       customInstructions: customInstructions, identity: ScreenRelay.identity())
         }
         let started = Date()
         var timing = Timing()

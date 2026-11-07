@@ -47,6 +47,7 @@ actor SidekickToolServer {
         if interaction.conversationRun != nil { tools += SidekickConversationTools.names }
         if interaction.personalization != nil { tools.append(SidekickPersonalization.toolName) }
         if interaction.taskSummary != nil { tools.append(SidekickTaskSummary.toolName) }
+        if interaction.quickActions != nil { tools += SidekickQuickActionTools.names }
         let transport = LocalMCPServer(name: Self.name, tools: tools, timeout: Self.maximumWait, maximumBody: 1_048_576) { [weak self] data in
             guard let self, let rpc = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CancellationError() }
             return try await self.response(rpc)
@@ -75,7 +76,8 @@ actor SidekickToolServer {
             return try reply(["tools": [Self.tool]
                 + (interaction.conversationRun == nil ? [] : SidekickConversationTools.schemas)
                 + (interaction.personalization == nil ? [] : [SidekickPersonalization.tool])
-                + (interaction.taskSummary == nil ? [] : [SidekickTaskSummary.tool])])
+                + (interaction.taskSummary == nil ? [] : [SidekickTaskSummary.tool])
+                + (interaction.quickActions == nil ? [] : SidekickQuickActionTools.schemas)])
         case "tools/call":
             guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String else {
                 return try reply(Self.invalidArguments)
@@ -113,7 +115,10 @@ actor SidekickToolServer {
                     return try reply(Self.invalidArguments)
                 }
                 let action: @Sendable () async throws -> Data
-                if SidekickConversationTools.names.contains(name), let run = interaction.conversationRun {
+                if SidekickQuickActionTools.names.contains(name), let actions = interaction.quickActions {
+                    guard let request = try? SidekickQuickActionTools.decode(name, arguments) else { return try reply(Self.invalidArguments) }
+                    action = { try await SidekickQuickActionTools.invoke(request, actions: actions) }
+                } else if SidekickConversationTools.names.contains(name), let run = interaction.conversationRun {
                     let encoded = try Self.json(arguments)
                     action = {
                         guard let values = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
@@ -190,6 +195,10 @@ actor SidekickToolServer {
                 return try reply(["content": [["type": "text", "text": String(decoding: result, as: UTF8.self)]]])
             } catch {
                 if activeCall == key { activeCall = nil }
+                if SidekickQuickActionTools.names.contains(name) {
+                    if error is CancellationError { throw error }
+                    return try reply(Self.toolError((error as? LocalizedError)?.errorDescription ?? "The action could not finish. Do not claim it completed."))
+                }
                 if name == SidekickPersonalization.toolName {
                     let message = await Self.rejectedPersonalization(error)
                         return try reply(Self.toolError(message))

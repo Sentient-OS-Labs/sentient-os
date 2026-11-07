@@ -63,7 +63,6 @@ struct SentientOSApp: App {
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { HomeWindowOpening.open(.settings) }
-                    .keyboardShortcut(",", modifiers: .command)
                     .disabled(!appState.hasCompletedOnboarding || ComputerUseUpgrade.shared.isBlockingInterface)
             }
         }
@@ -163,6 +162,11 @@ final class SentientAppDelegate: NSObject, NSApplicationDelegate {
     private var isResolvingTermination = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Explicit restart already saved the draft and drained the permission client.
+        // Complete this common path synchronously instead of requesting a second quit cycle.
+        if SafeAppRelaunch.shared.hasPreparedRestart, MainNavigation.shared.page != .knowledge {
+            return SafeAppRelaunch.shared.approveTermination() ? .terminateNow : .terminateCancel
+        }
         guard !isResolvingTermination else { return .terminateLater }
         isResolvingTermination = true
         let navigation = MainNavigation.shared

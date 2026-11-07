@@ -358,6 +358,29 @@ actor MirrorClient {
 
 /// Minimal Keychain wrapper for small secrets (the mirror tokens). One service, key = account.
 enum Keychain {
+    /// Create only after an authoritative not-found result. A locked/read-failed Keychain must
+    /// never replace a saved installation identity or mint a new allowance for this request.
+    static func readOrCreate(_ key: String, make: () -> String?) -> String? {
+        let identity: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: key]
+        var query = identity
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess {
+            guard let data = item as? Data else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+        guard status == errSecItemNotFound, let value = make() else { return nil }
+        var insertion = identity
+        insertion[kSecValueData as String] = Data(value.utf8)
+        insertion[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let added = SecItemAdd(insertion as CFDictionary, nil)
+        if added == errSecDuplicateItem { return read(key) }
+        return added == errSecSuccess ? value : nil
+    }
+
     private static var service: String {
         #if DEBUG
         if Bundle.main.bundleIdentifier == "ai.sentientos.acceptance" { return "ai.sentientos.acceptance.mirror" }

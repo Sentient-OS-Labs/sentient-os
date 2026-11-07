@@ -15,9 +15,6 @@ struct OnboardingView: View {
 
     @State private var isPresentingInviteGift = false
 
-    /// Keep setup visible; the analysis owner separately holds system sleep while it works.
-    @State private var awake = DisplayAwake()
-
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
@@ -31,9 +28,6 @@ struct OnboardingView: View {
                 OnboardingFrontierModelView(onContinue: onFinished).transition(.opacity)
             }
         }
-        // The introduction ends at Home; the display can then sleep normally.
-        .onAppear { awake.begin(reason: "Onboarding — keeping the screen on") }
-        .onDisappear { awake.end() }
         // No right-clicks anywhere in onboarding — the film's webview would offer a browser
         // context menu (Reload…), and no onboarding surface has a legitimate right-click.
         // Window-scoped, gone with this view.

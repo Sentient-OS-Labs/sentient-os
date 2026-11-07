@@ -11,16 +11,18 @@ jobs, how it works at a mid level, the rules and sharp edges that break things w
 to look next. Plain language, no invented terms, no changelog clutter; the code is the source of truth
 for details.
 
-## One understanding, three ways to act
+## Context and quick actions
 
 Sentient builds useful context from the sources you choose, then brings that context into the small
-moments that fill your day. **The work between the work adds up.** These are the three ways to use it:
+moments that fill your day. **The work between the work adds up.** These are the main ways to use it:
 
 | Feature | What it does | Start here |
 |---|---|---|
-| **Sidekick: when you ask.** | Click the notch, type, or hold the Sidekick key to speak. Hand off the task in front of you using your screen and knowledge as context, in your own apps and logged-in browser. | [Sidekick](Notch%20Magic/Documentation%20-%20Sidekick%20-%20General.md) |
+| **Sidekick: when you ask.** | Click the notch or tap the Sidekick key to type; hold the notch or use its microphone to speak. Hand off the task in front of you using your screen and knowledge as context, in your own apps and logged-in browser. | [Sidekick](Notch%20Magic/Documentation%20-%20Sidekick%20-%20General.md) |
 | **Double Tap: in two taps.** | Double tap the Sidekick key, right Command by default, to draft a reply in the focused field using the visible conversation, your knowledge and one-time writing examples. You review and send it. | [Double Tap](Double%20Tap/Documentation%20-%20Double%20Tap.md) |
 | **Proactive intelligence: before you ask.** | Wake up to useful drafts, plans and suggestions prepared from your context. Review them and start the action with a click. | [Proactive intelligence](Proactive/Documentation%20-%20Proactive%20Intelligence.md) |
+| **Summarize: understand this screen.** | Turn one visible display into a readable summary through the covered OpenAI relay. | [Summarize](Summarize/Documentation%20-%20Summarize.md) |
+| **Proofread: correct selected text.** | Replace a verified selection with a conservative correction, with a Copy fallback when the editor cannot safely accept it. | [Proofread](Proofread/Documentation%20-%20Proofread.md) |
 
 For example: hand off a registration you have started, draft a client update using relevant project
 knowledge, or catch a follow-up you forgot. The important connection is context from across your life,
@@ -45,7 +47,7 @@ model and task determine what Sentient can complete.
 
 No separate Sentient account is required. The app and supporting infrastructure are open source.
 Double Tap has its own provider controls, including local options and a low-latency covered OpenAI
-API route with Zero Data Retention. Sharing is a separate opt-in with on-Mac encryption, no persisted
+API route with Zero Data Retention. Summarize and Proofread independently send the requested screen or selected text through the covered relay to OpenAI. Sharing is a separate opt-in with on-Mac encryption, no persisted
 relay key, and in-memory decryption for authorized requests.
 
 At 3 AM, Sentient can wake your Mac with the lid closed to do the understanding and preparation.
@@ -77,6 +79,8 @@ disk join the target automatically, and the docs are stripped from the shipped b
 | `Scheduling/` | The 3 AM run: the scheduler, the root wake helper and its installer, power gates, launch at login, the morning-after caution | `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md` |
 | `Notch Magic/` | Sidekick: the hotkey, voice, the shared run, the notch overlay | `Notch Magic/Documentation - Sidekick - General.md` · `Notch Magic/Documentation - Sidekick - Notch Window & Visual.md` |
 | `Double Tap/` | Double Tap: two taps of the Sidekick key (right ⌘ by default), an unsent contextual reply, editable one-time writing examples and independent cloud/local provider choice | `Double Tap/Documentation - Double Tap.md` |
+| `Summarize/` | One-display summary, streaming reader and ephemeral request lifetime | `Summarize/Documentation - Summarize.md` |
+| `Proofread/` | Selected-text capture, Luna correction, guarded replacement and Copy fallback | `Proofread/Documentation - Proofread.md` |
 | `System/` | Permissions (FDA, Sentient's action grants, TCC reads), the live health ladder, notifications, uninstall | `System/Documentation - System (Permissions, Health, Uninstall).md` |
 | `Diagnostics/` | `Log()`, Sentry, TelemetryDeck, the executor scoreboard, the source-health sensors | `Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md` |
 | `Updates/` | Sparkle auto-update and the release pipeline (`Scripts/`) | `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md` |

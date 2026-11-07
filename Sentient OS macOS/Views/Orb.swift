@@ -416,12 +416,7 @@ private struct FocusThrottledTimeline<Content: View>: View {
 struct OrbMark: View {
     var size: CGFloat = 18
     var body: some View {
-        ZStack {
-            Circle().strokeBorder(.white.opacity(0.92), lineWidth: max(1, size * 0.085))
-            Circle().fill(.white).frame(width: size * 0.38, height: size * 0.38)
-        }
-        .frame(width: size, height: size)
-        .shadow(color: Color(red: 0.69, green: 0.42, blue: 0.70).opacity(0.55), radius: size * 0.3)
+        WebsiteLogoMark(size: size)
     }
 
     /// The mark as a monochrome menu-bar TEMPLATE image — same ring + dot proportions as the

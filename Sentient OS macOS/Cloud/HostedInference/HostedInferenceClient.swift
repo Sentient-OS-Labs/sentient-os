@@ -15,6 +15,16 @@ nonisolated struct HostedInferenceConfiguration: Sendable {
         #if DEBUG
         endpoint = UserDefaults.standard.string(forKey: "sentient.hosted.gatewayURL") ?? endpoint
         #endif
+        return configured(endpoint: endpoint)
+    }
+
+    /// Voice can be deployed independently of hosted inference and the selected Sidekick AI.
+    static var dictation: Self? {
+        guard let endpoint = Bundle.main.object(forInfoDictionaryKey: "SentientDictationURL") as? String else { return nil }
+        return configured(endpoint: endpoint)
+    }
+
+    private static func configured(endpoint: String) -> Self? {
         guard let gateway = URL(string: endpoint), validEndpoint(gateway) else { return nil }
         let identity = Bundle.main.object(forInfoDictionaryKey: "SentientInferenceIdentityURL") as? String
             ?? "https://hjqedlalhfoxwehxhton.supabase.co"
@@ -116,6 +126,26 @@ actor HostedInferenceClient {
         return try credentials.read() != nil
     }
 
+    /// Scribe is independent of the selected Sidekick model. Only a single-use provider token
+    /// reaches the Mac; the permanent ElevenLabs credential stays in the gateway's secrets.
+    func dictationToken() async throws -> DictationToken {
+        try Task.checkCancellation()
+        guard let config = configuration() ?? HostedInferenceConfiguration.dictation else { throw Failure.notConfigured }
+        let response = try await authorized(config, path: "v1/dictation/token", method: "POST", body: [:])
+        try Task.checkCancellation()
+        guard let value = try? JSONDecoder().decode(DictationToken.self, from: response.data),
+              (16...8192).contains(value.token.utf8.count),
+              value.token.utf8.allSatisfy({ (0x21...0x7e).contains($0) })
+        else { throw Failure.invalidResponse }
+        return value
+    }
+
+    nonisolated struct DictationToken: Decodable, Sendable {
+        let token: String
+        let zeroRetention: Bool
+        enum CodingKeys: String, CodingKey { case token; case zeroRetention = "zero_retention" }
+    }
+
     /// Connector management authenticates with this same persisted hosted principal. Task
     /// execution uses a narrower capability; neither credential is a Composio project key.
     func connectorRequest(path: String, method: String = "POST", payload: Data? = nil,
@@ -214,6 +244,7 @@ actor HostedInferenceClient {
                             body: [String: String]? = nil) async throws -> (data: Data, sentAt: TimeInterval) {
         let first = try await identity(config)
         let sentAt = ProcessInfo.processInfo.systemUptime
+        try Task.checkCancellation()
         do {
             let data = try await request(config.gatewayURL, path: path, method: method, token: first.accessToken, body: body)
             return (data, sentAt)
@@ -222,6 +253,7 @@ actor HostedInferenceClient {
             // A rejected JWT did not authorize work. Refresh the same principal once; never
             // enroll a replacement identity or retry an uncertain admitted request.
             let refreshed = try await identity(config, rejectedAccessToken: first.accessToken)
+            try Task.checkCancellation()
             let retriedAt = ProcessInfo.processInfo.systemUptime
             let data = try await request(config.gatewayURL, path: path, method: method, token: refreshed.accessToken, body: body)
             return (data, retriedAt)

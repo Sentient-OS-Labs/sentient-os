@@ -519,7 +519,7 @@ final class ProcessingCoordinator {
             if helperHeld, await WakeHelperClient.shared.heartbeat() { return true }
             guard runID == id, stopReason == nil, record.status == .running, needsAwakeProtection else { return false }
             helperHeld = true
-            return await WakeHelperClient.shared.beginAwake(timeout: 1800)
+            return await WakeHelperClient.shared.beginAwake(timeout: 600)
         }
         awakeUpdate = update
         let held = await update.value
