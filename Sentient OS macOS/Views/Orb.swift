@@ -379,15 +379,16 @@ struct Orb: View {
     }()
 }
 
-/// The orb's frame clock, focus-aware. While the window is active it rides the display-link
-/// `.animation` schedule (a ProMotion Mac may render at up to 120fps); the moment the window
-/// loses focus it swaps to a fixed timer cadence, hard-locking the rate to `minimumInterval` —
-/// `.animation(minimumInterval:)` alone doesn't reliably cap a 120Hz panel, and a background
-/// orb has no business burning frames. Motion never jumps across the swap: every phase is a
-/// pure function of wall time.
-private struct FocusThrottledTimeline<Content: View>: View {
+/// The orb's frame clock, focus-aware (also shared with `GlowProgressBar`). While the window is
+/// active it rides the display-link `.animation` schedule (a ProMotion Mac may render at up to
+/// 120fps); the moment the window loses focus it swaps to a fixed timer cadence, hard-locking the
+/// rate to `unfocusedInterval ?? minimumInterval` — `.animation(minimumInterval:)` alone doesn't
+/// reliably cap a 120Hz panel, and a background surface has no business burning frames. Motion
+/// never jumps across the swap: every phase is a pure function of wall time.
+struct FocusThrottledTimeline<Content: View>: View {
     @Environment(\.appearsActive) private var appearsActive
     let minimumInterval: TimeInterval
+    var unfocusedInterval: TimeInterval? = nil
     var paused = false
     @State private var pausedAt: TimeInterval?
     @ViewBuilder let content: (_ t: TimeInterval) -> Content
@@ -401,7 +402,7 @@ private struct FocusThrottledTimeline<Content: View>: View {
                     content(ctx.date.timeIntervalSinceReferenceDate)
                 }
             } else {
-                TimelineView(.periodic(from: .now, by: minimumInterval)) { ctx in
+                TimelineView(.periodic(from: .now, by: unfocusedInterval ?? minimumInterval)) { ctx in
                     content(ctx.date.timeIntervalSinceReferenceDate)
                 }
             }
