@@ -313,7 +313,8 @@ final class NotchWindowController {
         let phases: [NotchPhase] = [.opening, .listening, .transcribing, .typing, .running, .recovery, .message, .notice("")]
         let maxW = phases.map { metrics.size(for: $0).width }.max() ?? 360
         let baseMaxH = phases.map { metrics.size(for: $0).height }.max() ?? 100
-        let maxH = max(baseMaxH, metrics.runningHeight(caption: metrics.maxReadBackCaptionHeight))   // tallest read-back
+        let maxH = max(baseMaxH, metrics.runningHeight(caption: metrics.maxReadBackCaptionHeight),   // tallest read-back
+                       metrics.size(for: .typing, draftLines: metrics.maxDraftLines).height)          // tallest prompt
         return CGSize(width: maxW + Self.canvasHSlack, height: maxH + Self.canvasVSlack)
     }
 
@@ -457,7 +458,9 @@ final class NotchWindowController {
                                          remembering: coordinator.run.remembering,
                                          personalizing: coordinator.run.isPersonalizing,
                                          recoveryContent: coordinator.run.recovery.content,
-                                         messageContent: coordinator.dictation.replyMessage ?? coordinator.notchMessage)
+                                         messageContent: coordinator.dictation.replyMessage ?? coordinator.notchMessage,
+                                         draftLines: metrics.promptLineCount(coordinator.dictation.fieldText(
+                                             phase: coordinator.phase, draft: coordinator.demoDraft ?? coordinator.run.conversation.draft)))
         let p = location ?? NSEvent.mouseLocation            // screen coords, origin bottom-left
         let localX = p.x - (screen.frame.midX + metrics.horizontalOffset(for: coordinator.dictation.layoutPhase(for: coordinator.phase)) - s.width / 2)
         let visualInset = hoverIdle ? metrics.hoverTopInset : metrics.topInset
