@@ -744,7 +744,8 @@ struct HomeView: View {
                     dealFrom: CGPoint(x: geo.size.width / 2, y: chromeHeight - 20),
                     gathered: inConversation, gatherPoint: CGPoint(x: proactiveDockFrame.midX, y: proactiveDockFrame.midY),
                     scrollPull: overviewPull, interactiveGather: gatheringFromScroll,
-                    cardWidth: width, onPage: kbOnly || layout.visibleRange.contains(item.offset),
+                    cardWidth: width, slack: kbOnly ? 0 : layout.slack[item.offset],
+                    onPage: kbOnly || layout.visibleRange.contains(item.offset),
                     order: item.offset % layout.capacity, reducedMotion: reducedMotion,
                     previewBodyLines: availableHeight < 185 ? 2 : (availableHeight < 220 ? 3 : 5),
                     previewTitleLines: availableHeight < 185 ? 1 : (availableHeight < 220 ? 2 : 3),
@@ -1471,6 +1472,7 @@ private struct DealtCard: View {
     var scrollPull = 0.0
     var interactiveGather = false
     var cardWidth: CGFloat = BriefingCard.width
+    var slack: CGFloat = 0
     var onPage = true
     var order = 0
     var reducedMotion = false
@@ -1501,9 +1503,9 @@ private struct DealtCard: View {
                      onOpenConversation: entry.action != nil ? onOpenConversation : nil,
                      fireDimmed: fireDimmed, cardWidth: cardWidth,
                      previewBodyLines: previewBodyLines, previewTitleLines: previewTitleLines,
+                     slack: slack, measured: measured,
                      onDismiss: { onFling(CGSize(width: -100, height: -300)) })
             .fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { measured($0) }
             .rotationEffect(.degrees(gathered ? 0 : drag.width / 30))
             .scaleEffect(gathered && !reducedMotion ? 0.035 : (entry.dealt ? 1 - 0.08 * pullProgress : 0.92))
             .position(gathered && !reducedMotion ? gatherPoint : (entry.dealt ? pulledSlot : dealFrom))

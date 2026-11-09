@@ -31,6 +31,8 @@ struct BriefingCard: View {
     var cardWidth: CGFloat = BriefingCard.width
     var previewBodyLines = 5
     var previewTitleLines = 3
+    var slack: CGFloat = 0                     // extra height from the row's tallest card
+    var measured: (CGSize) -> Void = { _ in }  // natural size, excluding the slack
     var onDismiss: (() -> Void)? = nil
 
     @State private var hovering = false
@@ -41,11 +43,14 @@ struct BriefingCard: View {
     private var reducedMotion: Bool { motionOverride ?? systemReducedMotion }
 
     static let width: CGFloat = 332
+    /// Tight leading keeps a wrapped title together.
+    static let titleFont = Font.system(size: 20, design: .serif).leading(.tight)
 
     var body: some View {
         Group {
             if phase == .sealed {
                 EnvelopeFace(recipient: briefing.envelopeName, width: cardWidth, onOpened: onOpenEnvelope)
+                    .padding(.bottom, slack)
             } else {
                 face
             }
@@ -69,6 +74,7 @@ struct BriefingCard: View {
                 .transition(.opacity)
             }
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { measured(CGSize(width: $0.width, height: $0.height - slack)) }
         // Include the outside corner in hover tracking without changing measured card size.
         .padding(10).contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -103,7 +109,9 @@ struct BriefingCard: View {
                 doneFace.transition(.blurReplace)
             }
         }
-        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
+        // The kicker's own leading makes 18 on top read as the 20 on the sides.
+        .padding(EdgeInsets(top: 18, leading: 20, bottom: 20, trailing: 20))
+        .padding(.bottom, phase == .offer ? 0 : slack)
         .frame(width: cardWidth, alignment: .leading)
         .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -117,15 +125,15 @@ struct BriefingCard: View {
 
     private var offerFace: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps(briefing.kicker, size: 9.5, tracking: 2.0, color: briefing.accent.opacity(0.95))
+            MonoCaps(briefing.kicker, size: 9.5, tracking: 1.1, color: briefing.accent.opacity(0.85))
             Text(briefing.title)
-                .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
+                .font(Self.titleFont).foregroundStyle(.white)
                 .lineLimit(previewTitleLines)
-                .padding(.top, 8)
+                .padding(.top, 9)
             Text(briefing.body)
-                .font(.system(size: 12)).foregroundStyle(Theme.Ink.body).lineSpacing(3.2)
+                .font(.system(size: 12)).foregroundStyle(Theme.Ink.body).lineSpacing(3)
                 .lineLimit(previewBodyLines)
-                .padding(.top, 6)
+                .padding(.top, 8)
             HStack(spacing: 12) {
                 if let offer = briefing.offer {
                     OfferButton(label: offer, accent: briefing.accent, action: onOffer)
@@ -136,9 +144,9 @@ struct BriefingCard: View {
                 }
                 if let detail = briefing.detailLabel {
                     Button(action: onDetail) {
-                        HStack(spacing: 4) {
-                            Text(detail).font(.system(size: 11.5))
-                            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                        HStack(spacing: 3) {
+                            Text(detail).font(.system(size: 12))
+                            Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .semibold))
                         }
                         .foregroundStyle(Theme.Ink.bright)
                         .contentShape(Rectangle())
@@ -147,7 +155,9 @@ struct BriefingCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.top, 13)
+            // A fixed actions height with the row's slack above it keeps a row's CTAs on one line.
+            .frame(minHeight: OfferButton.height)
+            .padding(.top, 14 + slack)
         }
     }
 
@@ -172,7 +182,7 @@ struct BriefingCard: View {
                 }
             }
             Text(briefing.title)
-                .font(.system(size: 20, design: .serif)).foregroundStyle(.white.opacity(0.85))
+                .font(Self.titleFont).foregroundStyle(.white.opacity(0.85))
                 .padding(.top, 8)
             workLogBody(visible).padding(.top, 10)
         }
@@ -181,7 +191,7 @@ struct BriefingCard: View {
     private func conversationFace(open: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(briefing.title)
-                .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
+                .font(Self.titleFont).foregroundStyle(.white)
                 .lineLimit(previewTitleLines)
             Button(action: open) {
                 Label("View in chat", systemImage: "arrow.up.right")
@@ -229,7 +239,7 @@ struct BriefingCard: View {
                 .font(.system(size: 24)).foregroundStyle(Theme.Ink.green)
             VStack(alignment: .leading, spacing: 5) {
                 Text(briefing.doneTitle)
-                    .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
+                    .font(Self.titleFont).foregroundStyle(.white)
                 Text(briefing.doneBody)
                     .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
             }
@@ -257,6 +267,7 @@ struct BriefingCard: View {
 // MARK: - The verb CTA ("Should I send it for you?")
 
 struct OfferButton: View {
+    static let height: CGFloat = 26
     let label: String
     let accent: Color
     var icon: String = "sparkles"
@@ -265,12 +276,13 @@ struct OfferButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 10.5, weight: .semibold))
-                Text(label).font(.system(size: 12.5, weight: .semibold))
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 10, weight: .medium))
+                Text(label).font(.system(size: 12.5, weight: .medium))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 15).padding(.vertical, 8)
+            .padding(.horizontal, 13)
+            .frame(height: Self.height)
             .background(Capsule(style: .continuous).fill(.white.opacity(hovering ? 0.12 : 0.07)))
             .overlay(Capsule(style: .continuous).strokeBorder(
                 LinearGradient(colors: [accent.opacity(0.9), accent.opacity(0.35)],
