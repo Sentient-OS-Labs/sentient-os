@@ -47,9 +47,11 @@ struct SidekickNotchMessageLayout {
          outerBottomPad: CGFloat, horizontalPad: CGFloat) { size = maximumSize }
 }
 struct Recovery { var content: SidekickRecoveryContent? }
-struct Run { var remembering: String?; var isPersonalizing = false; var recovery = Recovery() }
+struct Conversation { var draft = "" }
+struct Run { var remembering: String?; var isPersonalizing = false; var recovery = Recovery(); var conversation = Conversation() }
 struct Dictation {
  var replyMessage: SidekickConversationStore.Record?
+ func fieldText(phase: NotchPhase, draft: String) -> String { draft }
  func layoutPhase(for phase: NotchPhase) -> NotchPhase {
   if phase == .listening || phase == .transcribing {return replyMessage == nil ? .running : .message};return phase
  }
@@ -58,6 +60,7 @@ struct Coordinator {
     var dictation = Dictation()
     var phase = NotchPhase.running
     var readBack: String?
+    var demoDraft: String?
     var run = Run()
     var notchMessage: SidekickConversationStore.Record?
 }
@@ -225,6 +228,19 @@ final class GlowTest {
               "rounded upper island corners stay click-through")
         check(!islandHit.cursorOverSilhouette(at: CGPoint(x: screen.midX, y: top - islandSize.height - 1)),
               "space below island stays click-through")
+        // A wrapped draft grows the prompt, and the click target grows with it, up to the line cap.
+        let longDraft = String(repeating: "Book the train and send the confirmation. ", count: 30)
+        let grownSize = external.size(for: .typing, draftLines: external.promptLineCount(longDraft))
+        check(external.promptLineCount(longDraft) == external.maxDraftLines
+            && grownSize.height == islandSize.height + CGFloat(external.maxDraftLines - 1) * external.promptLineHeight,
+              "a long draft grows the prompt one line at a time up to its cap")
+        check(external.promptLineCount("Book the 9:40") == 1, "a short draft stays one line")
+        islandHit.coordinator.run.conversation.draft = longDraft
+        check(islandHit.cursorOverSilhouette(at: CGPoint(x: screen.midX, y: top - islandSize.height - 1)),
+              "the grown prompt receives clicks where the one-line island ended")
+        check(!islandHit.cursorOverSilhouette(at: CGPoint(x: screen.midX, y: top - grownSize.height - 1)),
+              "space below the grown prompt stays click-through")
+        islandHit.coordinator.run.conversation.draft = ""
         islandHit.coordinator.phase = .hidden; islandHit.hovering = true
         check(islandHit.cursorOverSilhouette(at: CGPoint(x: screen.midX, y: top + 4)),
               "thin pill retains a generous pointer target through hover handoff")
@@ -244,6 +260,8 @@ final class GlowTest {
                   "third mode combines island silhouette with a protected camera region")
             check(hybrid.topInset + hybrid.headerContentHeight >= protected.height,
                   "text begins below the whole reported protected band")
+            check(hybrid.bodyInset >= 12 && hybrid.typingBottomPad >= 12,
+                  "a short camera band never squeezes the prompt and chips against the island edge")
             check(hybrid.topInset + hybrid.topRowHeight / 2 == hybrid.hardwareMenuHeight / 2,
                   "hardware bar is centered vertically inside the menu bar")
             check(hybrid.hoverTopInset + hybrid.hoverSize.height / 2 == hybrid.hardwareMenuHeight / 2,

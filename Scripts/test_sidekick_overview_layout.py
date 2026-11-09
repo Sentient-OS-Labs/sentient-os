@@ -21,10 +21,11 @@ import CoreGraphics
         precondition(condition(), description); checks += 1
     }
     static func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < tolerance }
-    static func frame(_ layout: SidekickOverviewLayout, index: Int, heights: [CGFloat]) -> CGRect {
+    /// Cards stretch to their row's slot, so the slot is the rendered frame.
+    static func frame(_ layout: SidekickOverviewLayout, index: Int) -> CGRect {
         let point = layout.positions[index]
-        return CGRect(x: point.x - layout.cardWidth / 2, y: point.y - heights[index] / 2,
-                      width: layout.cardWidth, height: heights[index])
+        return CGRect(x: point.x - layout.cardWidth / 2, y: point.y - layout.slotHeights[index] / 2,
+                      width: layout.cardWidth, height: layout.slotHeights[index])
     }
     static func inspect(size: CGSize, top: CGFloat, bottom: CGFloat, heights: [CGFloat], requestedPage: Int) {
         configurations += 1
@@ -41,9 +42,12 @@ import CoreGraphics
               "invalid safe region")
         check(layout.positions.allSatisfy { $0.x.isFinite && $0.y.isFinite }, "nonfinite card position")
         check(layout.rowHeight >= (heights.max() ?? 0), "measured card height was compressed")
+        check(layout.slotHeights.count == heights.count, "slot heights lost source card identity")
+        check(zip(layout.slotHeights, heights).allSatisfy { $0 >= $1 && $0 <= layout.rowHeight },
+              "a slot compressed its card or exceeded the deck's tallest card")
         let visible = Array(layout.visibleRange)
         check(Set(visible).count == visible.count, "same card occurs twice on one page")
-        let frames = visible.map { frame(layout, index: $0, heights: heights) }
+        let frames = visible.map { frame(layout, index: $0) }
         let available = max(0, layout.region.height - SidekickOverviewLayout.pagerHeight)
         let enoughRoom = available + tolerance >= (heights.max() ?? 0)
         for card in frames {
@@ -55,18 +59,22 @@ import CoreGraphics
                       "card overlaps pager/composer despite room for a full row")
             }
         }
-        // Compare actual measured bounds, not nominal row slots. Taller content must never
-        // collide with an adjacent row; short cards may naturally have more than 24pt below.
+        // Each row is as tall as its own tallest card: its cards share both edges, and
+        // consecutive rows sit exactly 24pt apart, matching the column gutter.
         for left in frames.indices {
             for right in frames.indices where right > left {
                 let a = frames[left], b = frames[right]
                 if near(a.minY, b.minY) {
+                    check(near(a.maxY, b.maxY), "same-row cards do not share a bottom edge")
                     let horizontalGap = max(a.minX, b.minX) - min(a.maxX, b.maxX)
                     check(horizontalGap + tolerance >= 24, "same-row cards overlap or violate 24pt spacing")
                     if right == left + 1 { check(near(horizontalGap, 24), "adjacent columns do not have exact 24pt gap") }
                 } else {
                     let verticalGap = max(a.minY, b.minY) - min(a.maxY, b.maxY)
                     check(verticalGap + tolerance >= 24, "rows overlap or violate minimum 24pt spacing")
+                    if visible[right] - visible[left] == layout.columns {
+                        check(near(verticalGap, 24), "consecutive rows do not have exact 24pt gap")
+                    }
                 }
             }
         }
@@ -111,6 +119,12 @@ import CoreGraphics
         check(short.capacity == 4 && tall.capacity == 2, "actual measured heights did not change available row capacity")
         check(short.page == 1 && tall.page == 2, "capacity change did not clamp/retain requested page correctly")
         check(short.cardWidth == tall.cardWidth && tall.rowHeight == 245, "readable cards were scaled down to fit")
+        // A tall card on a later page must not stretch the rows of the page in view.
+        let paged = SidekickOverviewLayout(size: size, top: 164, bottom: 618,
+                                           heights: [150, 170, 160, 150, 185, 140], requestedPage: 0)
+        check(paged.capacity == 4 && paged.slotHeights == [170, 170, 160, 160, 185, 185], "rows did not size to their own cards")
+        check(near(paged.positions[2].y - paged.slotHeights[2] / 2 - (paged.positions[0].y + paged.slotHeights[0] / 2), 24),
+              "a later page's tall card widened the visible row gap")
         let narrow = SidekickOverviewLayout(size: CGSize(width: 840, height: 680), top: 164, bottom: 478,
                                            heights: Array(repeating: 180, count: 6), requestedPage: 2)
         let wide = SidekickOverviewLayout(size: CGSize(width: 1440, height: 900), top: 164, bottom: 698,
@@ -126,7 +140,7 @@ import CoreGraphics
             }
         }
         print("PASS: \(configurations) overview geometry configurations; \(checks) assertions")
-        print("Covered 0–6 cards, three window sizes, 160–245pt measured heights, 24pt spacing, centered final rows, pagination, resize, invalid pages and zero-height regions.")
+        print("Covered 0–6 cards, three window sizes, 160–245pt measured heights, equal-height rows, exact 24pt spacing, centered final rows, pagination, resize, invalid pages and zero-height regions.")
     }
 }
 '''
