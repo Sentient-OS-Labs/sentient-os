@@ -155,9 +155,10 @@ struct AnalysisPopover: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(processing.statusLine).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondary)
             if case .waiting = processing.state {
-                Text(processing.waitingDetail).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.amber)
+                Text(processing.waitingDetail).font(.system(size: 11.5))
+                    .foregroundStyle(processing.state == .waiting(.idle) && processing.record.notice == nil ? Theme.Ink.body : Theme.Ink.amber)
             }
-            if let notice = processing.record.notice, !notice.isEmpty {
+            if let notice = processing.record.notice, !notice.isEmpty, processing.state != .waiting(.idle) {
                 Text(notice).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.amber)
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
@@ -169,9 +170,15 @@ struct AnalysisPopover: View {
                     MonoCaps("Next run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
                     footerValue(nextRunLine)
                 }
+                if let nextWakeAt, schedulerEnabled {
+                    GridRow {
+                        MonoCaps("Night wake", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+                        footerValue(ProcessingCoordinator.scheduleLabel(nextWakeAt))
+                    }
+                }
             }
             if hasBattery {
-                footerValue("Overnight on battery: 50% for first analysis, 30% for updates. Pauses at 20% to save power. Run now has no battery requirement.")
+                footerValue("Overnight on battery: \(PowerState.initialBatteryFloor)% for first analysis, \(PowerState.iterativeBatteryFloor)% for updates. Pauses at \(PowerState.reserveBatteryFloor)% to save power. Run now has no battery requirement.")
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -180,16 +187,16 @@ struct AnalysisPopover: View {
     private var nextRunLine: String {
         if processing.paused { return "Paused until you resume" }
         if schedulerNeedsSetup { return "Set up overnight wake in Settings" }
-        if let nextWakeAt { return ProcessingCoordinator.scheduleLabel(nextWakeAt) }
-        if schedulerEnabled { return "Scheduling the next overnight run…" }
-        return "Overnight processing is off"
+        if processing.record.status == .awaitingIdle { return "When plugged in and away for 4½ minutes" }
+        if schedulerEnabled { return "Every 4 hours while plugged in and away" }
+        return "Automatic analysis is off"
     }
 
     /// The battery preference for the 3 AM run — one quiet line + a small switch, hidden on desktop
     /// Macs. Both initial and iterative thresholds are shown above.
     private var batteryToggleLine: some View {
         HStack(spacing: 12) {
-            Text("Run on battery too")
+            Text("Overnight on battery")
                 .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
             Spacer(minLength: 12)
             Toggle("", isOn: $overnightOnBattery)

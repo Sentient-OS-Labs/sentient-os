@@ -10,6 +10,7 @@ b = source.index("    /// The event's own screen-coord location", a)
 handler = source[a:b].replace('private func', 'func', 1)
 fixture = r'''
 import AppKit
+func Log(_ message: String) {}
 enum Phase { case hidden, opening, typing, message, recovery, listening, transcribing, running }
 final class Panel { var isVisible = true; var keys = 0; func makeKey() { keys += 1 } }
 final class Recovery { var dismissals = 0, focused = false; func dismiss() { dismissals += 1 }; func setFocused(_ value: Bool) { focused = value } }
@@ -18,7 +19,7 @@ final class Press { var isTracking = false }
 final class Coordinator {
  var phase = Phase.typing, typingDismissals = 0, messageDismissals = 0, cancellations = 0
  let run = Run(), notchPress = Press()
- func dismissTyping() { typingDismissals += 1; phase = .hidden }
+ func dismissTypingFromPointer() { typingDismissals += 1; phase = .hidden }
  func dismissMessagePreview() { messageDismissals += 1; phase = .hidden }
  func cancelCurrent() -> Bool { cancellations += 1; phase = .hidden; return true }
 }

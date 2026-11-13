@@ -157,6 +157,7 @@ nonisolated enum CodexFailureReason: String, Sendable {
 /// onboarding-time failures, and a Sidekick press each get their own fingerprint.
 nonisolated enum CodexTrigger: String, Sendable {
     case overnight
+    case pluggedInIdle = "plugged_in_idle"
     case analyzeNow = "analyze_now"
     case onboarding
     case probe

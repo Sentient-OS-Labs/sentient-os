@@ -46,8 +46,8 @@ model and task determine what Sentient can complete.
    [Sharing](Cloud/Documentation%20-%20Cloud%20-%20MCP%20Mirror.md)
 
 No separate Sentient account is required. The app and supporting infrastructure are open source.
-Double Tap has its own provider controls, including local options and a low-latency covered OpenAI
-API route with Zero Data Retention. Summarize and Proofread independently send the requested screen or selected text through the covered relay to OpenAI. Sharing is a separate opt-in with on-Mac encryption, no persisted
+Magic Reply has its own provider controls, including local options and a covered GPT-6.1 Sol route through the OpenAI
+API with Zero Data Retention. Summarize and Proofread independently send the requested screen or selected text through the covered relay to OpenAI. Sharing is a separate opt-in with on-Mac encryption, no persisted
 relay key, and in-memory decryption for authorized requests.
 
 At 3 AM, Sentient can wake your Mac with the lid closed to do the understanding and preparation.
@@ -106,3 +106,5 @@ disk join the target automatically, and the docs are stripped from the shipped b
 a commercial exception), `Signing.xcconfig` (the ONE place the signing team lives; per-dev override in
 the gitignored `Signing.local.xcconfig`), `Info.plist` (the Sparkle keys only), the entitlements (audio input and Apple Events, for the Hardened Runtime), and `jesai.Sentient-OS-macOS.WakeHelper.plist` (the bundled daemon
 plist the dev cockpit's SMAppService path uses).
+
+Physical notch controls and calibration are documented in [Physical Screen Tap](Notch%20Magic/Documentation%20-%20Physical%20Screen%20Tap.md). Plugged-in idle work shares the analysis owner described in [Ingestion](Ingestion/Documentation%20-%20Ingestion%20Pipeline.md).

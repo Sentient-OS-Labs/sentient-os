@@ -17,7 +17,7 @@ struct SidekickComposer: View {
     private var conversation: SidekickConversation { coordinator.run.conversation }
     private var recovery: SidekickRecovery { coordinator.run.recovery }
     private var notchHasKeyboard: Bool {
-        coordinator.phase == .typing || coordinator.phase == .listening || coordinator.messageReplyFocused
+        coordinator.phase == .typing || coordinator.phase == .listening || coordinator.phase == .recovery || coordinator.messageReplyFocused
     }
     private var answering: Bool { recovery.isPending }
     private var text: Binding<String> {
@@ -68,7 +68,7 @@ struct SidekickComposer: View {
                 }
                 HStack(alignment: .bottom, spacing: 14) {
                     ZStack(alignment: .leading) {
-                        TextField(answering ? "Add your answer…" : "Ask Sidekick…", text: text, axis: .vertical)
+                        TextField(answering ? "Add your answer…" : "What can I take over?", text: text, axis: .vertical)
                             .textFieldStyle(.plain).font(.system(size: 15))
                             .foregroundStyle(SidekickStyle.ink).tint(SidekickStyle.accent)
                             .lineLimit(1...5).focused($focused).onSubmit(handleReturn)

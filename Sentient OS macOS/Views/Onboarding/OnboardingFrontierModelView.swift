@@ -18,6 +18,7 @@ import AppKit
 
 struct OnboardingFrontierModelView: View {
     let onContinue: () -> Void
+    var canContinue = true
 
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
@@ -95,7 +96,7 @@ struct OnboardingFrontierModelView: View {
                     // The quiet reward: the halo lights only once an engine is actually
                     // ready (GlowHalo's `active` rides `enabled`), at the armed-CTA subtlety.
                     OnboardingNextButton(title: "Continue",
-                                         enabled: engineReady && !continuing && !enginePreparing,
+                                         enabled: canContinue && engineReady && !continuing && !enginePreparing,
                                          glow: 0.28, action: continueWithEngine)
                 }
                 .frame(maxWidth: 680)
@@ -134,7 +135,7 @@ struct OnboardingFrontierModelView: View {
     }
 
     private func continueWithEngine() {
-        guard engineReady, !continuing else { return }
+        guard canContinue, engineReady, !continuing else { return }
         let initialBackend = backendRaw
         let selectedTab = tab
         let attempt = UUID()

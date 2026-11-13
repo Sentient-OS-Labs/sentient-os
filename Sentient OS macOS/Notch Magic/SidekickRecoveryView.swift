@@ -83,11 +83,13 @@ struct SidekickRecoveryView: View {
     let content: SidekickRecoveryContent
     let layout: SidekickRecoveryLayout
     @FocusState private var fieldFocused: Bool
+    @State private var voice = ComposerDictation()
+    @State private var voicePress = NotchPressGesture()
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride
     private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
 
-    private var canSend: Bool { !recovery.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSend: Bool { voice.isActive || !recovery.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SidekickRecoveryLayout.fieldSpacing) {
@@ -126,7 +128,7 @@ struct SidekickRecoveryView: View {
                             .textSelection(.enabled)
                         HStack(alignment: .top, spacing: SidekickRecoveryLayout.answerSpacing) {
                             ForEach(question.answers.indices, id: \.self) { index in
-                                Button { recovery.answer(id: question.id, choice: index) } label: {
+                                Button { cancelVoice(); recovery.answer(id: question.id, choice: index) } label: {
                                     Text(question.answers[index])
                                         .font(Font(SidekickRecoveryLayout.answerFont))
                                         .fixedSize(horizontal: false, vertical: true)
@@ -148,14 +150,31 @@ struct SidekickRecoveryView: View {
             .frame(height: layout.scrollHeight)
             .mask { scrollEdges }
             HStack(spacing: 12) {
-                TextField(content.question == nil ? "Add a detail, or try again" : "Or type your answer", text: $recovery.draft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .focused($fieldFocused)
-                    .onSubmit(send)
-                    .accessibilityLabel(content.question == nil ? "Guidance for retrying" : "Your answer to Sidekick")
+                ZStack(alignment: .leading) {
+                    TextField(content.question == nil ? "Add a detail, or try again" : "Or type your answer", text: $recovery.draft)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
+                        .tint(.white)
+                        .focused($fieldFocused)
+                        .onSubmit(send)
+                        .disabled(voice.isActive)
+                        .opacity(voice.isActive && !voice.hasTranscript ? 0 : 1)
+                        .accessibilityLabel(content.question == nil ? "Guidance for retrying" : "Your answer to Sidekick")
+                    if voice.isActive && !voice.hasTranscript {
+                        PromptDictationWaveform(levels: voice.levels)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: voice.isActive && !voice.hasTranscript)
+                if let error = voice.error {
+                    Image(systemName: "exclamationmark.circle")
+                        .foregroundStyle(.white.opacity(0.7)).help(error).accessibilityLabel(error)
+                }
+                NotchMicrophoneButton(onPress: microphoneMouseDown, onActivate: toggleMicrophone,
+                                      recording: voice.isActive)
+                    .frame(width: 22, height: 24)
+                    .accessibilityIdentifier("notch.recovery.dictation")
                 Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 13, weight: .semibold))
@@ -185,6 +204,9 @@ struct SidekickRecoveryView: View {
         .padding(.bottom, layout.bottomPadding)
         .preferredColorScheme(.dark)
         .accessibilityElement(children: .contain)
+        .onChange(of: voice.isActive) { _, active in recovery.setDictating(active) }
+        .onChange(of: content.id) { _, _ in cancelVoice() }
+        .onDisappear { cancelVoice() }
     }
     // A soft boundary makes partially scrolled lines recede instead of being sliced against
     // the heading or input. Content padding keeps complete lines outside the fade at either end.
@@ -198,9 +220,37 @@ struct SidekickRecoveryView: View {
         }
         .allowsHitTesting(false)
     }
+    private func beginVoice() {
+        guard recovery.content?.id == content.id, recovery.isVisible else { return }
+        let id = content.id, model = recovery, session = voice
+        model.setDictating(true)
+        session.start(draft: model.draft) { [weak model, weak session] text in
+            guard let model, model.content?.id == id, model.isVisible else { session?.cancel(); return }
+            model.draft = text
+        }
+    }
+    private func toggleMicrophone() {
+        if voice.isActive { voice.stop() }
+        else { beginVoice() }
+    }
+    private func microphoneMouseDown() {
+        if voice.isActive { voice.stop(); return }
+        beginVoice()
+        voicePress.begin(tap: {}, hold: { voice.isActive }, release: { send() },
+                         releaseAway: { voice.stop() }, cancelOnEarlyDrag: false)
+    }
+    private func cancelVoice() {
+        voicePress.cancel(); voice.cancel(); recovery.setDictating(false)
+    }
     private func send() {
         guard canSend else { return }
-        recovery.answer(id: content.id)
+        let id = content.id, model = recovery
+        if voice.isActive {
+            voice.stop(sendWhenReady: { [weak model] in
+                guard model?.content?.id == id, model?.isVisible == true else { return }
+                model?.answer(id: id)
+            })
+        } else { model.answer(id: id) }
     }
 }
 

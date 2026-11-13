@@ -23,6 +23,7 @@ import SwiftUI
         try await Task.sleep(for: .milliseconds(300))
         guard let panel = summary.fixtureWindow, let host = panel.contentView else { throw Failure.noWindow }
         let initial = panel.frame
+        checks["roomier-reading-height"] = initial.height >= min(500, screen.visibleFrame.height - 40)
         checks["panel-stays-auxiliary"] = !panel.isMainWindow
         checks["capture-before-inference"] = captureCount == 1 && summary.phase == .loading
         captures.append(try await SidekickPolishLab.capture(host, name: "01-loading", directory: directory))
@@ -169,14 +170,19 @@ import SwiftUI
         checks["sleep-closes-all-summary-windows"] = sessions.sessions.isEmpty && two.fixtureWindow == nil && three.fixtureWindow == nil
 
         let notchView = NotchContent(phase: .typing, readBack: nil, statusLine: "", metrics: .preview)
-            .frame(width: 700, height: 210).background(Color(white: 0.12)).preferredColorScheme(.dark)
+            .frame(width: 700, height: 210).background(Color(white: 0.12))
+            .environment(\.accessibilityEnabled, true).preferredColorScheme(.dark)
         let notchHost = NSHostingView(rootView: notchView)
         let notchWindow = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 700, height: 210), styleMask: [.borderless], backing: .buffered, defer: false)
         notchWindow.isReleasedWhenClosed = false; notchWindow.contentView = notchHost; notchWindow.orderFrontRegardless()
         defer { notchWindow.close() }
         try await Task.sleep(for: .milliseconds(350))
         captures.append(try await SidekickPolishLab.capture(notchHost, name: "09-notch", directory: directory))
-        checks["notch-height-includes-action"] = NotchMetrics.preview.size(for: .typing).height == 99
+        _ = await SidekickPolishLab.activateOwnAccessibility()
+        let actionIDs: Set<String> = ["notch.takeOver", "notch.magicReply", "notch.summarize", "notch.proofread"]
+        let actions = SidekickPolishLab.elements(notchHost).filter { actionIDs.contains($0.identifier) }
+        checks["notch-shows-four-quick-actions"] = Set(actions.map(\.identifier)) == actionIDs
+            && actions.allSatisfy { $0.frame.width > 0 && $0.frame.height > 0 }
         let video = Summarize(captureSource: { _,_ in SummarySource(text: "Video fixture", url: "https://youtu.be/jNQXAC9IVRw") }, inferWithSource: { _,_, metadata, update in
             try await Task.sleep(for: .seconds(1))
             metadata(.init(kind: .youtube, truncated: true))
@@ -208,7 +214,7 @@ import SwiftUI
             captures.append(try await SidekickPolishLab.capture(host, name: "14-offscreen-text-header", directory: directory))
         }
         for index in captures.indices { captures[index]["file"] = "summary-snapshots/" + (captures[index]["name"] as! String) + ".png" }
-        let manifest: [String: Any] = ["checks": checks, "captures": captures, "provider_calls": 0, "microphone_used": false, "live_screen_uploaded": false]
+        let manifest: [String: Any] = ["checks": checks, "captures": captures, "initial_size": [initial.width, initial.height], "provider_calls": 0, "microphone_used": false, "live_screen_uploaded": false]
         try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
             .write(to: root.appendingPathComponent("summary-manifest.json"), options: .atomic)
         guard checks.values.allSatisfy({ $0 }) else { throw Failure.checks }

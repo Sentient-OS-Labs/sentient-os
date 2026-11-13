@@ -5,6 +5,7 @@ import AppKit
 import SwiftUI
 
 @MainActor final class SummaryWindowController: NSObject, NSWindowDelegate {
+    private static let initialSize = NSSize(width: 560, height: 500)
     private weak var summary: Summarize?
     private(set) var panel: NSPanel?
     private var observers: [NSObjectProtocol] = []
@@ -43,10 +44,11 @@ import SwiftUI
 
     func show(on displayID: CGDirectDisplayID?) {
         guard let summary else { return }
+        var openingFrame: NSRect?
         let panel: ReadingPanel
         if let existing = self.panel as? ReadingPanel { panel = existing }
         else {
-            panel = ReadingPanel(title: "Summary", identifier: "sentient.summary", size: NSSize(width: 560, height: 440))
+            panel = ReadingPanel(title: "Summary", identifier: "sentient.summary", size: Self.initialSize)
             panel.onDismiss = { [weak summary] in summary?.dismiss() }
             panel.delegate = self
             panel.install(SummaryView(summary: summary))
@@ -55,7 +57,7 @@ import SwiftUI
         if !panel.isVisible || shownDisplayID != displayID {
             if let screen = NSScreen.screens.first(where: { $0.displayID == displayID }) ?? NSScreen.main {
                 let visible = screen.visibleFrame.insetBy(dx: 20, dy: 20)
-                let width = min(560, visible.width), height = min(440, visible.height)
+                let width = min(Self.initialSize.width, visible.width), height = min(Self.initialSize.height, visible.height)
                 panel.contentMinSize = NSSize(width: min(360, width), height: min(260, height))
                 panel.contentMaxSize = visible.size
                 var frame = NSRect(x: visible.midX - width / 2,
@@ -72,11 +74,15 @@ import SwiftUI
                     else { frame.origin = NSPoint(x: visible.minX, y: visible.maxY - height) }
                 }
                 panel.setFrame(frame, display: false)
+                openingFrame = frame
             }
         }
         shownDisplayID = displayID
         // Keep tab-switching shortcuts in the browser. The reader becomes key when clicked.
         panel.orderFrontRegardless()
+        if let openingFrame, panel.frame != openingFrame {
+            panel.setFrame(openingFrame, display: true)
+        }
     }
 
     func hide() {

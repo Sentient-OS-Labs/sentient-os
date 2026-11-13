@@ -21,6 +21,9 @@ controller = (APP / "Notch Magic/NotchWindowController.swift").read_text()
 start = controller.index("    private func cursorOverSilhouette(")
 end = controller.index("\n    // MARK:", start)
 hit_test = controller[start:end].replace("private func", "func", 1)
+cache_start = controller.index("    private struct PointerLayoutKey:")
+cache_end = controller.index("    /// Local key monitor:", cache_start)
+pointer_cache = controller[cache_start:cache_end].replace("private ", "")
 header_start = controller.index("    private func isVoiceHeader(")
 header_end = controller.index("    private func notchMouseDown(", header_start)
 voice_header = controller[header_start:header_end].replace("private func", "func", 1)
@@ -34,7 +37,7 @@ enum NotchPhase: Equatable {
     case hidden, opening, typing, listening, transcribing, running, recovery, message
     case finishing(Outcome), notice(String)
 }
-struct SidekickRecoveryContent {}
+struct SidekickRecoveryContent: Equatable {}
 struct SidekickRecoveryLayout {
     var size = CGSize(width: 520, height: 240)
     init(content: SidekickRecoveryContent, metrics: NotchMetrics) {}
@@ -56,16 +59,19 @@ struct Dictation {
 }
 struct Coordinator {
     var dictation = Dictation()
+    var notchDismissalPreview = false
     var phase = NotchPhase.running
     var readBack: String?
     var run = Run()
     var notchMessage: SidekickConversationStore.Record?
 }
 struct Screen { var frame = CGRect(x: 100, y: 50, width: 1440, height: 900) }
-struct HitTest {
+final class HitTest {
     var metrics: NotchMetrics
     var coordinator = Coordinator()
     var hovering = false
+    init(metrics: NotchMetrics) { self.metrics = metrics }
+    // POINTER_CACHE
     func activeScreen() -> Screen? { Screen() }
     // HIT_TEST
     // VOICE_HEADER
@@ -73,6 +79,7 @@ struct HitTest {
 final class GlowTest {
     let phase: NotchPhase
     var layoutPhase: NotchPhase { phase }
+    var isSuccessfulCompletion: Bool { phase == .finishing(.success) }
     var readingGlowID: String? = "message:fixture"
     var settledGlowID: String?
     var reduceMotion = false
@@ -122,15 +129,15 @@ final class GlowTest {
         let finishLight = GlowTest(phase: .finishing(.success))
         finishLight.readingGlowID = "finished:success"
         let arrivalLight = finishLight.underlightStrength
-        check(arrivalLight > workLight.underlightStrength, "completion is brighter than ordinary work")
+        check(arrivalLight < workLight.underlightStrength, "completion keeps a quiet base beneath its single sweep")
         await finishLight.settleReadingGlow()
-        check(finishLight.underlightStrength < arrivalLight, "completion light settles instead of staying bright")
+        check(finishLight.underlightStrength == arrivalLight, "completion has no second ambient brightness transition")
         finishLight.readingGlowID = nil
         await finishLight.settleReadingGlow()
         finishLight.readingGlowID = "finished:success"
         check(finishLight.underlightStrength == arrivalLight, "a later completion can receive a new arrival")
         finishLight.reduceMotion = true
-        check(finishLight.underlightStrength < arrivalLight, "Reduce Motion avoids the attention flare")
+        check(finishLight.underlightStrength == arrivalLight, "Reduce Motion retains the quiet base; the one-shot sweep is disabled separately")
         let regular = NotchMetrics(hardwareNotch: CGSize(width: 200, height: 32))
         var compact = regular; compact.compactMode = true
         for phase in [NotchPhase.typing, .message, .recovery] {
@@ -195,7 +202,7 @@ final class GlowTest {
                   "outside trailing wing remains click-through")
             check(hit.cursorOverSilhouette(at: CGPoint(x: origin + 14, y: screen.maxY)), "top-edge target stays clickable")
         }
-        var replyHeader = HitTest(metrics: regular)
+        let replyHeader = HitTest(metrics: regular)
         replyHeader.coordinator.phase = .message
         check(replyHeader.isVoiceHeader(at: CGPoint(x: Screen().frame.midX, y: Screen().frame.maxY - 10)), "response camera/header remains a hold target")
         check(!replyHeader.isVoiceHeader(at: CGPoint(x: Screen().frame.midX + 220, y: Screen().frame.maxY - 10)), "voice hold target excludes response controls")
@@ -212,7 +219,7 @@ final class GlowTest {
         check(external.size(for: .running).width == external.compactLeadingWidth + external.compactTrailingWidth
             && external.horizontalOffset(for: .running) == 0,
               "notchless display uses a centered strip with no phantom camera gap")
-        var islandHit = HitTest(metrics: external)
+        let islandHit = HitTest(metrics: external)
         islandHit.coordinator.phase = .typing
         let islandSize = external.size(for: .typing)
         let screen = Screen().frame
@@ -252,7 +259,7 @@ final class GlowTest {
                   "hardware bar leaves matching menu-bar padding above and below")
             check(hybrid.hPad + hybrid.controlSlot / 2 == hybrid.islandCornerRadius,
                   "header circles are concentric with the rounded outer corners")
-            var hardwareHit = HitTest(metrics: hybrid)
+            let hardwareHit = HitTest(metrics: hybrid)
             hardwareHit.coordinator.phase = .message
             check(hardwareHit.cursorOverSilhouette(at: CGPoint(x: screen.midX + hybrid.cameraCenterOffset, y: screen.maxY))
                 && hardwareHit.isVoiceHeader(at: CGPoint(x: screen.midX + hybrid.cameraCenterOffset, y: screen.maxY)),
@@ -280,6 +287,27 @@ final class GlowTest {
               "actual menu-bar height takes precedence over a smaller camera exclusion band")
         check(tallMenu.topInset + tallMenu.headerContentHeight == 64,
               "expanded text stays below a taller menu bar")
+        check(NotchMetrics.readBackDuration(for: "Tell me a joke") == 0.5,
+              "short speech yields to live progress after half a second")
+        let longReadBack = NotchMetrics.readBackDuration(for: String(repeating: "A longer dictated instruction. ", count: 100))
+        check(longReadBack == 2.5, "long speech confirmation stays bounded")
+        let cached = HitTest(metrics: regular)
+        let initial = cached.pointerLayout
+        for _ in 0..<100 { _ = cached.cursorOverSilhouette(at: CGPoint(x: screen.midX, y: screen.maxY - 10)) }
+        check(cached.cachedPointerLayout?.key == initial.key, "repeated pointer checks retain the same layout")
+        cached.metrics.compactMode.toggle()
+        check(cached.pointerLayout.key != initial.key, "compact mode invalidates cached geometry")
+        cached.coordinator.phase = .typing
+        check(cached.pointerLayout.size == cached.metrics.size(for: .typing), "phase transition refreshes cached bounds")
+        cached.coordinator.phase = .hidden; cached.hovering = true
+        check(cached.pointerLayout.size == cached.metrics.hoverSize, "hover refreshes cached bounds immediately")
+        cached.metrics.availableSize = CGSize(width: 900, height: 600)
+        check(cached.pointerLayout.key.metrics.availableSize == cached.metrics.availableSize, "display metrics invalidate the cache")
+        cached.coordinator.phase = .message; cached.hovering = false
+        cached.coordinator.notchMessage = .init()
+        let messageKey = cached.pointerLayout.key
+        cached.coordinator.notchMessage?.event.text = "New reply content"
+        check(cached.pointerLayout.key != messageKey, "streaming response content invalidates the cache")
         print("PASS: \(checks) compact notch geometry and pointer checks")
     }
 }
@@ -288,7 +316,7 @@ final class GlowTest {
 with tempfile.TemporaryDirectory(prefix="sentient-compact-notch-") as directory:
     path = Path(directory)
     source = path / "test.swift"
-    source.write_text(FIXTURE.replace("// HIT_TEST", hit_test).replace("// VOICE_HEADER", voice_header).replace("// GLOW_STRENGTH", glow_strength)
+    source.write_text(FIXTURE.replace("// POINTER_CACHE", pointer_cache).replace("// HIT_TEST", hit_test).replace("// VOICE_HEADER", voice_header).replace("// GLOW_STRENGTH", glow_strength)
                       .replace("// SETTLE_GLOW", settle_glow).replace("// UNDERLIGHT_STRENGTH", underlight_strength) + "\n" + metrics)
     binary = path / "test"
     subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-default-isolation", "MainActor",

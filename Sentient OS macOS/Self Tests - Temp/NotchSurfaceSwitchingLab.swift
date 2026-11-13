@@ -33,22 +33,33 @@ import SwiftUI
                       "notch_owns_safe_area_geometry": notchHost.safeAreaRegions.isEmpty,
                       "one_entry_per_display": controller.entryPanelsForTesting.count == NSScreen.screens.count]
         let displays = NSScreen.screens
-        for screen in displays where screen.notchSize == nil {
-            if let entry = controller.entryPanelsForTesting[screen.displayID], let view = entry.contentView,
-               let event = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
-                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: entry.windowNumber,
-                   context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
-                let frame = entry.frame
-                view.mouseEntered(with: event)
-                checks["pill_hover_starts_synchronously_\(screen.displayID)"] = (view.subviews.first?.layer?.transform.m11 ?? 1) > 1
-                checks["pill_hover_does_not_open_canvas_\(screen.displayID)"] = !panel.isVisible && !coordinator.notchHovering
-                checks["pill_hover_keeps_window_position_\(screen.displayID)"] = entry.frame == frame
-                view.mouseExited(with: event)
-                checks["pill_hover_resets_\(screen.displayID)"] = view.subviews.first?.layer?.transform.m11 == 1
+        if FileManager.default.fileExists(atPath: root.appendingPathComponent("island-only").path) {
+            guard let screen = displays.first(where: { $0.notchSize == nil }),
+                  let entry = controller.entryPanelsForTesting[screen.displayID] else { return ["external_display_available": false] }
+            NSApp.activate(ignoringOtherApps: true)
+            home.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .milliseconds(300))
+            coordinator.notchClicked(anchor: .display(screen.displayID))
+            try await Task.sleep(for: .milliseconds(800))
+            let identity = ObjectIdentifier(notchHost)
+            checks["prompt_was_expanded"] = coordinator.phase == .typing
+            _ = try await SidekickPolishLab.capture(notchHost, name: "island-expanded", directory: root)
+            checks["expanded_launcher_hidden"] = !entry.isVisible
+            controller.mouseDownForTesting(at: NSPoint(x: screen.frame.midX, y: screen.frame.minY + 80))
+            for frame in 0..<8 {
+                try await Task.sleep(for: .milliseconds(80))
+                checks["single_surface_during_close_\(frame)"] = !entry.isVisible && panel.isVisible
+                _ = try await SidekickPolishLab.capture(notchHost, name: "island-close-\(frame)", directory: root)
             }
+            checks["same_host_after_close"] = panel.contentView.map(ObjectIdentifier.init) == identity
+            coordinator.notchClicked(anchor: .display(screen.displayID))
+            try await Task.sleep(for: .milliseconds(650))
+            checks["same_host_on_reopen"] = panel.contentView.map(ObjectIdentifier.init) == identity && !entry.isVisible
+            try Data("1\n".utf8).write(to: root.appendingPathComponent("surface-switch-progress.txt"))
+            return checks
         }
         let draft = "Keep this unsent draft while switching displays."
-        coordinator.run.conversation.draft = draft
+        coordinator.notchDraft = draft
         for index in 0..<60 {
             let screen = displays[index % displays.count]
             let id = screen.displayID
@@ -72,7 +83,7 @@ import SwiftUI
             if coordinator.phase != .typing || !panel.isKeyWindow {
                 Log("surface fixture step \(index): phase=\(coordinator.phase), panelKey=\(panel.isKeyWindow), homeKey=\(home.isKeyWindow), frontPID=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), fixturePID=\(getpid())")
             }
-            checks["draft_preserved_\(index)"] = coordinator.run.conversation.draft == draft
+            checks["draft_preserved_\(index)"] = coordinator.notchDraft == draft
             checks["host_reused_\(index)"] = panel.contentView.map(ObjectIdentifier.init) == initialHost
             checks["other_display_entries_visible_\(index)"] = controller.entryPanelsForTesting
                 .filter { $0.key != id }.values.allSatisfy(\.isVisible)
@@ -118,7 +129,7 @@ import SwiftUI
             coordinator.notchClicked(anchor: .display(screen.displayID))
             try await Task.sleep(for: .milliseconds(150))
             checks["settled_glass_handoff_\(screen.displayID)"] = panel.screen?.displayID == screen.displayID
-                && coordinator.phase == .typing && coordinator.run.conversation.draft == draft
+                && coordinator.phase == .typing && coordinator.notchDraft == draft
         }
         checks["no_agent_execution"] = !coordinator.run.isRunning && coordinator.run.interaction == nil
         return checks

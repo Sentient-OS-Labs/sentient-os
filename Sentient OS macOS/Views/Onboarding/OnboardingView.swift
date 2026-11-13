@@ -1,5 +1,5 @@
 // First launch: the existing film and lessons, then the frontier model connection.
-// Home opens immediately afterward. Personal context is a separate resumable window.
+// The model screen presents email entry after two seconds. Personal context is a separate window.
 // Doc: Documentation - Onboarding.md
 
 import SwiftUI
@@ -10,12 +10,47 @@ struct OnboardingView: View {
     /// For the DEBUG skip handle only — the quiet flag flip, no finale.
     @Environment(AppState.self) private var appState
 
-    /// Resume the introduction or frontier-model connection after an ordinary relaunch.
+    /// Resume the introduction or frontier-model connection after relaunch.
     @AppStorage("onboarding.step") private var step = 0
+    @AppStorage("onboarding.emailSubmitted") private var emailSubmitted = false
 
     @State private var isPresentingInviteGift = false
+    @State private var showEmailPrompt = false
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        onboardingContent
+            .blur(radius: showEmailPrompt ? 8 : 0)
+            .disabled(showEmailPrompt)
+            .allowsHitTesting(!showEmailPrompt)
+            .accessibilityHidden(showEmailPrompt)
+            .overlay {
+                if showEmailPrompt {
+                    ZStack {
+                        Color.black.opacity(0.35).ignoresSafeArea()
+                            .contentShape(Rectangle())
+                            .onTapGesture { } // Keep clicks outside the required form inside the modal.
+                        OnboardingEmailPrompt(onSaved: finishEmailSetup)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 22)
+                                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                            }
+                            .shadow(color: .black.opacity(0.65), radius: 36, y: 16)
+                            .accessibilityAddTraits(.isModal)
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .task(id: shouldScheduleEmailPrompt) { await presentEmailPromptAfterDelay() }
+            .onChange(of: step) { _, step in
+                if step == 0 { showEmailPrompt = false }
+            }
+            .onDisappear { showEmailPrompt = false }
+    }
+
+    private var onboardingContent: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
 
@@ -25,7 +60,8 @@ struct OnboardingView: View {
                 // rest and blooms its own Continue (OnboardingFilmView owns the choreography).
                 OnboardingFilmView(onContinue: advance).transition(.opacity)
             default:
-                OnboardingFrontierModelView(onContinue: onFinished).transition(.opacity)
+                OnboardingFrontierModelView(onContinue: finishModelSetup, canContinue: emailSubmitted)
+                    .transition(.opacity)
             }
         }
         // No right-clicks anywhere in onboarding — the film's webview would offer a browser
@@ -101,6 +137,29 @@ struct OnboardingView: View {
 
     private func advance() {
         withAnimation(.easeInOut(duration: 0.25)) { step += 1 }
+    }
+
+    private func finishModelSetup() {
+        guard emailSubmitted else { return }
+        onFinished()
+    }
+
+    private func finishEmailSetup() {
+        // The prompt only completes after durable enqueue and the optional company welcome.
+        emailSubmitted = true
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { showEmailPrompt = false }
+    }
+
+    private var shouldScheduleEmailPrompt: Bool {
+        step > 0 && !emailSubmitted && !isPresentingInviteGift && scenePhase == .active
+    }
+
+    private func presentEmailPromptAfterDelay() async {
+        guard shouldScheduleEmailPrompt, !showEmailPrompt else { return }
+        do { try await Task.sleep(for: .seconds(2)) }
+        catch { return }
+        guard !Task.isCancelled, shouldScheduleEmailPrompt else { return }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { showEmailPrompt = true }
     }
 
     private func goBack() {

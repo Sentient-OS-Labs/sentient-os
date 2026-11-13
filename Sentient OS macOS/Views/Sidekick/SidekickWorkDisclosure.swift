@@ -303,27 +303,35 @@ private struct SidekickActivityRow: View {
 struct SidekickActivityIcon: View {
     let identifier: String?
     let symbol: String
+    var size: CGFloat = 16
+    static func displayName(for identifier: String) -> String? { SidekickActivityIconCache.displayName(for: identifier) }
     var body: some View {
         Group {
             if let identifier, let icon = SidekickActivityIconCache.icon(for: identifier) {
                 Image(nsImage: icon).resizable().scaledToFit()
-            } else { Image(systemName: symbol).font(.system(size: 12)) }
-        }.frame(width: 16, height: 16).accessibilityHidden(true)
+            } else { Image(systemName: symbol).font(.system(size: size * 0.75)) }
+        }.frame(width: size, height: size).accessibilityHidden(true)
     }
 }
 
 @MainActor private enum SidekickActivityIconCache {
     static var icons: [String: NSImage] = [:]
     static var resolved = Set<String>()
+    static var names: [String: String] = [:]
+    static func displayName(for identifier: String) -> String? { _ = icon(for: identifier); return names[identifier] }
     static func icon(for identifier: String) -> NSImage? {
         if resolved.contains(identifier) { return icons[identifier] }
-        if resolved.count >= 80 { resolved.removeAll(); icons.removeAll() }
+        if resolved.count >= 80 { resolved.removeAll(); icons.removeAll(); names.removeAll() }
         resolved.insert(identifier)
         let url: URL?
         if identifier.hasPrefix("/"), identifier.lowercased().hasSuffix(".app") {
             url = FileManager.default.fileExists(atPath: identifier) ? URL(fileURLWithPath: identifier) : nil
         } else { url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) }
-        if let url { icons[identifier] = NSWorkspace.shared.icon(forFile: url.path) }
+        if let url {
+            icons[identifier] = NSWorkspace.shared.icon(forFile: url.path)
+            names[identifier] = (Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                ?? url.deletingPathExtension().lastPathComponent
+        }
         return icons[identifier]
     }
 }

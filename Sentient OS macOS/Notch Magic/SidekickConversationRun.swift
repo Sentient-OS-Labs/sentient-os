@@ -16,6 +16,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
     private var executions = Set<UUID>()
     private var tools: [String: Event.Activity] = [:]
     private var answerDelivered = false
+    private var completionAnswerSaved = false
     private var recordedCompletion: AgentStatus?
     private struct MessageReceipt { let completion: AgentStatus.Completion? }
     private var deliveredMessages: [String: MessageReceipt] = [:]
@@ -34,6 +35,13 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard !closed, (try? store.generation) == generation else { return false }
         return answerDelivered && !tools.values.contains { $0.status == .started && !Self.isBookkeeping($0.name) }
+    }
+
+    /// Stable terminal presentation fact, including an answer saved by finish().
+    /// Unlike hasDeliveredAnswer, this remains readable after the recorder closes.
+    var hasCompletionAnswer: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (try? store.generation) == generation && completionAnswerSaved
     }
 
     init(store: SidekickConversationStore, taskID: UUID, generation: UUID,
@@ -64,11 +72,13 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         guard completion == nil || kind == .answer else { throw Failure.invalidCompletion }
         let visibleText = kind == .answer ? Self.answerText(markdown) : markdown
         guard !visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalidMessage }
+        // Final answers own response presentation; priority only controls updates.
+        let visiblePriority: Event.Priority = kind == .answer ? .high : priority
         if let receipt = deliveredMessages[id] {
             guard try store.generation == generation else { throw SidekickConversationStore.Failure.staleGeneration }
             guard receipt.completion == completion, let original = try store.record(id: id),
                   original.event.text == visibleText, original.event.messageKind == kind,
-                  original.event.priority == priority else { throw SidekickConversationStore.Failure.duplicateEvent(id) }
+                  original.event.priority == visiblePriority else { throw SidekickConversationStore.Failure.duplicateEvent(id) }
             // A replay acknowledges the original save without restoring an outcome claim
             // invalidated by subsequent work or creating a different timestamp.
             return id
@@ -77,7 +87,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         // write fails. A stale DONE must never survive a failed correction to could_not.
         if kind == .answer { recordedCompletion = nil }
         _ = try append(Event(id: id, taskID: taskID, kind: .assistantMessage, text: visibleText,
-                             messageKind: kind, priority: priority))
+                             messageKind: kind, priority: visiblePriority))
         deliveredMessages[id] = MessageReceipt(completion: completion)
         if kind == .answer {
             answerDelivered = true
@@ -192,6 +202,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard !closed else { return }
         var events: [Event] = []
+        var savesFinalAnswer = false
         for (key, value) in tools.sorted(by: { $0.key < $1.key }) where value.status == .started {
             events.append(Event(id: "unfinished:\(taskID):\(key)", taskID: taskID, kind: .activity,
                 text: "\(value.name): outcome not confirmed",
@@ -215,18 +226,22 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         if !answerDelivered, outcome != .stopped && outcome != .interrupted {
             let cleaned = outcome == .success ? Self.answerText(finalText).trimmingCharacters(in: .whitespacesAndNewlines) : ""
             let text = cleaned.isEmpty ? status : cleaned
+            savesFinalAnswer = !cleaned.isEmpty
             events.append(Event(id: "fallback:\(taskID)", taskID: taskID, kind: .assistantMessage,
-                                text: Self.bounded(text, bytes: 65_536), messageKind: .answer, priority: .high))
+                                text: Self.bounded(text, bytes: 65_536), messageKind: .answer,
+                                priority: outcome == .success && cleaned.isEmpty ? .normal : .high))
         }
         events.append(Event(id: "end:\(taskID)", taskID: taskID, kind: .taskFinished,
                             text: status, outcome: outcome))
         _ = try store.appendBatch(events, expectedGeneration: generation)
+        if savesFinalAnswer { answerDelivered = true }
+        completionAnswerSaved = answerDelivered
         closed = true
         recordedCompletion = nil
         tools.removeAll(); seen.removeAll(); deliveredMessages.removeAll()
     }
 
-    func invalidate() { lock.lock(); closed = true; recordedCompletion = nil; tools.removeAll(); seen.removeAll(); deliveredMessages.removeAll(); lock.unlock() }
+    func invalidate() { lock.lock(); closed = true; answerDelivered = false; recordedCompletion = nil; tools.removeAll(); seen.removeAll(); deliveredMessages.removeAll(); lock.unlock() }
 
     /// Read capabilities end with their task too. Reset invalidates this lock before wiping;
     /// a generation recheck also discards a result if an independent store handle reset it.

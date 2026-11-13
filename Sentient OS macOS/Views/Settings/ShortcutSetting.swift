@@ -1,5 +1,5 @@
 // ShortcutSetting.swift
-// Shared shortcut row and local single-key recorder for Sidekick and Double Tap.
+// Shared shortcut row and local single-key recorder for Sidekick and Magic Reply.
 // Other opens a recording sheet; nothing is saved until Use key, and Cancel preserves the binding.
 // Doc: Documentation - Settings.md
 
@@ -23,7 +23,7 @@ struct ShortcutSetting: View {
     }
 
     var body: some View {
-        SettingsRow(title: "Shared shortcut key", subtitle: "Used by both features. Tap for Sidekick; double tap to draft a reply.") {
+        SettingsRow(title: "Shared shortcut key", subtitle: "Tap to open quick access, hold to speak, or double-tap for Magic Reply.") {
             SettingsMenu(title: "Shared shortcut key", value: key.label, selection: selection) {
                 Text("Right ⌘").tag(ShortcutKey.rightCommand.rawValue)
                 Text("Right ⌥").tag(ShortcutKey.rightOption.rawValue)
@@ -52,7 +52,7 @@ private struct ShortcutRecorderSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Shared shortcut key").display(24).foregroundStyle(.white)
-            SettingsProse("The same key is used for Sidekick and Double Tap. Press and release Command, Option, or Control on either side of your keyboard.")
+            SettingsProse("The same key is used for Sidekick and Magic Reply. Press and release Command, Option, or Control on either side of your keyboard.")
             Text(candidate?.label ?? "Press a key…")
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(candidate == nil ? SettingsStyle.secondary : .white)

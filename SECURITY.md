@@ -17,7 +17,7 @@ Include the issue and its impact, steps to reproduce, the version or commit test
 fix. We will acknowledge reports within 48 hours and keep you informed while we work on a fix.
 
 Everything Sentient ships is in scope: the macOS app, hosted MCP mirror and server code, covered
-Double Tap relay, feedback-contact storage and its Auth boundary, and release/update infrastructure.
+Magic Reply relay, feedback-contact storage and its Auth boundary, and release/update infrastructure.
 For live testing, use your own data and accounts. Avoid disruptive testing or resource exhaustion.
 If you believe you can reach another user's knowledge or records, stop at the minimum proof needed
 and report it.
@@ -34,9 +34,9 @@ identifiers. These are filters, not a guarantee that every personal detail has b
 resulting knowledge is intentionally personal. Rejected items do not become knowledge summaries;
 local progress checkpoints and counts still support reliable processing.
 
-Double Tap writing examples are a separate one-time snapshot of selected sent messages. They retain
+Magic Reply writing examples are a separate one-time snapshot of selected sent messages. They retain
 original wording and recipient/conversation context, are editable as `writingstyle.md`, and travel
-with Double Tap requests and the knowledge folder if sharing is enabled.
+with Magic Reply requests and the knowledge folder if sharing is enabled.
 
 ## Your choice of inference
 
@@ -46,7 +46,7 @@ with Double Tap requests and the knowledge folder if sharing is enabled.
 - **Email and calendar:** Apple Mail and Apple Calendar are analyzed locally and work without a
   ChatGPT or Claude subscription. Hosted connectors use the supported AI account; direct MCP
   connections use the service the user authorizes, with credentials stored in Keychain.
-- **Double Tap:** has an independent provider setting. For low latency, the covered default uses
+- **Magic Reply:** has an independent provider setting. For low latency, the covered default uses
   Sentient's OpenAI API route with Zero Data Retention. A screen image, knowledge including writing
   examples, and instructions pass through the relay to produce an unsent draft. Users can choose
   their own provider, including a compatible model running locally. `store: false` is not, by itself,
@@ -57,8 +57,9 @@ with Double Tap requests and the knowledge folder if sharing is enabled.
   YouTube summaries send the canonical video URL to Supadata to retrieve a native transcript.
   This explicit action does not use the knowledge base or save its result into conversation history.
 - **Proofread:** sends selected text through Sentient's relay to OpenAI. Surrounding field content
-  stays local for target verification. Replacement requires a complete correction and a matching
-  original target; unsupported or changed targets receive a corrected-copy fallback.
+  stays local for target verification. An explicit action uses normal Copy to obtain the selection, then requires a complete correction
+  and an exact match before Paste. Changed or unsupported targets stop without insertion; no automatic
+  second paste is attempted. Home drafts use an app-owned text snapshot.
 - **Voice:** sends microphone audio directly to ElevenLabs Scribe after an explicit dictation action.
   Sentient's relay issues the short-lived access token. Finalized words can be edited before sending
   or submitted by the hold-and-release gesture. Provider processing and retention settings apply;
@@ -106,7 +107,7 @@ Sentient's source reader only reads selected calendars.
 
 Sentient's Screen Recording permission supplies screen context. All current computer-use backends
 use OpenAI's signed native helper, with its own Accessibility and Screen Recording grants and
-Sentient's Automation permission. Double Tap and Proofread use Sentient's Accessibility permission
+Sentient's Automation permission. Magic Reply and Proofread use Sentient's Accessibility permission
 to paste requested text. Summarize uses Accessibility for document text and Screen Recording for its
 accompanying image. Available file access may extend a verified active conversation from local storage.
 Setup uses macOS consent surfaces; it does not modify TCC databases. Permissions can

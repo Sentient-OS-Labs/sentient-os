@@ -2,10 +2,9 @@
 //  ProactivePane.swift
 //  Sentient OS macOS
 //
-//  Settings → Sidekick: activation, standing instructions, and the speed-vs-intelligence
+//  Settings → Sidekick: standing instructions and the speed-vs-intelligence
 //  slider (ComputerUseSpeed — the model/effort EVERY computer-use run rides, per engine). The strings
-//  persist and autosave. ShortcutSetting edits the shared Sidekick and Double Tap binding live. The
-//  Sidekick editor writes SidekickMemory.md; its defaults mirror refreshes the editor after
+//  persist and autosave. The Sidekick editor writes SidekickMemory.md; its defaults mirror refreshes the editor after
 //  agent writes. External edits refresh on appearance and app activation.
 //
 
@@ -13,8 +12,6 @@ import SwiftUI
 
 struct ProactivePane: View {
     @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
-    @AppStorage(NotchPreferences.clickEnabledKey) private var notchClickEnabled = true
-    @AppStorage(NotchPreferences.compactModeKey) private var compactNotchMode = false
     @State private var memoryText = ""
     @State private var memoryError: String?
     @State private var hasUnsavedMemoryEdit = false
@@ -31,21 +28,6 @@ struct ProactivePane: View {
         SettingsPane(title: "Sidekick",
                      whisper: "Make everyday help feel like your own.") {
             VStack(alignment: .leading, spacing: 32) {
-                SettingsGroup(label: "Activation and notch", inset: 0) {
-                    VStack(spacing: 0) {
-                        ShortcutSetting()
-                        SettingsHairline(opacity: 0.10)
-                        SettingToggleLine(title: "Open Sidekick by clicking the notch",
-                            sub: "Turn off to leave notch clicks to other apps. You can still open Sidekick with your shortcut key.",
-                            isOn: $notchClickEnabled)
-                            .accessibilityIdentifier("settings.notchClickEnabled")
-                        SettingsHairline(opacity: 0.10)
-                        SettingToggleLine(title: "Compact notch mode",
-                            sub: "Keep the app icon and short status beside the camera while Sidekick works.",
-                            isOn: $compactNotchMode)
-                            .accessibilityIdentifier("settings.compactNotchMode")
-                    }
-                }
                 SettingsGroup(label: "Custom instructions") {
                     VStack(alignment: .leading, spacing: 12) {
                         SettingsProse("Sidekick learns your preferences as you work. Edit its instructions anytime.")
@@ -86,12 +68,6 @@ struct ProactivePane: View {
             }
         }
         .onAppear(perform: refreshMemory)
-        .onChange(of: notchClickEnabled) { _, _ in
-            NotificationCenter.default.post(name: .notchInteractionChanged, object: nil)
-        }
-        .onChange(of: compactNotchMode) { _, _ in
-            NotificationCenter.default.post(name: .notchAppearanceChanged, object: nil)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshMemory()
         }

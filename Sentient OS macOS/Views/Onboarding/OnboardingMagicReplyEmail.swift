@@ -1,11 +1,11 @@
-//  OnboardingDoubleTapSamples.swift
-//  The native Mail and Messages fixtures used by the Double Tap lesson, with shared window
+//  OnboardingMagicReplyEmail.swift
+//  The native Mail example used by the Magic Reply lesson, with its window
 //  controls, material, and caret anchors. Replies stay in their compose fields; nothing sends.
 //  Doc: Documentation - Onboarding.md (this folder).
 
 import SwiftUI
 
-struct DoubleTapDemoCaretAnchor: PreferenceKey {
+struct MagicReplyDemoCaretAnchor: PreferenceKey {
     static var defaultValue: Anchor<CGRect>?
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = nextValue() ?? value
@@ -25,7 +25,7 @@ private enum DemoEmail {
     """
 }
 
-struct DoubleTapDemoEmailWindow: View {
+struct MagicReplyDemoEmailWindow: View {
     let replied: Bool
     let waiting: Bool
     let reduceMotion: Bool
@@ -131,128 +131,6 @@ struct DoubleTapDemoEmailWindow: View {
     }
 }
 
-private enum DemoMessage {
-    static let recipient = "Maya"
-    static let incoming = "Yo, want to grab dinner tonight?\nGot a place in mind?"
-    static let reply = "Yo sup, let's hit my favorite restaurant in downtown SF. Their kimchi is so good. You down for 7?"
-    static let blue = Color(red: 10.0 / 255, green: 132.0 / 255, blue: 1)
-}
-
-struct DoubleTapDemoMessageWindow: View {
-    let replied: Bool
-    let waiting: Bool
-    let reduceMotion: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                HStack {
-                    DemoTrafficLights()
-                    Spacer()
-                    Image(systemName: "video")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-                HStack(spacing: 9) {
-                    Text("M")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .frame(width: 30, height: 30)
-                        .background(.white.opacity(0.08), in: Circle())
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(DemoMessage.recipient)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.9))
-                        Text("iMessage")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.38))
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-            .frame(height: 62)
-            .background(.white.opacity(0.022))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Messages with Maya")
-
-            Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
-
-            VStack(spacing: 14) {
-                Text("Today 5:42 PM")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.3))
-                    .frame(maxWidth: .infinity)
-
-                HStack {
-                    Text(DemoMessage.incoming)
-                        .font(.system(size: 14))
-                        .lineSpacing(4)
-                        .foregroundStyle(.white.opacity(0.88))
-                        .padding(.horizontal, 15)
-                        .padding(.vertical, 11)
-                        .background(.white.opacity(0.085), in: RoundedRectangle(cornerRadius: 17))
-                        .accessibilityLabel("Maya: \(DemoMessage.incoming)")
-                    Spacer(minLength: 80)
-                }
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 18)
-
-            Spacer(minLength: 20)
-            composeField
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .modifier(DemoWindowSurface())
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Sample iMessage conversation")
-    }
-
-    private var composeField: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "plus.circle")
-                .font(.system(size: 22, weight: .light))
-                .foregroundStyle(.white.opacity(0.27))
-                .accessibilityHidden(true)
-
-            HStack(alignment: .bottom, spacing: 12) {
-                ZStack(alignment: .topLeading) {
-                    Text(DemoMessage.reply)
-                        .font(.system(size: 14))
-                        .lineSpacing(4)
-                        .foregroundStyle(.white.opacity(0.92))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .opacity(replied ? 1 : 0)
-                        .accessibilityHidden(!replied)
-
-                    Text("iMessage")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.28))
-                        .padding(.leading, 5)
-                        .opacity(replied ? 0 : 1)
-                        .accessibilityHidden(true)
-
-                    DemoReplyCaret(replied: replied, waiting: waiting, reduceMotion: reduceMotion)
-                }
-                .frame(maxWidth: .infinity, minHeight: 42, alignment: .topLeading)
-
-                // Decorative only: the lesson drafts into the composer, and never sends.
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 23))
-                    .foregroundStyle(replied ? DemoMessage.blue : .white.opacity(0.14))
-                    .accessibilityHidden(true)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(.white.opacity(0.022), in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(replied ? 0.18 : 0.12), lineWidth: 1))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(replied ? "Draft reply to Maya" : "Empty iMessage field")
-        }
-    }
-}
-
 private struct DemoReplyCaret: View {
     let replied: Bool
     let waiting: Bool
@@ -265,12 +143,12 @@ private struct DemoReplyCaret: View {
                 .fill(.white.opacity(replied ? 0 : 0.5 * pulse))
                 .frame(width: 1.5, height: 18)
         }
-        .anchorPreference(key: DoubleTapDemoCaretAnchor.self, value: .bounds) { $0 }
+        .anchorPreference(key: MagicReplyDemoCaretAnchor.self, value: .bounds) { $0 }
         .accessibilityHidden(true)
     }
 }
 
-/// The Sidekick film's active window controls (RecipeShop.tsx), shared by both native samples.
+/// The Sidekick film's active window controls (RecipeShop.tsx), used by the native email example.
 private struct DemoTrafficLights: View {
     private static let colors: [Color] = [
         Color(red: 1, green: 95.0 / 255, blue: 87.0 / 255),            // #ff5f57

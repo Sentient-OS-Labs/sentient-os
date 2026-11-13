@@ -30,7 +30,7 @@ enum DoubleTapProvider: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .sentient: "Covered by Sentient OS"
+        case .sentient: "GPT-6.1 Sol · Covered by Sentient"
         case .openAI: "OpenAI API"
         case .openRouter: "OpenRouter API"
         case .ollama: "Ollama"
@@ -122,7 +122,7 @@ enum DoubleTapProvider: String, CaseIterable, Identifiable {
     var modelKey: String { "doubletap.\(storageID).model" }
     var defaultModel: String { hasCustomEndpoint ? "" : modelID("gpt-6-sol") }
     var model: String {
-        guard self != .sentient else { return "gpt-6-sol" } // The relay owns its model.
+        guard self != .sentient else { return "gpt-6.1-sol" } // The relay owns its model.
         return (UserDefaults.standard.string(forKey: modelKey) ?? defaultModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }

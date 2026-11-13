@@ -14,6 +14,7 @@ struct SummaryReader: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.wantsLayer = true
         scroll.contentView.wantsLayer = true
+        scroll.contentView.drawsBackground = false
         scroll.drawsBackground = false; scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false; scroll.autohidesScrollers = true
         scroll.borderType = .noBorder

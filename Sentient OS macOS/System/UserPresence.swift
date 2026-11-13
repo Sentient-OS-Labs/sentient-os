@@ -22,13 +22,19 @@ enum UserPresence {
     /// Seconds of no input before a frontmost user counts as away.
     private static let idleThreshold: TimeInterval = 300
 
+    /// Session-wide inactivity, independent of which application is frontmost. Conservative:
+    /// synthetic input also resets this clock, so an agent driving the Mac postpones analysis.
+    static var systemIdleSeconds: TimeInterval {
+        let anyInput = CGEventType(rawValue: ~0)!
+        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+        return seconds.isFinite && seconds >= 0 ? seconds : 0
+    }
+
     /// True when acting silently in the background can't interrupt anyone: the app is not the
     /// active app with a key window, or the whole session has been idle for 5+ minutes.
     @MainActor
     static var isAwayFromApp: Bool {
         let appIsFrontmost = NSApp.isActive && NSApp.keyWindow != nil
-        let anyInput = CGEventType(rawValue: ~0)!   // kCGAnyInputEventType — time since any keyboard/mouse event
-        let idleSeconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
-        return !appIsFrontmost || idleSeconds > idleThreshold
+        return !appIsFrontmost || systemIdleSeconds > idleThreshold
     }
 }

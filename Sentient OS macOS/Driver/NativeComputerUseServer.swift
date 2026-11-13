@@ -18,6 +18,7 @@ actor NativeComputerUseServer {
     private var openingSession: Task<OpenAIComputerUseSession, Error>?
     private var transport: LocalMCPServer?
     private var tools: [[String: Any]] = []
+    private var workWindows: [pid_t: SidekickWorkWindow] = [:]
     private var closed = false
     private var busy = false
     private var offeredPermissionSetup = false
@@ -99,7 +100,7 @@ actor NativeComputerUseServer {
         await transport?.stop(); transport = nil
         await session?.close(); session = nil
         if let opened = try? await opening?.value { await opened.close() }
-        replies.removeAll(); fingerprints.removeAll(); tools.removeAll()
+        replies.removeAll(); fingerprints.removeAll(); tools.removeAll(); workWindows.removeAll()
     }
     func respond(_ data: Data) async throws -> Data {
         guard !closed, let rpc = try JSONSerialization.jsonObject(with: data) as? [String: Any], let id = rpc["id"] else { throw CancellationError() }
@@ -349,6 +350,9 @@ actor NativeComputerUseServer {
         let diagnostics = CaptureDiagnostics(source: .native, context: diagnosticContext)
         let isState = tool == "get_app_state"
         let target = await MainActor.run { (arguments["app"] as? String).flatMap { Self.resolve($0) } }
+        if arguments["app"] is String {
+            await interaction?.onWorkWindow?(target.flatMap { workWindows[$0.processIdentifier] })
+        }
         let encoded = try JSONSerialization.data(withJSONObject: arguments)
         let evidence = await CaptureDiagnostics.environment(target: target)
         let began = ProcessInfo.processInfo.systemUptime
@@ -382,6 +386,24 @@ actor NativeComputerUseServer {
                 result = try OpenAIComputerUseProbe.appStateResult(result)
                 reopenOnNextRead = false
                 recoveredSinceLastState = false
+                if interaction?.onWorkWindow != nil {
+                    // Resolve again after the helper may have launched the selected app.
+                    let app = await MainActor.run { () -> SidekickWorkWindow.Application? in
+                        guard let selector = arguments["app"] as? String, let app = Self.resolve(selector) else { return nil }
+                        return .init(pid: app.processIdentifier, bundleID: app.bundleIdentifier, launched: app.launchDate)
+                    }
+                    let window: SidekickWorkWindow?
+                    if let app, let title = SidekickWorkWindow.windowTitle(in: result) {
+                        window = await Task.detached(priority: .utility) {
+                            SidekickWorkWindow.capture(application: app, title: title)
+                        }.value
+                    } else { window = nil }
+                    if let app {
+                        workWindows[app.pid] = window
+                        if workWindows.count > 16 { workWindows = window.map { [$0.application.pid: $0] } ?? [:] }
+                    }
+                    await interaction?.onWorkWindow?(window)
+                }
             }
             diagnostics.record(.passed, fields: evidence.merging([
                 "tool": tool, "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - began) * 1000))

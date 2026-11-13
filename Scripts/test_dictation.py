@@ -28,7 +28,10 @@ class SocketFixture(http.server.BaseHTTPRequestHandler):
             assert query['model_id'] == ['scribe_v2_realtime']
             assert query['commit_strategy'] == ['manual']
             assert query['audio_format'] == ['pcm_16000']
-            assert query['keyterms'] == ['summarise','summarize','proofread','sentient os','sentient','jesai']
+            assert query['keyterms'] == [
+                'summarise', 'summarize', 'proofread', 'sentient os', 'sentient', 'jesai',
+                'take over', 'finish this for me', 'proofread this', 'summarize this', 'summarise this', 'reply', 'reply to this', 'Magic Reply', 'Sidekick', 'Double Tap'
+            ]
             assert len(query['language_code'][0]) in (2,3)
             assert query['token'] == ['synthetic-token+with/slash=']
             key = self.headers['Sec-WebSocket-Key']

@@ -30,7 +30,7 @@ recording.
 - **Typing needs a key window:** `.typing` reveals with `makeKeyAndOrderFront` on a non-activating panel. Outside mouse-downs dismiss directly, including during opening. Transient key loss during a display move is not dismissal; an explicit switch to another app dismisses pending input. Each entry activation also requests editor focus, and Home respects notch keyboard ownership.
 - **Esc is LOCAL only:** `addLocalMonitorForEvents(.keyDown)` → `coordinator.cancelCurrent()`, swallowed when handled so dismissing the field never beeps. Over other apps a fresh hotkey press is the cancel.
 - **The anchor display:** every interaction picks its screen at the front door (`CommandCoordinator.notchAnchor`): the hotkey and the home command bar → the MAIN (menu-bar) display; a hover or click on the physical notch → the BUILT-IN display's real cutout, so the notch stays a button when an external display is primary. `placeCanvas` re-derives the metrics when the overlay lands on a different display; the anchor is sticky through `.hidden` so the retract merges into the same bezel. Physical-notch entry remains keyed to the built-in screen. Each notchless display has its own idle handle; clicking or holding it anchors the interaction to that display ID. If the display disconnects, placement falls back to the main display.
-- On `.hidden` the panel orders out only after the retract animation has played (`settleDelay` 0.56 s; the hover exit waits 1.0 s). Idle = no main canvas; every display retains its small native entry target (visually invisible over a hardware cutout). Other displays' handles stay available while a prompt/message/question is open. Handles are immediately available during retract, so quick re-entry does not wait for window order-out. Observers for screen-parameter changes, Space changes, wake, and app activation re-place and re-reveal.
+- On `.hidden`, hardware-notch panels order out after the retract settles. The active external panel stays mounted as its resting pill, with clocks/materials stopped and mouse passthrough enabled. It owns the entire hover/open/retract cycle. Lightweight launchers remain only on other displays; the covered launcher's artwork never reappears during a retract.
 - `sharingType` is left at default: the notch shows in screen recordings (recordability was chosen; the computer-use agent may see it in its own screenshots).
 
 ## The notch as a button (hover + click)
@@ -72,7 +72,7 @@ panel out and back in. Stopping dictation returns to the same response with an e
 
 `NotchContent` layers the lower glass material, the localized, feathered black hardware-cutout cover, the dark Underlight surface and its masked color field, and the controls. On notchless
 displays there is no camera cover. The glass, fill, and light all follow the same silhouette;
-shape masks remain outside `TimelineView` so size and corner morphs stay synchronized.
+shape masks remain outside the ticking color leaves so size and corner morphs stay synchronized.
 `SpinningLogo` sits on the left; the right control keeps its 17 pt slot across mic, spinner,
 return, stop and outcome states. Submitted speech keeps the live transcript view; status uses mono with a
 blur-dissolve transition. One spring (`response 0.52, damping 0.72`) drives phase geometry;
@@ -107,8 +107,8 @@ render from the website with the actual native mark at 120, 40, 24 and 17 pt, pl
 4. On physical-notch displays the shape sits flush at the bezel and the hardware cutout remains black. On notchless displays the island floats 9 pt below the bezel. Underlight stays concentrated near the lower edge.
 5. The glow morphs in lockstep via a `.mask` in the body, never a shape built inside the `TimelineView`.
 6. Expand each glow gradient past the stroke + blur on every edge.
-7. `SpinningLogo`: match the website SVG ratios, explicitly size every layer, and keep `.transaction { animation = nil }` on the rotation.
-8. No `@State` writes per frame; wall-clock `TimelineView` only.
+7. `SpinningLogo`: match the website SVG ratios and explicitly size every layer. The halo must inherit the surface animation; animation-disabling overrides can strand its color during a morph.
+8. No per-frame layout state writes. One view-bound display link publishes lighting time only to `NotchLightingFrames` color leaves; static masks and the shell never observe that time. It stops when all lighting is paused and invalidates on detach/teardown. Standalone previews retain a `TimelineView` fallback.
 9. `RenderPreview` is broken on this target; build, then test motion live.
 10. Off-main code (the audio tap) is `nonisolated` and captures locals, never `self`; the project uses default-MainActor isolation.
 11. The dismiss is a retract into the cutout, not a fade.
@@ -222,8 +222,8 @@ focused/unfocused glass over a synthetic detailed background. `preview_island_co
 cycle using the production default. Without that flag it retains the B/C/D design comparison;
 alternative treatments are preview overrides, not user-facing settings.
 
-Normal work uses a faint underlight. New messages, questions, setup prompts, notices and completion
-states receive one brighter arrival, held for 650 ms and eased back over 650 ms. Re-rendering the same
+Normal work uses a faint underlight. New messages, questions, setup prompts and notices
+receive one brighter arrival, held for 650 ms and eased back over 650 ms. Re-rendering the same
 content does not replay it. Leaving that event resets the arrival identity for a later completion;
 Reduce Motion and Low Power Mode skip the flare. Fill opacity and text brightness are unaffected.
 
@@ -261,8 +261,7 @@ uses a cancellation-aware task keyed to phase/readiness, so a queued focus reque
 prompt after click-away. Transient key resignation is no longer treated as dismissal; actual other-app activation handles keyboard app switches.
 
 The opening keeps its original spring. Dismissal uses a bounded 500 ms ease-in/out curve with no
-overshoot, followed by window order-out at 560 ms; the retract therefore finishes before its canvas
-is removed. The native motion fixture verifies first-click dismissal during opening, dismissal of
+overshoot. Hardware panels order out at 560 ms; the active external panel instead remains as its resting pill. The native motion fixture verifies first-click dismissal during opening, dismissal of
 an already non-key prompt, no focus reclamation on app activation, and eventual panel order-out.
 `test_notch_click_away.py` covers production routing across input, question, message and work states.
 
@@ -375,3 +374,224 @@ end insets. Hardware-notch dimensions and layout remain separate.
 `Scripts/preview_island_colors.py --layout-refinement --app <Debug.app>` captures the actual
 working, listening, prompt, response, compact and question states. Voice continuity, pointer
 routing and click-away tests cover the shared geometry during transitions.
+
+External hover uses the same SwiftUI surface as expansion, rather than independently scaling the
+launcher layer. The entire logo, including its colored halo, inherits the shell animation. No
+child layer disables the inherited transaction. Hovering the logo enlarges only its white core to
+125% with the website’s 300 ms ease-out transition, on hardware notches and external islands.
+Reduce Motion changes the core without animation. Content is composited together during
+dismissal so the logo cannot linger outside the collapsing surface.
+
+
+### Rendering work reduction (November 7, 2026)
+
+- `SpinningLogo` ticks only its halo. The invariant gradient/blur is an equatable offscreen layer; rotation follows that layer. Ring, core and hover scale stay outside the timeline and retain the parent morph transaction.
+- One `NotchLightingClockHost` serves all overlay color fields, skirt glows and the thinking underlight at the existing 30 Hz target. The native view's display link follows screen changes automatically. Paused leaves do not subscribe to time changes; masks remain outside ticking content.
+- Pointer polling keeps its existing 60 Hz near / 10 Hz far behavior. A single-entry local-geometry cache avoids repeated sizing/path construction; its key includes metrics, layout phase, hover, transcript/context and response/recovery content. Screen and panel origins are still read live.
+- Focused checks: `Scripts/test_compact_notch.py`, `Scripts/test_notch_click_away.py`, and `Scripts/test_notch_lighting_clock.py`. These do not substitute for a full-app frame-time comparison.
+
+
+### Rapid reopening and background selection capture
+
+An interrupted Proofread preparation discards its selection, not the manually opened
+prompt. `applyPhase` never dismisses typing based on `captureWasInterrupted`, and input
+becomes ready after capture settles. Actual outside clicks and app switches retain their
+dismissal handling. `Scripts/test_notch_reopen.py` exercises late interruption plus rapid
+reopening across the previous retract deadline for both external and hardware surfaces.
+
+
+### Brief transient notices
+
+A short submitted dictation remains visible for 0.5 seconds before live task progress;
+long dictations scale by line count up to 2.5 seconds. This timer is visual only and
+never delays starting the task. The empty-selection Proofread notice dismisses after
+one second; other proofreading errors retain their three-second reading time.
+
+
+### Home focus owns task presentation
+
+Home reports real key-window focus independently of whether conversation history is
+expanded. While Home is focused, automatic running, completion, response and question
+surfaces use a hidden display phase. The coordinator's actual phase/run keeps advancing;
+losing Home focus restores the current status. Both SwiftUI and the panel lifecycle use
+the same display phase, including retract callback guards. Explicit notch input and
+quick-action feedback retain their normal behavior.
+
+
+### Directional thinking underlight
+
+During startup/thinking, three staggered blue, violet and amber ribbons travel left
+to right on a 3.6-second cycle. Each fades to zero before wrapping outside the
+surface. A diffuse lower wash and a soft narrow bottom ribbon make movement visible
+without changing the black hardware crown or text. Physical notches reserve the
+camera band; floating islands use a 14-point-deep treatment. This uses the shared
+lighting clock, fades with thinking visibility, and stays static for Reduce Motion
+or Low Power Mode.
+
+
+### Completion acknowledgement
+
+A task finishing while Home is focused (or its composer is dictating) transitions
+directly to hidden instead of retaining a hidden Done toast. Bringing Home forward
+also consumes an existing finishing state. A later focus change therefore cannot
+resurrect that old completion. Completions outside Home still use the brief normal
+flourish, and late callbacks do not replace typing, recording or response states.
+
+
+### Jump to the active work window
+
+During a native computer-use task, clicking the working body or Sentient mark raises
+the last verified window for the app Sidekick is using. Stop, history and input controls
+remain separate controls above the body hit target. No new Sidekick prompt is sent.
+`NativeComputerUseServer` reads only the native state header and retains a task-scoped
+AX window reference after a successful state read; subsequent app actions select that
+app's cached reference. Unknown targets disable this affordance instead of guessing.
+
+`SidekickWorkWindow` validates process identity, restores minimized windows, raises the
+exact window and requests native activation. macOS chooses the Space; the feature never
+moves windows or changes Mission Control preferences. Restoration can replace AX objects;
+an optional WindowServer-ID bridge re-resolves only the same window. Without that bridge,
+a changed reference fails safely. Closed windows/app restarts are not substituted with
+other windows. The bounded restore retry respects task cancellation; its post-activation raise stops if another app has taken focus. Agent-generated mouse/keyboard events do not cancel an explicit user focus request. Failure feedback
+is tied to the current run and cannot replace a newer task's status.
+
+Validation: `Scripts/test_sidekick_work_window.py --live` covers native multi-window focus,
+minimize/restore, hidden app and closed targets. Native transport regression tests remain
+separate. Spotify and Edge were also checked on real windows, including a user-positioned
+Spotify window on another desktop; the user confirmed switching there and back.
+
+
+### Island response entrance
+
+The compact work row and expanded reader are different view branches. The expanded
+branch needs its own insertion transition; its nested message transition alone cannot
+animate an entirely new parent. The branch uses the existing blur/fade entrance after
+a 280 ms expansion lead (240 ms with Reduce Motion), then a 240 ms reveal (160 ms with
+Reduce Motion). Outgoing native controls are still removed immediately. Geometry stays
+on the original shell spring. The response-motion fixture records normal and interrupted
+entrances with `preview_island_colors.py --island-motion --response-motion`.
+
+
+### Retiring the expanded island
+
+The expanded-content gate is a persistent sibling of the compact work row. On a
+reply/voice-to-working handoff it immediately disables rendering, hit testing and
+accessibility for the retiring native reader. A transaction on that gate removes
+old AppKit descendants without animating their removal; the shell spring remains
+outside the gate and continues normally. Response insertion retains its staged
+blur/fade. The response-motion fixture now includes reply dictation, finalization,
+submission and contraction, not only opening and closing a static response.
+
+
+### Voice replies in questions and errors
+
+The recovery guidance field includes the same trailing mic/stop control as ordinary
+replies. Its local `ComposerDictation` writes only to the current recovery ID and never
+changes the panel to the compact listening layout. Click records, Stop finalizes into
+an editable draft, Send flushes final words and answers once. Holding the mic sends on
+release; dragging away keeps a draft. Recording holds the recovery timer even if focus
+moves. Closing, answering a choice or replacing the recovery cancels capture and fences
+late transcript/send callbacks. The existing separate Home composer yields when the
+notch owns a recovery reply.
+
+
+### Dismissed question hover policy
+
+Hover never reopens a pending question or error. It only shows the small normal
+entry affordance. An explicit click (or the existing explicit keyboard action)
+can reopen the pending recovery. Hidden pending questions keep entry handles
+available even while the run retains its active/waiting lock. The question itself
+is preserved until answered/cancelled under the existing recovery lifecycle.
+`Scripts/test_notch_question_hover.py` exercises repeated hover, dismissal, explicit
+reopen and entry availability with the production handlers.
+
+
+Focus/Space reactivation follows `displayedNotchPhase`, not the raw run phase, so
+those callbacks cannot re-show a panel suppressed while Home is focused. The audit
+covers pending recovery hover, attention replay, completion acknowledgement and
+interrupted retraction (`test_notch_question_hover`, `test_sidekick_attention`,
+`test_notch_completion_focus`, `test_notch_reopen`).
+
+
+### Signature badge working island
+
+The standard external activity row is 56 pt tall, with a 28 pt app icon and a small
+Sentient badge in its lower corner. The app name sits above a quieter, action-only
+subtitle. Stop remains 24 pt; the 16 pt activity inset makes its center concentric
+with the 28 pt end radius. The response header retains its existing 48 pt band.
+Voice and working states share the 56 pt footprint. Hardware and compact layouts
+retain their existing geometry.
+
+The work-window button sits beneath the entire live silhouette, not just the text
+content. Body, padding and app/brand marks activate the current work window; Stop
+and Open in Sentient are independent controls above that target. The layout preview
+fixture verifies these click paths for both the floating island and hardware notch.
+
+
+Native window-header parsing starts inside `<app_state>`, after any optional
+`<app_specific_instructions>` block. Spotify's first reply can include long playback
+instructions before its window header; this must not leave its first work target empty.
+The work-window regression fixture covers both prefixed and subsequent state replies.
+
+
+### Stable app identity between tool updates
+
+A run retains its last verified app bundle ID independently of the transient activity
+record and current window reference. The floating badge uses current activity identity
+when present and that retained ID during metadata gaps; it resets on a new run/completion.
+Only the newest human status line is displayed. Raw native tool markers (including arrows
+without ordinary spacing) are mapped to friendly labels, never returned as rolling log
+text. The secondary badge line can say Thinking while an operation is complete.
+The native layout fixture includes a missing-activity frame with a nonbreaking-space
+`sentient_native.press_key` marker, and checks that the badge remains intact.
+
+
+### One terminal cue
+
+`SidekickConversationRun.hasCompletionAnswer` records whether finish committed a real
+answer and remains available through recorder teardown. Final answer messages have
+app-owned high priority; a status-only fallback is retained as normal history and
+cannot compete with the All set cue. The run snapshots its last app identifier before
+clearing live work. `runFinished` reconciles committed answers before choosing a toast,
+so callback order cannot add Done after a response. Dismissed/read answers stay consumed;
+a progress-only preview may yield to completion, but an actively edited reply is preserved.
+
+Successful action-only completion keeps the last app badge/name or falls back to the
+Sentient orb. One pastel check replaces Stop, Open in Sentient remains available, and
+“All set” replaces the monospace status line. A single 850 ms lower-edge sweep accompanies
+the 1.15 s acknowledgement before the usual retract. Reduce Motion/Low Power skip that
+sweep; the hardware crown stays black. Completion does not restart the live glass material.
+
+Native previews: `--done-preview` shows both surfaces with/without app context;
+`--completion-motion` records the production completion transition (add `--island-motion`
+for the external display).
+
+
+## Sidekick action row (V3 / Lumen)
+
+`NotchQuickActionRow` renders Take Over, Magic Reply, Summarize and Proofread in the existing typing
+width. The lane is 38 points high with 34-point controls. Take Over has a black raised surface,
+a fine white upper reflection and a softly lit cursor. Magic Reply is an unboxed label with a
+fingerprint mark and a fine underline on hover. Quiet text-only utilities sit to the right;
+their shortcuts remain in help and accessibility hints. The prompt reads “What can I take off
+your hands?” and the first action remains the clear entry to agent execution.
+
+Only hover/press events animate: the cursor lifts slightly, its small static light changes
+opacity, and the personal-reply underline reveals from left to right. There is no entrance sweep,
+repeating animation, timeline, timer, animated blur or offscreen drawing group in this row.
+Reduce Motion and Low Power Mode disable these transitions. The row only exists on the typing
+surface; voice and active-task states disable it. The Lumen input and Take Over surfaces use a
+black body and a quiet white rim, bypassing the legacy colored material/edge layers and pausing
+the lighting clock and identity spin. Other Sidekick surfaces retain their existing treatment.
+
+Take Over retains the same cursor in the running state until real app/activity identity becomes
+available, with “Taking it from here…” as its startup caption. The run owns this identity by UUID,
+so retries retain it and unrelated tasks cannot inherit it. The cursor can open the existing
+work window when one is available.
+
+Before keyboard focus enters the notch, both the proofreading selection and Magic Reply's empty
+field bookmark finish their bounded background capture. Dismissal cancels the bookmark and late
+capture completion cannot reopen or change a newer input session.
+
+Visual review can render the standalone production row through SwiftUI ImageRenderer with an
+activation-prohibited process; it requires no app launch, screen capture or interactive windows.

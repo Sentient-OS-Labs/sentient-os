@@ -32,7 +32,7 @@ fixture = r'''
 import Foundation
 
 enum Verdict { case survivor, junk }
-enum CodexTrigger { case onboarding, analyzeNow, overnight }
+enum CodexTrigger { case onboarding, analyzeNow, overnight, pluggedInIdle }
 struct CycleFailure: Error, Equatable {
     enum Stage { case vault, deciding, preparing }
     var message = ""
@@ -134,6 +134,7 @@ final class ProgressCapture: @unchecked Sendable {
 }
 enum ProactiveCyclePhase { case done, failed(CycleFailure) }
 final class ProactiveCycle {
+    static let lastCycleKey = "fixture.lastCycle"
     static let shared = ProactiveCycle()
     var calls = 0
     var excluded: Set<String> = []
@@ -158,6 +159,7 @@ enum PowerState {
     static var blocked: Block? = nil
     static func block(_ value: Snapshot, initial: Bool, allowBattery: Bool, scheduled: Bool) -> Block? { blocked }
 }
+enum PluggedInAnalysisScheduler { static let interval = 14400.0 }
 enum OvernightScheduler { static let allowBatteryKey = "battery" }
 enum OvernightCaution { enum Kind { case diskFull, loggedOut }; static func record(_ value: Kind) {} }
 enum VaultGenerator { static var vaultRoot = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("Knowledge") }
@@ -194,11 +196,12 @@ run_fixture = r'''
 
 # Exercise the exact final-result branch: the only substituted inputs are source results,
 # synthetic knowledge-file presence and schedule state; milestone writes use the real plan store.
-completion = coordinator[coordinator.index('        // A successful empty source read'):coordinator.index('        if let diagnosticID {\n            DiagnosticHistory.finish(.overnight, id: diagnosticID,\n                outcome: complete')]
+completion = coordinator[coordinator.index('        // A successful empty source read'):coordinator.index('        if let diagnosticID {\n            DiagnosticHistory.finish(diagnosticKind, id: diagnosticID,\n                outcome: complete')]
 coordinator_fixture = r'''
 @MainActor final class ProcessingCoordinator {
     let defaults: UserDefaults
     var initialComplete = false
+    var cadence = ProcessingPlan.Cadence()
     var record = ProcessingPlan.Record()
     var state: State = .idle
     var activeRequest: ProcessingRequest?
@@ -208,6 +211,7 @@ coordinator_fixture = r'''
     static func scheduleLabel(_ date: Date) -> String { "fixture" }
     func admits(_ request: ProcessingRequest) -> Wait? { admission(request, scheduled: false) }
     func finish(_ result: ProcessingRun.Result, request: ProcessingRequest) {
+        let trigger = record.trigger
         let scheduled = defaults.bool(forKey: "fixture.scheduled")
 // COMPLETION
     }

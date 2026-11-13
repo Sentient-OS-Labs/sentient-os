@@ -177,8 +177,10 @@ will have the same shape.
 
 `NativeComputerUseServer` forwards each model-requested native call once. It does not retry app
 reads or maintain a second app-state permission gate. The helper owns app selection, element
-validity and native interaction state. Local NSWorkspace lookup is best-effort diagnostic attribution
-only; failure to resolve an app name never prevents a request reaching the helper.
+validity and native interaction state. Local NSWorkspace lookup provides best-effort diagnostic attribution and the optional
+user-click work-window target. Failure to resolve an app name never prevents a request
+reaching the helper. A successful native state read can publish its verified window to
+the current run; this neither raises the window nor changes native tool arguments.
 
 The live helper catalog supplies the exposed native tools; a changed or additional tool name does
 not fail startup. The local diagnostic tool is added separately. Tool arguments and native failure

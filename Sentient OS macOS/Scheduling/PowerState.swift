@@ -1,5 +1,5 @@
 // Reads Mac power and thermal state and applies shared analysis admission/stop rules.
-// Overnight work starts at 50% initially and 30% for updates; manual runs ignore battery level.
+// Overnight work starts at 40% initially and 25% for updates; manual runs ignore battery level.
 // Doc: Documentation - Overnight Scheduler & Wake Helper.md
 
 import Foundation
@@ -46,8 +46,8 @@ enum PowerState {
         }
     }
 
-    static let initialBatteryFloor = 50
-    static let iterativeBatteryFloor = 30
+    static let initialBatteryFloor = 40
+    static let iterativeBatteryFloor = 25
     static let reserveBatteryFloor = 20
 
     struct Snapshot: Sendable {

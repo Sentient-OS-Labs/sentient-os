@@ -18,6 +18,7 @@ def main() -> int:
     parser.add_argument("--offscreen-render", action="store_true", help="Explicitly render the owned film window on a headless/occluded desktop; never changes production visibility")
     parser.add_argument("--film-origin", help="Owned local preview server for the invitation fixture")
     parser.add_argument("--invitation", action="store_true", help="Check the native onboarding invitation and physical-notch pointer")
+    parser.add_argument("--magic-reply", action="store_true", help="Check the single email notch lesson without the remote film")
     parser.add_argument("--small-onboarding", action="store_true", help="Check scaled onboarding and bottom controls on small display sizes")
     parser.add_argument("--late-gift", action="store_true", help="Check the late FINAL_1000 gift animation without redeeming a real code")
     args = parser.parse_args()
@@ -32,7 +33,7 @@ def main() -> int:
         (root / "vault").mkdir(mode=0o700)
         fixture = app.fixture(root, "chatgpt")
         if args.offscreen_render:
-            app.require(args.invitation, "Offscreen rendering is scoped to the film fixture")
+            app.require(args.invitation or args.small_onboarding, "Offscreen rendering is scoped to film fixtures")
             (root / "onboarding-offscreen-render").write_text("1\n")
         if args.film_origin:
             from urllib.parse import urlparse
@@ -45,11 +46,11 @@ def main() -> int:
         runtime = args.runtime_root.expanduser().resolve()
         print(f"Polish fixture: {root}", flush=True)
         app.run_stage(executable, root, fixture, runtime, "seed", 60)
-        stage = "ui-late-gift" if args.late_gift else "ui-small-onboarding" if args.small_onboarding else "ui-invitation" if args.invitation else "ui-discovery" if args.discovery else "ui-polish"
+        stage = "ui-magic-reply" if args.magic_reply else "ui-late-gift" if args.late_gift else "ui-small-onboarding" if args.small_onboarding else "ui-invitation" if args.invitation else "ui-discovery" if args.discovery else "ui-polish"
         receipt = app.run_stage(executable, root, fixture, runtime, stage, 90)
-        manifest = app.read_json(root / ("late-gift-manifest.json" if args.late_gift else "small-onboarding-manifest.json" if args.small_onboarding else "invitation-manifest.json" if args.invitation else "discovery-manifest.json" if args.discovery else "polish-manifest.json"))
+        manifest = app.read_json(root / ("magic-reply-manifest.json" if args.magic_reply else "late-gift-manifest.json" if args.late_gift else "small-onboarding-manifest.json" if args.small_onboarding else "invitation-manifest.json" if args.invitation else "discovery-manifest.json" if args.discovery else "polish-manifest.json"))
         captures = manifest.get("captures", [])
-        app.require(len(captures) == (2 if args.late_gift else 4 if args.small_onboarding else 11 if args.invitation else 6 if args.discovery else 8) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
+        app.require(len(captures) == (3 if args.magic_reply else 2 if args.late_gift else 4 if args.small_onboarding else 15 if args.invitation else 3 if args.discovery else 8) and manifest.get("provider_calls") == 0, "Unexpected capture/provider count")
         for capture in captures:
             path = (root / capture["file"]).resolve()
             app.require(path.parent == root / "polish-snapshots", "Capture escaped owned fixture")

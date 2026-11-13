@@ -2,6 +2,8 @@ import AppKit
 import PDFKit
 @main enum SummaryDocumentTests {
  static func main() throws {
+  do { _ = try SummaryAccessibility.read(.init(pid: getpid(), name: "Sentient", browser: false)); fatalError("self AX traversal admitted") }
+  catch SummaryAccessibility.Failure.ownApplication { }
   let root=URL(fileURLWithPath:CommandLine.arguments[1]);let pdfURL=root.appendingPathComponent("document.pdf")
   let data=NSMutableData();var media=CGRect(x:0,y:0,width:612,height:792)
   let consumer=CGDataConsumer(data:data as CFMutableData)!

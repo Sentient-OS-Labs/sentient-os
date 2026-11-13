@@ -46,9 +46,10 @@ nonisolated enum SummaryAccessibility {
         var windowTitle: String? { title ?? window.flatMap { SummaryAccessibility.attribute($0, "AXTitle") as? String } }
         var windowFrame: CGRect? { window.flatMap { SummaryAccessibility.rect($0) } }
     }
-    enum Failure: LocalizedError, Equatable { case permission, unavailable
+    enum Failure: LocalizedError, Equatable { case permission, unavailable, ownApplication
         var errorDescription: String? {
             switch self {
+            case .ownApplication: "Switch to another app to summarize it."
             case .permission: "Allow Accessibility so Sentient can read the text you want summarized."
             case .unavailable: "This app did not expose readable text. Try opening the document or enable Screen Recording for a visual summary."
             }
@@ -60,12 +61,18 @@ nonisolated enum SummaryAccessibility {
     }
     @MainActor static func target(for app: NSRunningApplication) -> Target {
         let browsers = ["com.microsoft.edgemac", "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser", "company.thebrowser.dia", "com.brave.Browser", "org.mozilla.firefox"]
+        // Never re-enter our own SwiftUI accessibility provider while resolving a source.
+        guard app.processIdentifier != getpid() else {
+            return Target(pid: app.processIdentifier, name: app.localizedName ?? "Sentient",
+                browser: false, bundleIdentifier: app.bundleIdentifier)
+        }
         let root = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(root, 0.08)
         let window = element(root, "AXFocusedWindow") ?? element(root, "AXMainWindow")
         return Target(pid: app.processIdentifier, name: app.localizedName ?? "App", browser: browsers.contains(app.bundleIdentifier ?? ""), window: window, title: window.flatMap { attribute($0, "AXTitle") as? String }, bundleIdentifier: app.bundleIdentifier)
     }
     static func read(_ target: Target) throws -> SummarySource {
+        guard target.pid != getpid() else { throw Failure.ownApplication }
         guard AXIsProcessTrusted() else { throw Failure.permission }
         let app = AXUIElementCreateApplication(target.pid)
         AXUIElementSetMessagingTimeout(app, 0.12)

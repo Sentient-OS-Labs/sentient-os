@@ -16,16 +16,20 @@ def method(signature):
     depth=1
     while depth:
         depth+=(source[end]=='{')-(source[end]=='}'); end+=1
-    return source[start:end]
+    return source[start:end].replace('private func ', 'func ')
 
-METHODS=['func microphoneMouseDown()', 'func startListening()', 'private func beginDictation()', 'func finishListening(',
+METHODS=['private func beginHotkeyDictation(', 'private func endHotkeyDictation(', 'private func interruptHotkeyGesture()', 'func microphoneMouseDown()', 'func startListening()', 'private func beginDictation(', 'func finishListening(',
          'private func finalizeVoice(', 'private func restoreDictationEditor(', 'private func keepDictationDraft(', 'private func dictationFailed(', 'private func cancelDictation()']
 SWIFT=r'''
 import Foundation
 import AppKit
 nonisolated func Log(_ text:String) {}
-enum NotchPhase: Equatable { case hidden, typing, message, listening, transcribing, running }
+enum NotchPhase: Equatable { case hidden, opening, typing, message, listening, transcribing, running }
 enum AgentMode { case computer }
+enum ShortcutKey { case rightCommand, leftCommand }
+enum ShortcutPreferences { static var current = ShortcutKey.rightCommand; static var isRecording = false }
+enum NotchAnchor { case mainDisplay }
+struct ShortcutTapPair { mutating func reset() {} }
 enum TriggerSource { case voice }
 enum ScreenCapture { static func summaryDisplay()->UInt32? {1} }
 enum SummaryAccessibility { static func target()->Int? {42} }
@@ -83,10 +87,19 @@ final class VoiceCapture {
 }
 final class Proofread {var isRunning=false;func clearPreparedSelection(){};func waitForSelection()async{}}
 final class ComposerDictation {func cancel(){}}
+final class DoubleTap { static let shared = DoubleTap(); var isDrafting = false }
 final class CommandCoordinator {
+ var notchDraft=""
+ static var hasCompletedOnboarding = true
+ var onboardingReplyLessonActive = false
+ var hotkeyVoiceSessionID: UUID?
+ var pendingSingleTap: Task<Void,Never>?
+ var hotkeyPair = ShortcutTapPair()
+ var notchAnchor = NotchAnchor.mainDisplay
+ func cancelCurrent() { cancel() }
  let composerDictation=ComposerDictation()
  let proofread=Proofread()
- func prepareProofreadSelection(){}
+ func prepareProofreadSelection(preservingHomeDraft: UUID? = nil){}
  let run=Run(),voice=VoiceCapture(),dictation=DictationPresentation(),notchPress=NotchPressGesture()
  var phase=NotchPhase.typing,voiceSessionID:UUID?,listening=false,onboardingDemoArmed=false
  var voiceStartTask:Task<Void,Never>?,voiceFinalizeTask:Task<Void,Never>?,voiceLimitTask:Task<Void,Never>?
@@ -118,7 +131,7 @@ final class CommandCoordinator {
   check(clicked.phase == .listening && clicked.voice.starts == 1 && clicked.voice.stops == 0,
         "short mic click keeps recording without requiring a hold")
   _ = clicked.finishListening(send:false);await settle();clicked.voice.resolve("clicked request");await settle(350)
-  check(clicked.submissions.isEmpty && clicked.run.conversation.draft == "clicked request" && clicked.phase == .typing,
+  check(clicked.submissions.isEmpty && clicked.notchDraft == "clicked request" && clicked.phase == .typing,
         "click stop keeps an editable draft and never submits")
 
   let held=CommandCoordinator();held.microphoneMouseDown();await settle()
@@ -164,10 +177,10 @@ final class CommandCoordinator {
   check(cancelled.dictation.text.isEmpty,"old callbacks cannot affect the next capture")
   cancelled.cancel()
 
-  let failed=CommandCoordinator();failed.run.conversation.draft="existing draft"
+  let failed=CommandCoordinator();failed.notchDraft="existing draft"
   failed.startListening();await settle();failed.voice.onTranscript?("recoverable speech")
   failed.voice.onFailure?(DictationFailure.timedOut);await settle()
-  check(failed.run.conversation.draft == "existing draft\nrecoverable speech","failure preserves both existing and dictated text")
+  check(failed.notchDraft == "existing draft\nrecoverable speech","failure preserves both existing and dictated text")
   check(failed.submissions.isEmpty && failed.phase == .typing && failed.dictation.error != nil,"partial speech never executes after failure")
 
   let silent=CommandCoordinator();silent.startListening();await settle();_ = silent.finishListening()
@@ -190,24 +203,24 @@ final class CommandCoordinator {
   check(reply.dictation.finalizing && reply.dictation.text == "tell me more", "finalization retains transcript presentation")
   reply.voice.resolve("tell me more");await settle(350)
   check(reply.submissions == ["tell me more"] && reply.dictation.replyMessage == nil, "follow-up sends once and clears voice presentation")
-  let composing=CommandCoordinator();composing.run.conversation.draft="Keep this draft"
+  let composing=CommandCoordinator();composing.notchDraft="Keep this draft"
   composing.microphoneMouseDown();await settle()
   check(composing.dictation.keepsDraft && composing.dictation.replyMessage == nil,"typing mic retains composer context")
   composing.voice.onTranscript?("and add this")
   _ = composing.finishListening();await settle()
   composing.voice.resolve("and add this");await settle(350)
-  check(composing.submissions == ["Keep this draft and add this"] && composing.run.conversation.draft.isEmpty,"typed and spoken text submit together exactly once")
+  check(composing.submissions == ["Keep this draft and add this"] && composing.notchDraft.isEmpty,"typed and spoken text submit together exactly once")
   let editing=CommandCoordinator();editing.phase = .message;editing.notchMessage=ReplyRecord()
-  editing.run.conversation.draft="Please"
+  editing.notchDraft="Please"
   editing.microphoneMouseDown();await settle();_ = editing.finishListening(send:false);await settle()
   editing.voice.resolve("explain more");await settle()
   check(editing.submissions.isEmpty && editing.phase == .message && editing.notchMessage?.event.id == "reply-1",
         "stop dictation returns to the same response")
-  check(editing.run.conversation.draft == "Please explain more" && editing.replyID == "reply-1",
+  check(editing.notchDraft == "Please explain more" && editing.replyID == "reply-1",
         "stop retains existing text, transcript and reply reference exactly once")
   editing.microphoneMouseDown();await settle();editing.notchPress.releaseAway?();await settle()
   editing.voice.resolve("about this");await settle()
-  check(editing.submissions.isEmpty && editing.run.conversation.draft == "Please explain more about this",
+  check(editing.submissions.isEmpty && editing.notchDraft == "Please explain more about this",
         "hold and release away keeps text for editing instead of submitting")
   let draining=CommandCoordinator();draining.phase = .message;draining.notchMessage=ReplyRecord()
   draining.run.isRunning=true;draining.run.hasDeliveredFinalAnswer=true
@@ -217,6 +230,42 @@ final class CommandCoordinator {
   check(draining.submissions.isEmpty,"final-answer cleanup lock still prevents overlapping tasks")
   draining.run.isRunning=false;await settle(100)
   check(draining.submissions == ["follow up"],"follow-up sends once after prior execution drains")
+  let keyboard = CommandCoordinator();keyboard.phase = .hidden
+  check(keyboard.beginHotkeyDictation(.rightCommand), "keyboard hold enters the shared voice session")
+  await settle()
+  check(keyboard.phase == .listening && keyboard.dictation.capturing, "keyboard hold starts recording")
+  keyboard.endHotkeyDictation(send: true);await settle()
+  keyboard.voice.resolve("keyboard request");await settle(350)
+  check(keyboard.submissions == ["keyboard request"], "keyboard release finalizes and sends exactly once")
+  keyboard.endHotkeyDictation(send: true);await settle()
+  check(keyboard.submissions.count == 1, "duplicate release cannot resubmit")
+  let delayedKeyboard = CommandCoordinator();delayedKeyboard.phase = .hidden;delayedKeyboard.voice.delayStart = true
+  check(delayedKeyboard.beginHotkeyDictation(.rightCommand), "hold can await initial voice setup")
+  await settle();delayedKeyboard.endHotkeyDictation(send: true)
+  delayedKeyboard.voice.startWait?.resume();delayedKeyboard.voice.startWait = nil;await settle()
+  check(delayedKeyboard.phase == .hidden && delayedKeyboard.submissions.isEmpty && !delayedKeyboard.dictation.capturing,
+        "release during setup prevents late recording and submission")
+  let interruptedKeyboard = CommandCoordinator();interruptedKeyboard.phase = .hidden
+  _ = interruptedKeyboard.beginHotkeyDictation(.rightCommand);await settle()
+  interruptedKeyboard.interruptHotkeyGesture();await settle()
+  check(interruptedKeyboard.phase == .hidden && interruptedKeyboard.submissions.isEmpty,
+        "a keyboard combination cancels owned recording")
+  let staleKeyboard = CommandCoordinator();staleKeyboard.phase = .hidden
+  _ = staleKeyboard.beginHotkeyDictation(.rightCommand);await settle();staleKeyboard.cancel()
+  staleKeyboard.phase = .typing;staleKeyboard.startListening();await settle()
+  staleKeyboard.endHotkeyDictation(send: true)
+  check(staleKeyboard.phase == .listening && staleKeyboard.submissions.isEmpty,
+        "old key release cannot send a newer microphone session")
+  staleKeyboard.cancel()
+  let blockedKeyboard = CommandCoordinator();blockedKeyboard.phase = .hidden;blockedKeyboard.run.isRunning = true
+  check(!blockedKeyboard.beginHotkeyDictation(.rightCommand), "running Sidekick task blocks competing voice")
+  blockedKeyboard.run.isRunning = false
+  check(!blockedKeyboard.beginHotkeyDictation(.leftCommand), "other key cannot activate voice")
+  ShortcutPreferences.isRecording = true
+  check(!blockedKeyboard.beginHotkeyDictation(.rightCommand), "shortcut recorder blocks voice")
+  ShortcutPreferences.isRecording = false;CommandCoordinator.hasCompletedOnboarding = false
+  check(!blockedKeyboard.beginHotkeyDictation(.rightCommand), "onboarding blocks voice")
+  CommandCoordinator.hasCompletedOnboarding = true
   print("PASS: \(checks) production dictation lifecycle checks")
  }
 }

@@ -13,6 +13,7 @@ import Foundation
 import AppKit
 nonisolated enum ModelBackend: Sendable { case chatgpt; static let current = ModelBackend.chatgpt }
 nonisolated final class SidekickInteraction: Sendable {
+    let onWorkWindow: (@MainActor @Sendable (SidekickWorkWindow?) -> Void)? = nil
     static let current: SidekickInteraction? = nil
     let computerUseCheckConsent = ComputerUseDiagnosticConsent()
 }
@@ -248,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix='sentient-diagnostic-consent-') as direc
     (p/'Tests.swift').write_text(TESTS)
     files = ['Diagnostics/NativeComputerUseFailure.swift','Diagnostics/ComputerUseDiagnosticConsent.swift',
              'Diagnostics/ComputerUseDiagnosticPolicy.swift',
-             'Driver/OpenAIComputerUseProbe.swift','Driver/NativePermissionReadiness.swift','Driver/NativeComputerUseServer.swift']
+             'Notch Magic/SidekickWorkWindow.swift','Driver/OpenAIComputerUseProbe.swift','Driver/NativePermissionReadiness.swift','Driver/NativeComputerUseServer.swift']
     binary = p/'tests'
     subprocess.run(['xcrun','swiftc','-swift-version','5','-parse-as-library','-target',f'{platform.machine()}-apple-macos15.0',
                     str(p/'Support.swift'),str(p/'Tests.swift'),*[str(APP/f) for f in files],str(APP.parent/'Scripts/Fixtures/NativeHelperPermissionNoteStub.swift'),'-o',str(binary)],check=True,timeout=60)

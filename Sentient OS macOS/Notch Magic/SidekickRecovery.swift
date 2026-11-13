@@ -122,6 +122,7 @@ final class SidekickRecovery {
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var hovering = false
     @ObservationIgnored private var focused = false
+    @ObservationIgnored private var dictating = false
     @ObservationIgnored private var timerGeneration = 0
     @ObservationIgnored private var interruptedDraft: String?
 
@@ -133,7 +134,7 @@ final class SidekickRecovery {
         self.content = content
         draft = content.question == nil ? (interruptedDraft ?? "") : ""
         interruptedDraft = nil; isVisible = true
-        hovering = false; focused = false; timing = .init(now: Self.now, expiresWhenHidden: content.question == nil && content.upgradeOffer == nil)
+        hovering = false; focused = false; dictating = false; timing = .init(now: Self.now, expiresWhenHidden: content.question == nil && content.upgradeOffer == nil)
         self.resolve = resolve
         onChange?(); schedule()
     }
@@ -181,7 +182,7 @@ final class SidekickRecovery {
     private func consume(_ resolution: Resolution) {
         let callback = resolve
         resolve = nil; content = nil; timing = nil; draft = ""
-        isVisible = false; hovering = false; focused = false; timer?.cancel(); timer = nil
+        isVisible = false; hovering = false; focused = false; dictating = false; timer?.cancel(); timer = nil
         timerGeneration &+= 1
         onChange?()
         callback?(resolution)
@@ -203,8 +204,9 @@ final class SidekickRecovery {
 
     func setHovering(_ value: Bool) { guard hovering != value else { return }; hovering = value; updateInteraction() }
     func setFocused(_ value: Bool) { guard focused != value else { return }; focused = value; updateInteraction() }
+    func setDictating(_ value: Bool) { guard dictating != value else { return }; dictating = value; updateInteraction() }
     private func updateInteraction() {
-        timing?.interact(hovering || focused, now: Self.now); schedule()
+        timing?.interact(hovering || focused || dictating, now: Self.now); schedule()
     }
     private func expireIfNeeded() {
         timing?.advance(now: Self.now)

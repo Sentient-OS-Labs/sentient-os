@@ -14,7 +14,7 @@ FOLDER = ROOT / "Sentient OS macOS/Notch Magic"
 FILES = [
     FOLDER / name for name in (
         "SidekickConversationStore.swift", "SidekickConversationRun.swift",
-        "SidekickConversationTools.swift", "SidekickInteraction.swift",
+        "SidekickConversationTools.swift", "SidekickInteraction.swift", "SidekickWorkWindow.swift",
         "SidekickToolServer.swift", "SidekickRecovery.swift",
         "SidekickInstructionStore.swift", "SidekickPersonalization.swift",
         "SidekickTaskSummary.swift", "SidekickQuickActionTools.swift",
@@ -197,7 +197,7 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
     }
 
     static func quickActions() async throws {
-        var summaries = 0, proofreads = 0
+        var summaries = 0, proofreads = 0, replies = 0
         let actions = SidekickQuickActions(summarize: { preference, application in
             summaries += 1
             try check(preference == "brief" && application == "com.apple.Safari", "summary routing arguments preserved")
@@ -206,6 +206,10 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
             proofreads += 1
             try check(text == "  teh message\n", "proofread preserves exact input whitespace")
             return "  the message\n"
+        }, magicReply: { preference, application in
+            replies += 1
+            try check(preference == "keep it brief" && application == "com.apple.Mail", "personal reply keeps requested context")
+            return "Sounds good, see you then!"
         })
         let interaction = SidekickInteraction(quickActions: actions) { _ in SidekickAnswer(text:"",selectedAnswer:nil) }
         let server = SidekickToolServer(interaction:interaction)
@@ -214,6 +218,12 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         let listed = try await send(server,request:json(["id":"list","method":"tools/list"]))
         let names = (try result(listed)["tools"] as? [[String:Any]])?.compactMap{$0["name"] as? String} ?? []
         try check(Set(SidekickQuickActionTools.names).isSubset(of:Set(names)), "quick action schemas advertised")
+        let replyRPC = try request("magic_reply",id:"retry-personal",["preference":"keep it brief","application_id":"com.apple.Mail"])
+        let personal = try await send(server,request:replyRPC)
+        let personalRetry = try await send(server,request:replyRPC)
+        let personalResult = try payload(personal)
+        try check(personal == personalRetry && replies == 1, "personal reply retries do not redraft")
+        try check(personalResult["draft_text"] as? String == "Sounds good, see you then!" && personalResult["sent"] as? Bool == false && personalResult["applied"] as? Bool == false, "personal draft returned without claiming send or paste")
         let summary = try await send(server,request:request("summarize_screen",["preference":"brief","application_id":"com.apple.Safari"]))
         try check(try payload(summary)["displayed"] as? Bool == true, "summary returns displayed reader result")
         let rpc = try request("proofread_text",id:"retry-proofread",["text":"  teh message\n"])
@@ -222,11 +232,11 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         try check(first == second && proofreads == 1 && summaries == 1, "retried tool calls execute once")
         let result = try payload(first)
         try check(result["corrected_text"] as? String == "  the message\n" && result["applied"] as? Bool == false, "proofreader returns exact correction without claiming insertion")
-        for (name,args): (String,[String:Any]) in [("proofread_text",["text":""]),("proofread_text",["text":String(repeating:"x",count:12001)]),("summarize_screen",["application_id":"bad app / path"]),("summarize_screen",["unknown":true])] {
+        for (name,args): (String,[String:Any]) in [("magic_reply",["preference":String(repeating:"x",count:1001)]),("magic_reply",["application_id":"bad / app"]),("proofread_text",["text":""]),("proofread_text",["text":String(repeating:"x",count:12001)]),("summarize_screen",["application_id":"bad app / path"]),("summarize_screen",["unknown":true])] {
             let response = try await send(server,request:request(name,args))
             try check(try isError(response), "malformed quick action rejected before callback")
         }
-        try check(proofreads == 1 && summaries == 1, "invalid requests never invoke services")
+        try check(proofreads == 1 && summaries == 1 && replies == 1, "invalid requests never invoke services")
         try check(interaction.promptInstructions.contains("proofread_text") && interaction.promptInstructions.contains("summarize_screen"), "routing guidance provided to every Sidekick engine")
         await server.stop()
         var started = false
@@ -575,9 +585,24 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         try check(try payload(accepted)["saved"] as? Bool == true, "new delivery can succeed after failed transaction")
         try h.run.finish(outcome: .success, status: "✓ done", finalText: "Useful full answer\n\nSTATUS: DONE\n")
         try check(try visible(h).map(\.event.text) == ["Now saved", "Useful full answer"], "missing final-message fallback strips status and preserves answer")
+        try check(h.run.hasCompletionAnswer, "committed fallback answer drives response presentation")
+        h.run.invalidate()
+        try check(h.run.hasCompletionAnswer, "terminal answer fact survives normal recorder teardown")
         try h.run.finish(outcome: .failed, status: "Late conflicting end")
         try check(try h.store.records().filter { $0.event.kind == .taskFinished }.count == 1, "duplicate finish is harmless")
         await h.clean()
+
+        let actionOnly = try Harness(root.appendingPathComponent("action-only"))
+        try actionOnly.run.finish(outcome: .success, status: "✓ done")
+        try check(!actionOnly.run.hasCompletionAnswer, "status-only completion is not a written answer")
+        try check(try actionOnly.store.latestUnreadHighPriorityMessage == nil, "status-only history cannot compete with the All set cue")
+        await actionOnly.clean()
+        let finalAnswer = try Harness(root.appendingPathComponent("final-answer-priority"))
+        let answerID = try finalAnswer.run.message("The requested result.", kind: .answer, priority: .normal)
+        try check(try finalAnswer.store.record(id: answerID)?.event.priority == .high, "app owns final answer presentation independent of model priority")
+        try finalAnswer.run.finish(outcome: .success, status: "✓ done")
+        try check(finalAnswer.run.hasCompletionAnswer, "an explicit final answer suppresses the completion toast")
+        await finalAnswer.clean()
 
         let stopped = try Harness(root.appendingPathComponent("stopped"))
         try stopped.interaction.observeToolEvent(wire("item.started", id: "pending-send", server: "mail", tool: "send"), streamID: UUID())

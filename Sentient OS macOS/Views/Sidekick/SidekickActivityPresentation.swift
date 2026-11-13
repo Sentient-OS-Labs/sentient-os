@@ -21,14 +21,31 @@ nonisolated enum SidekickActivityPresentation {
     /// All provider adapters feed this presentation. Keep authored narration intact;
     /// tool/search/command signals use the same title and icon identity as chat.
     static func notchStatus(_ status: String, activity: Step?) -> NotchStatus {
-        let last = status.split(separator: "\n").last?.trimmingCharacters(in: .whitespaces) ?? ""
-        let command = last.hasPrefix("$ ")
-        let search = last.hasPrefix("🔎 ")
-        if last.hasPrefix("→ ") || command || search {
-            return NotchStatus(text: activity?.title ?? (command ? "Running a command" : search ? "Searching the web" : "Working…"),
-                               activity: activity)
+        let last = status.split(separator: "\n").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let command = last.hasPrefix("$")
+        let search = last.hasPrefix("🔎")
+        let tool = rawTool(in: last)
+        if tool != nil || last.hasPrefix("→") || command || search {
+            let fallback = tool.map { label(ToolName($0), arguments: [:], app: nil).title }
+                ?? (command ? "Running a command" : search ? "Searching the web" : "Working…")
+            return NotchStatus(text: activity?.title ?? fallback, activity: activity)
         }
-        return NotchStatus(text: status.isEmpty ? "Working…" : status, activity: nil)
+        // Status is a rolling log: only the newest human line belongs in the UI.
+        return NotchStatus(text: last.isEmpty ? "Working…" : last, activity: nil)
+    }
+
+    private static func rawTool(in line: String) -> String? {
+        let candidate = line.hasPrefix("→") ? String(line.dropFirst()).trimmingCharacters(in: .whitespaces) : line
+        let token = candidate.split(whereSeparator: { $0.isWhitespace || $0 == "(" }).first.map(String.init) ?? ""
+        return token.hasPrefix("sentient_") || token.hasPrefix("mcp__") ? token : nil
+    }
+
+    static func islandSubtitle(_ status: String, activity: Step?) -> String {
+        let last = status.split(separator: "\n").last.map(String.init) ?? ""
+        if rawTool(in: last.trimmingCharacters(in: .whitespaces)) != nil || last.trimmingCharacters(in: .whitespaces).hasPrefix("→") {
+            if let activity { return islandAction(activity) }
+        }
+        return notchStatus(status, activity: nil).text
     }
 
     /// Fixed-width processing wings use a short action category. Completed tools yield
@@ -79,6 +96,23 @@ nonisolated enum SidekickActivityPresentation {
         }.sorted { $0.firstSequence == $1.firstSequence ? $0.id < $1.id : $0.firstSequence < $1.firstSequence }
     }
 
+    /// Short second line under an app name in the floating working island.
+    static func islandAction(_ step: Step) -> String {
+        guard let activity = step.record.event.activity else { return step.title }
+        guard activity.status == .started else { return "Thinking…" }
+        switch ToolName(activity.name).leaf {
+        case "get_app_state": return "Looking around"
+        case "click", "double_click", "right_click", "perform_secondary_action": return "Clicking"
+        case "type_text", "set_value": return "Entering text"
+        case "select_text": return "Selecting text"
+        case "press_key": return "Using the keyboard"
+        case "scroll": return "Scrolling"
+        case "drag": return "Dragging"
+        case "open_app", "launch_app", "activate_app": return "Opening app"
+        default: return step.title
+        }
+    }
+
     private struct ToolName {
         let parts: [String]
         var leaf: String { parts.last ?? "" }
@@ -106,7 +140,7 @@ nonisolated enum SidekickActivityPresentation {
         for key in ["title", "description"] {
             guard let raw = arguments[key] as? String else { continue }
             let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty, value.count <= 120, value.utf8.count <= 512,
+            guard rawTool(in: value) == nil, !value.hasPrefix("→"), !value.isEmpty, value.count <= 120, value.utf8.count <= 512,
                   !hasControls(value), !looksSensitive(value) else { continue }
             return value
         }

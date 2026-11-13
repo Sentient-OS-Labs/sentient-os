@@ -23,7 +23,7 @@ def member(source, signature):
 coordinator = (APP / "Ingestion/ProcessingCoordinator.swift").read_text()
 helper = (APP / "Scheduling/WakeHelper.swift").read_text()
 assert "await maintainAwake(for: id)" in member(coordinator, "private func perform(")
-assert "await maintainAwake(for: runID)" in member(coordinator, "private func checkRunningWork(")
+assert "await maintainAwake(for: id)" in member(coordinator, "private func checkRunningWork(")
 assert "SuspendingClock.now" in coordinator
 
 fixture = r'''
@@ -58,7 +58,10 @@ import Foundation
 }
 
 @MainActor final class Coordinator {
-    enum Trigger { case manual, onboarding, overnight }
+    enum Trigger {
+        case manual, onboarding, overnight, pluggedInIdle
+        var isAutomatic: Bool { self == .overnight || self == .pluggedInIdle }
+    }
     enum Status { case running, paused }
     struct Record { var trigger = Trigger.onboarding; var status = Status.running }
     struct Request { var fullCycle = true }
@@ -76,7 +79,7 @@ import Foundation
     __COORDINATOR__
     var needsHold: Bool { needsAwakeProtection }
     func maintain() async -> Bool { await maintainAwake(for: runID) }
-    func release() async { await releaseAwake() }
+    func release() async { await releaseAwake(for: runID) }
 }
 
 final class RootHeartbeat {
@@ -110,7 +113,7 @@ final class RootHeartbeat {
             film.phase = phase
             check(film.holdsDisplay, "active film playback keeps the display awake")
         }
-        for phase in [OnboardingAwake.Phase.loading, .parked, .awaitingNotch, .sidekickDone, .doubleTap, .unavailable] {
+        for phase in [OnboardingAwake.Phase.loading, .parked, .awaitingNotch, .sidekickDone, .magicReply, .unavailable] {
             film.phase = phase
             check(!film.holdsDisplay, "onboarding waits and lessons allow idle sleep")
         }

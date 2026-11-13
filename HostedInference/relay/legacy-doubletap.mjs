@@ -125,7 +125,7 @@ var index_default = {
       stream: true,
       store: false,
       max_output_tokens: MAX_OUTPUT_TOKENS,
-      reasoning: { effort: "none" },
+      reasoning: { effort: "low" },
       // Cache the reusable text only; each screenshot is new and should not incur a cache write.
       prompt_cache_options: { mode: "explicit", ttl: "30m" },
       input: [{

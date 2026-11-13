@@ -33,10 +33,14 @@ import WebKit
         window.contentView = scroll; window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(editor); editor.setSelectedRange(range)
         let menu = NSMenu(); let item = NSMenuItem(); let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         item.submenu = edit; menu.addItem(item); NSApp.mainMenu = menu
         defer { window.close() }
         try await Task.sleep(for: .milliseconds(250))
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(editor); editor.setSelectedRange(range)
+        try await Task.sleep(for: .milliseconds(100))
         let accessibility = Permissions.hasAccessibility()
         var nativeError: String?
         if accessibility {
@@ -59,6 +63,22 @@ import WebKit
                 checks["ordinary-editor-undo-available"] = editor.undoManager?.canUndo == true
                 editor.undoManager?.undo()
                 checks["one-undo-restores-original"] = editor.string == original
+                editor.setSelectedRange(range)
+                let beforeWindows = Set(NSApp.windows.map(\.windowNumber))
+                var status: String?
+                let operation = Proofread(capture: { try await Task.detached { try ProofreadSelection.capture(pid: pid) }.value },
+                                         correct: { _ in corrected })
+                operation.prepareSelection(); await operation.waitForSelection()
+                _ = operation.start { status = $0 }
+                for _ in 0..<60 {
+                    if !operation.isRunning { break }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                checks["operation-replaces-selection-without-popup"] = status == "" && !operation.isRunning
+                    && editor.string == (original as NSString).replacingCharacters(in: range, with: corrected)
+                    && Set(NSApp.windows.map(\.windowNumber)) == beforeWindows
+                editor.undoManager?.undo()
+                checks["operation-preserves-undo"] = editor.string == original
                 if let clipboard, let current = ProofreadClipboard.capture() {
                     checks["native-paste-restores-clipboard-formats"] = current.items == clipboard.items
                 } else { checks["native-paste-restores-clipboard-formats"] = false }
@@ -69,7 +89,26 @@ import WebKit
                 editor.textStorage?.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 18), range: NSRange(location: range.location, length: 3))
                 editor.setSelectedRange(range)
                 let rich = try await Task.detached { try ProofreadSelection.capture(pid: pid) }.value
-                checks["mixed-format-selection-uses-copy-fallback"] = !rich.canReplace
+                checks["mixed-format-selection-allows-normal-replacement"] = rich.canReplace
+                let richBefore = NSAttributedString(attributedString: editor.attributedString())
+                editor.breakUndoCoalescing(); editor.undoManager?.removeAllActions()
+                let richOutcome = await ProofreadSelection.apply(corrected, to: rich, activity: .current)
+                checks["mixed-format-selection-replaced"] = richOutcome == .applied
+                    && editor.string == (original as NSString).replacingCharacters(in: range, with: corrected)
+                editor.undoManager?.undo()
+                checks["rich-undo-restores-original-formatting"] = editor.attributedString().isEqual(to: richBefore)
+                editor.isRichText = false
+                let largePrefix = String(repeating: "unchanged ", count: 7_500)
+                let large = largePrefix + selected + " unchanged suffix"
+                editor.string = large
+                editor.setSelectedRange(NSRange(location: largePrefix.utf16.count, length: selected.utf16.count))
+                let bounded = try await Task.detached { try ProofreadSelection.capture(pid: pid) }.value
+                checks["large-document-uses-bounded-context"] = bounded.canReplace && bounded.originalValue == nil
+                    && (bounded.verificationText?.utf16.count ?? 0) < 1_000
+                let largeOutcome = await ProofreadSelection.apply(corrected, to: bounded, activity: .current)
+                checks["large-document-selection-replaced"] = largeOutcome == .applied
+                    && editor.string == largePrefix + corrected + " unchanged suffix"
+                editor.string = original; editor.setSelectedRange(range)
                 captures.append(try await SidekickPolishLab.capture(scroll, name: "01-editor", directory: directory))
                 // The real panel must wait until the external selection snapshot is complete.
                 editor.isRichText = false; editor.string = original; editor.setSelectedRange(range)
@@ -87,12 +126,12 @@ import WebKit
                 checks["notch-waits-for-selection-before-key"] = coordinator.proofread.isCapturingSelection && notch.panelForTesting?.isKeyWindow != true
                 await coordinator.proofread.waitForSelection()
                 try await Task.sleep(for: .milliseconds(250))
-                checks["selection-survives-notch-focus"] = coordinator.proofread.preparedSelectionMatches(selected)
+                checks["bookmark-survives-notch-focus"] = coordinator.proofread.hasPreparedSelectionBookmark
                     && notch.panelForTesting?.isKeyWindow == true
                 coordinator.dismissTyping()
-                checks["dismiss-discards-captured-selection"] = !coordinator.proofread.preparedSelectionMatches(selected)
+                checks["dismiss-discards-selection-bookmark"] = !coordinator.proofread.hasPreparedSelectionBookmark
 
-            } catch { nativeError = String(describing: type(of: error)); checks["native-path-completed"] = false }
+            } catch { nativeError = String(describing: error); checks["native-path-completed"] = false }
         }
         window.orderOut(nil)
         if accessibility, nativeError == nil {
@@ -124,14 +163,6 @@ import WebKit
                 .frame(width: 700, height: 210).background(Color(white: 0.12)))),
             ("03-proofreading", AnyView(NotchContent(phase: .notice("Proofreading…"), readBack: nil, statusLine: "", metrics: .preview,
                 isProofreading: true).frame(width: 700, height: 180).background(Color(white: 0.12)))),
-            ("05-accessibility", AnyView(QuickActionPermissionView(feature: .proofread, onDone: {}, permissionCheck: { false })
-                .frame(width: 480, height: 360))),
-            ("07-screen-recording", AnyView(QuickActionPermissionView(feature: .summarize, onDone: {}, permissionCheck: { false })
-                .frame(width: 560, height: 440))),
-            ("08-permission-ready", AnyView(QuickActionPermissionView(feature: .proofread, onDone: {}, permissionCheck: { true })
-                .frame(width: 480, height: 360))),
-            ("09-permission-narrow", AnyView(QuickActionPermissionView(feature: .proofread, onDone: {}, permissionCheck: { false })
-                .frame(width: 360, height: 260))),
         ]
         for (name, view) in variants {
             checkpoint("render-" + name)
@@ -141,9 +172,7 @@ import WebKit
             switch name {
             case "02-split-notch": size = NSSize(width: 700, height: 210)
             case "03-proofreading": size = NSSize(width: 700, height: 180)
-            case "05-accessibility", "08-permission-ready": size = NSSize(width: 480, height: 360)
-            case "09-permission-narrow": size = NSSize(width: 360, height: 260)
-            default: size = NSSize(width: 560, height: 440)
+            default: size = NSSize(width: 700, height: 180)
             }
             let frame = NSRect(origin: NSPoint(x: 100, y: 100), size: size)
             let panel = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -152,21 +181,11 @@ import WebKit
             captures.append(try await SidekickPolishLab.capture(host, name: name, directory: directory))
             panel.close()
         }
-        checkpoint("result-window")
-        let result = ProofreadResultPanel()
-        result.show(text: "**Keep this formatting syntax.**\n\nThe launch is ready.\nWe were testing it.",
-            explanation: "Your selection changed. The correction is ready to copy.", permission: false)
-        defer { result.close() }
-        try await Task.sleep(for: .milliseconds(250))
-        guard let resultWindow = result.panelForTesting, let resultHost = resultWindow.contentView else { throw Failure.noWindow }
-        captures.append(try await SidekickPolishLab.capture(resultHost, name: "04-corrected-copy", directory: directory))
-        checks["fallback-preserves-literal-markdown"] = descendants(resultHost).compactMap { $0 as? NSTextView }.contains { $0.string.contains("**Keep this formatting syntax.**") }
+        checks["no-proofread-popup"] = !NSApp.windows.contains { $0.identifier?.rawValue == "sentient.proofread" }
         let holdURL = root.appendingPathComponent("proofread-hold-seconds")
         if let raw = try? String(contentsOf: holdURL, encoding: .utf8), let seconds = Int(raw), (1...300).contains(seconds) {
             try await Task.sleep(for: .seconds(seconds))
         }
-        result.close()
-        checks["fallback-close-releases-native-text"] = result.panelForTesting == nil
         for index in captures.indices { captures[index]["file"] = "proofread-snapshots/" + (captures[index]["name"] as! String) + ".png" }
         let manifest: [String: Any] = ["checks": checks, "captures": captures, "provider_calls": 0, "accessibility_available": accessibility,
             "native_error_type": nativeError ?? "none", "native_edit_tested": accessibility && nativeError == nil]

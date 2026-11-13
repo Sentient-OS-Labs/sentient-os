@@ -1,5 +1,5 @@
 // The film's interactive pause: a readable native instruction and a pointer to the
-// real camera cutout. The pointer is a passive window, never a second click target.
+// physical notch sensor. The pointer is a passive window, never a second click target.
 import AppKit
 import SwiftUI
 
@@ -8,6 +8,7 @@ struct OnboardingSidekickInvitation: View {
     @Environment(\.onboardingCanvasScale) private var canvasScale
     @AppStorage(ShortcutPreferences.storageKey) private var shortcut = ShortcutKey.rightCommand.rawValue
     @State private var pointsToNotch = OnboardingNotchPointer.hasPhysicalTarget
+    @State private var prefersKeyboard = false
     @State private var horizontalOffset: CGFloat = 0
     @State private var topInset: CGFloat = 12
     @State var shortcutHint = OnboardingShortcutHint()
@@ -15,45 +16,78 @@ struct OnboardingSidekickInvitation: View {
     private var key: ShortcutKey { ShortcutKey(rawValue: shortcut) ?? .rightCommand }
     // A mistaken key press expresses a preference for the keyboard door. Keep
     // that instruction visible afterward, while the color itself lasts one second.
-    private var showsKeyboard: Bool { !pointsToNotch || shortcutHint.pulseCount > 0 }
+    private var showsKeyboard: Bool { prefersKeyboard || !pointsToNotch || shortcutHint.pulseCount > 0 }
+
+    private var instruction: some View {
+        HStack(spacing: 12) {
+            if showsKeyboard {
+                Text(String(key.label.suffix(1)))
+                    .font(.system(size: 19, weight: .medium))
+                    .frame(width: 30, height: 28)
+                    .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.14)))
+                OnboardingShortcutInstruction(prefix: "Press ", key: key, hint: shortcutHint, onLight: true)
+                    .font(.system(size: 20, weight: .semibold))
+            } else {
+                Text("Tap your notch with your finger").font(.system(size: 20, weight: .semibold))
+            }
+        }
+        .foregroundStyle(Color(white: 0.08))
+        .padding(.horizontal, 22).padding(.vertical, 12)
+        .background(.white, in: Capsule())
+        .shadow(color: .black.opacity(0.55), radius: 14, y: 4)
+        .contentShape(Capsule())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Button(action: onOpen) {
-                HStack(spacing: 12) {
-                    if showsKeyboard {
-                        Text(String(key.label.suffix(1)))
-                            .font(.system(size: 19, weight: .medium))
-                            .frame(width: 30, height: 28)
-                            .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.14)))
-                    }
-                    if showsKeyboard {
-                        OnboardingShortcutInstruction(prefix: "Press ", key: key, hint: shortcutHint, onLight: true)
-                            .font(.system(size: 20, weight: .semibold))
-                    } else {
-                        Text("Click your notch").font(.system(size: 20, weight: .semibold))
-                    }
+            // Keep the measured AppKit anchor alive when sensor readiness changes.
+            ZStack {
+                if showsKeyboard {
+                    Button(action: onOpen) { instruction }
+                        .buttonStyle(PressScaleStyle())
+                } else {
+                    instruction
                 }
-                .foregroundStyle(Color(white: 0.08))
-                .padding(.horizontal, 22).padding(.vertical, 12)
-                .background(.white, in: Capsule())
-                .shadow(color: .black.opacity(0.55), radius: 14, y: 4)
-                .contentShape(Capsule())
             }
-            .buttonStyle(PressScaleStyle())
-            .background(OnboardingNotchPointer(scale: canvasScale, prefersKeyboard: shortcutHint.pulseCount > 0) { target, offset, inset in
+            .background(OnboardingNotchPointer(scale: canvasScale, physicalTapAvailable: OnboardingNotchPointer.hasPhysicalTarget, prefersKeyboard: prefersKeyboard || shortcutHint.pulseCount > 0) { target, offset, inset in
                 pointsToNotch = target; horizontalOffset = offset; topInset = inset
             })
             .offset(x: horizontalOffset)
-            .accessibilityLabel(showsKeyboard ? "Press \(key.spokenLabel)" : "Click your notch")
+            .accessibilityLabel(showsKeyboard ? "Press \(key.spokenLabel)" : "Tap your notch with your finger")
             .accessibilityHint(showsKeyboard ? "Press the \(key.spokenLabel) key once, or click this button."
-                               : "Open Sidekick from the top of your screen.")
+                               : "Tap just left of the camera, then lift your finger.")
             .accessibilityIdentifier("onboarding.sidekick.instruction")
-            Spacer(minLength: 0)
+            if !showsKeyboard {
+                Button("Use keyboard instead") { prefersKeyboard = true }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .padding(.top, 10)
+                    .offset(x: horizontalOffset)
+            }
+            Spacer(minLength: 16)
+            if !showsKeyboard {
+                VStack(spacing: 12) {
+                    OnboardingNotchTapIllustration()
+                        .frame(maxWidth: 620)
+                        .accessibilityIdentifier("onboarding.sidekick.sensorIllustration")
+                    Text("Just to the left of your camera.")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.95))
+                    Text("Touch gently, then lift your finger.")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(.horizontal, 24)
+                Spacer(minLength: 24)
+            }
         }
         .padding(.top, topInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            if !showsKeyboard { Color.black.ignoresSafeArea() }
+        }
         .background(OnboardingWrongCommandMonitor(hint: shortcutHint, enabled: key == .rightCommand))
         .onAppear { shortcutHint.activate() }
         .onChange(of: shortcut) { shortcutHint.clear() }
@@ -62,32 +96,40 @@ struct OnboardingSidekickInvitation: View {
 }
 
 /// A vertical line joins the CTA to the hardware, even when onboarding is windowed.
-/// It ignores every mouse event and cannot become key, so the actual notch owns the click.
+/// It ignores mouse events and cannot become key. The sensor owns physical activation.
 struct OnboardingNotchPointer: NSViewRepresentable {
     var scale: CGFloat = 1
+    var physicalTapAvailable = OnboardingNotchPointer.hasPhysicalTarget
     var prefersKeyboard = false
     let onLayout: (Bool, CGFloat, CGFloat) -> Void
 
     static var hasPhysicalTarget: Bool {
-        NSScreen.screens.count == 1 && NotchWindowController.builtInNotchScreen() != nil
-            && NotchPreferences.clickEnabled()
+        guard NotchWindowController.builtInNotchScreen() != nil,
+              NotchPreferences.physicalTapEnabled() else { return false }
+        // Sensor startup and lid settling are temporary. Keep the touch lesson visible
+        // while they complete, instead of briefly teaching a different gesture.
+        switch PhysicalNotchTap.shared.status {
+        case .stopped, .starting, .settling, .ready: return true
+        case .unavailable, .stalled: return false
+        }
     }
 
     static let tipGap: CGFloat = 10
     static let buttonGap: CGFloat = 12
     static let minimumStem: CGFloat = 18
 
-    static func panelFrame(screen: CGRect, notchHeight: CGFloat, button: CGRect) -> CGRect? {
+    static func panelFrame(screen: CGRect, notchHeight: CGFloat, button: CGRect, targetX: CGFloat? = nil) -> CGRect? {
         let tip = screen.maxY - notchHeight - tipGap
         let tail = button.maxY + buttonGap
         guard tip - tail >= minimumStem - 0.5 else { return nil }
-        return CGRect(x: screen.midX - 16, y: tail - 8, width: 32, height: tip - tail + 16)
+        return CGRect(x: (targetX ?? screen.midX) - 16, y: tail - 8, width: 32, height: tip - tail + 16)
     }
 
     func makeNSView(context: Context) -> Probe { Probe() }
     func updateNSView(_ nsView: Probe, context: Context) {
         nsView.onLayout = onLayout
         nsView.renderScale = scale
+        nsView.physicalTapAvailable = physicalTapAvailable
         nsView.prefersKeyboard = prefersKeyboard
         nsView.scheduleRefresh()
     }
@@ -96,6 +138,7 @@ struct OnboardingNotchPointer: NSViewRepresentable {
     final class Probe: NSView {
         var onLayout: ((Bool, CGFloat, CGFloat) -> Void)?
         var renderScale: CGFloat = 1
+        var physicalTapAvailable = false
         var prefersKeyboard = false
         override var isFlipped: Bool { true }
         private(set) var pointer: NSPanel?
@@ -151,9 +194,11 @@ struct OnboardingNotchPointer: NSViewRepresentable {
             let screen = NotchWindowController.builtInNotchScreen()
             let root = window.convertToScreen(window.contentLayoutRect)
             let button = window.convertToScreen(convert(bounds, to: nil))
-            let offset = (screen?.frame.midX ?? root.midX) - root.midX
+            let sensorOffset = screen.map { NotchWindowController.metrics(for: $0).lightSensorOffset } ?? 0
+            let targetX = (screen?.frame.midX ?? root.midX) + sensorOffset
+            let offset = targetX - root.midX
             let fits = abs(offset) + button.width / 2 + 24 <= root.width / 2
-            let target = !prefersKeyboard && OnboardingNotchPointer.hasPhysicalTarget && window.screen == screen && fits
+            let target = physicalTapAvailable && !prefersKeyboard && OnboardingNotchPointer.hasPhysicalTarget && window.screen == screen && fits
             let tip = (screen?.frame.maxY ?? 0) - (screen?.notchSize?.height ?? 0) - OnboardingNotchPointer.tipGap
             let inset = target ? max(12, (root.maxY - tip + OnboardingNotchPointer.minimumStem + OnboardingNotchPointer.buttonGap) / renderScale) : 12
             let proposedOffset = target ? offset / renderScale : 0
@@ -171,8 +216,8 @@ struct OnboardingNotchPointer: NSViewRepresentable {
             }
             guard target, window.isVisible, window.isKeyWindow, !window.isMiniaturized,
                   NSApp.isActive, let screen, let notch = screen.notchSize,
-                  abs(button.midX - screen.frame.midX) < 1,
-                  let frame = OnboardingNotchPointer.panelFrame(screen: screen.frame, notchHeight: notch.height, button: button) else {
+                  abs(button.midX - targetX) < 1,
+                  let frame = OnboardingNotchPointer.panelFrame(screen: screen.frame, notchHeight: notch.height, button: button, targetX: targetX) else {
                 pointer?.orderOut(nil)
                 return
             }

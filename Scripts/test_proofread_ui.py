@@ -24,7 +24,7 @@ def main():
     receipt=app.run_stage(executable,root,fixture,runtime,'ui-proofread',45+args.hold_seconds)
     manifest=app.read_json(root/'proofread-manifest.json')
     app.require(manifest['provider_calls']==0 and manifest['native_error_type']=='none','Fixture used a live service')
-    app.require(len(manifest['captures']) in [7,9],'Missing proofread and permission states')
+    app.require(len(manifest['captures']) in [2,4],'Missing proofread editor and notch states')
     for item in manifest['captures']:
         path=root/'proofread-snapshots'/(item['name']+'.png')
         app.require(path.is_file() and path.stat().st_size>4096,'Missing UI rendering')

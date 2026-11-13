@@ -19,12 +19,13 @@ import AppKit
 import SwiftUI
 import Observation
 extension EnvironmentValues { @Entry var sidekickReduceMotionOverride: Bool? = nil }
+enum NotchPhase { case hidden, opening, typing, listening, transcribing, running, message, recovery }
 
 @MainActor @Observable final class State {
     var draft = ""
     var focused = false
     var submitted: String?
-    var opened = false
+    var microphoneStarts = 0
 }
 @MainActor final class TestPanel: NSPanel { override var canBecomeKey: Bool { true } }
 @main @MainActor enum Test {
@@ -40,7 +41,8 @@ extension EnvironmentValues { @Entry var sidekickReduceMotionOverride: Bool? = n
         let layout = SidekickNotchMessageLayout(markdown: message.event.text, maximumSize: CGSize(width: 520, height: 286), cameraHeight: 37, outerTopPad: 0, outerBottomPad: 4, horizontalPad: 18)
         let contentHeight = layout.size.height - 41
         let view = SidekickNotchMessageView(message: message, isTaskRunning: false,
-            onOpen: { state.opened = true }, onReply: { _ in }, onStop: {}, onSelecting: { _ in },
+            onReply: { _ in }, onStop: {}, onMicPress: { state.microphoneStarts += 1 },
+            onMic: { state.microphoneStarts += 1 }, onSelecting: { _ in },
             draft: Binding(get: { state.draft }, set: { state.draft = $0 }),
             onReplyFocusChanged: { state.focused = $0 }, onSend: { text in state.submitted = text; return true })
             .padding(.horizontal, 18).frame(width: 520, height: contentHeight).background(.black)
@@ -70,7 +72,7 @@ extension EnvironmentValues { @Entry var sidekickReduceMotionOverride: Bool? = n
         panel.sendEvent(enter)
         await settle()
         precondition(state.submitted == "Everlong", "Return must submit exact reply")
-        precondition(!state.opened, "Reply must not open Home")
+        precondition(state.microphoneStarts == 0, "Typing and Return must not start microphone capture")
         print("PASS native reply field, focus, shared draft, Return submission, inline-only send, and rendered preview")
     }
 }
@@ -93,6 +95,8 @@ def main():
             "Views/Sidekick/SidekickMarkdown.swift",
             "Notch Magic/SidekickNotchMessageLayout.swift",
             "Notch Magic/SidekickNotchMessageView.swift",
+            "Notch Magic/NotchDictationView.swift",
+            "Notch Magic/NotchPressGesture.swift",
         ]
         subprocess.run(["xcrun", "swiftc", *platform_plugin_flags(), "-swift-version", "5", "-default-isolation", "MainActor",
             "-enable-upcoming-feature", "NonisolatedNonsendingByDefault", "-parse-as-library",

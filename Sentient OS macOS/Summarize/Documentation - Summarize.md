@@ -42,7 +42,7 @@ collection. Sleep or leaving the active session closes all windows; reset/uninst
 whole collection. Relaunch waits while any summary is busy. Request IDs fence late callbacks within
 each window, and responses can complete in any order without replacing another result.
 
-New panels cascade within the chosen display and do not request keyboard focus, allowing the user to
+New panels start at 560 × 500 points (clamped to the display), cascade within the chosen display and do not request keyboard focus, allowing the user to
 keep switching tabs in the source app. Clicking a reader gives it normal text-selection and keyboard
 controls; Escape or Command-W closes that reader. Capture excludes Sentient's transient panels even
 when another Summary opens during capture, while ordinary Sentient windows remain valid content.
@@ -168,3 +168,22 @@ contains older text or other chat previews. It merges overlap between AX and loc
 markers, identity ambiguity, database immutability, and preservation of the newest tail. The opt-in
 signed-app audit exercises current real windows both with screenshots disabled and through live
 inference. Slack now has a dedicated message-container reader: it keeps sender/time, drops reactions and sidebar controls, and includes subsequent loaded messages. Its virtualized, unloaded history still needs a continuation source; capture is explicitly marked as excerpts. Discord remains unverified.
+
+
+### Reader material
+
+The floating reader uses a transparent `ReadingPanel` with an always-active,
+behind-window HUD material and an 82% black scrim. Only a soft trace of desktop
+color shows through; text and scrolling content remain unblurred. Focus changes
+do not alter the material. Increase Contrast strengthens the scrim to 90%; Reduce
+Transparency uses solid black. The native material introduces no app animation
+clock or repeated screenshot capture.
+
+
+### Sentient is the source
+
+Selecting Summarize while Sentient itself is the remembered source shows “Switch to
+another app to summarize it.” in the notch for 1.8 seconds. It does not create a summary
+window, capture pixels, traverse AX, or call inference. Resolve own-process targets as
+metadata only; both capture and the AX reader independently reject them before touching
+accessibility APIs. A remembered external target remains valid when the notch takes focus.

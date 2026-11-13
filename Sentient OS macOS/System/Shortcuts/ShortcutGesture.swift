@@ -33,8 +33,24 @@ struct ShortcutActivity: Equatable {
 struct ShortcutTap {
     private var began: TimeInterval?
     private var activity: ShortcutActivity?
+    private var holdRecognized = false
     private(set) var isDown = false
     static let maximumDuration: TimeInterval = 0.5
+    static let holdDuration: TimeInterval = 0.25
+    var isTracking: Bool { isDown && activity != nil }
+
+    func isStandalone(activity current: ShortcutActivity, lastInputTime: TimeInterval) -> Bool {
+        guard let began else { return false }
+        return isTracking && activity == current && lastInputTime <= began + 0.002
+    }
+
+    mutating func takeHold(at time: TimeInterval, activity: ShortcutActivity,
+                           lastInputTime: TimeInterval) -> Bool {
+        guard !holdRecognized, let began, time - began >= Self.holdDuration,
+              isStandalone(activity: activity, lastInputTime: lastInputTime) else { return false }
+        holdRecognized = true
+        return true
+    }
 
     /// Duplicate down edges cannot turn a held key into repeated taps. Invalidating a held
     /// key keeps it down until its release, so another flagsChanged cannot re-arm it.
@@ -47,11 +63,12 @@ struct ShortcutTap {
         isDown = down
         if down {
             began = time
+            holdRecognized = false
             activity = alone ? current : nil
             return false
         }
         defer { began = nil; activity = nil }
-        guard let began, time >= began, time - began <= maximumDuration else { return false }
+        guard !holdRecognized, let began, time >= began, time - began <= maximumDuration else { return false }
         // Allow a small sampling tolerance between the two system uptime APIs.
         return alone && activity == current && lastInputTime <= began + 0.002
     }

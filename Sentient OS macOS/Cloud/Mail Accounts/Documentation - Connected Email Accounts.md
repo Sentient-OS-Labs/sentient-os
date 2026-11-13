@@ -36,6 +36,13 @@ path and does not populate this feedback list.
 
 ## Local queue
 
+Onboarding also asks users to enter a feedback address in a popup over model connection.
+That address uses `MailAccountCloud.onboarding`, its own durable queue and the
+`add_onboarding_emails` RPC into `onboarding_contact_emails`. Saving the popup resumes model
+connection after any company welcome; upload retries continue independently. Connector-derived
+addresses still use the separate feedback destination. See the onboarding documentation for
+presentation timing and completion behavior.
+
 `MailAccountCloud` is an actor. It keeps only pending normalized addresses and its separate anonymous
 Supabase Auth session in a device-only Keychain item. That authentication credential authorizes the
 write; it is not attached to a contact row.

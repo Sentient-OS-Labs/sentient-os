@@ -48,7 +48,7 @@ final class UserDefaults {
     func data(forKey key: String) -> Data? { values[key] as? Data }
     func dictionaryRepresentation() -> [String: Any] { values }
 }
-enum CodexTrigger { case onboarding, analyzeNow, overnight }
+enum CodexTrigger { case onboarding, analyzeNow, overnight, pluggedInIdle }
 struct RunProgress { var done = 0 }
 struct ProcessingRequest {}
 enum Analytics { static func signal(_ value: String) {} }
@@ -107,6 +107,12 @@ enum SourceSelection {
     static func nextOccurrence(minutesSinceMidnight: Int) -> Date { Date(timeIntervalSince1970: 1_000) }
 // SCHEDULER_POLICY
 }
+@MainActor final class PluggedInAnalysisScheduler {
+    var starts = 0, stops = 0
+    func start(processing: ProcessingCoordinator, enabled: @escaping @MainActor () -> Bool,
+               interactionBusy: @escaping @MainActor () -> Bool) { starts += 1 }
+    func stop() { stops += 1 }
+}
 @MainActor final class AppState {
     static let onboardingKey = PersonalSetupProgress.homeKey
     var isUninstalling = false
@@ -114,6 +120,7 @@ enum SourceSelection {
     var homePreparation: Task<Void, Never>?
     let processing = ProcessingCoordinator.shared
     let scheduler = OvernightScheduler()
+    let pluggedInScheduler = PluggedInAnalysisScheduler()
     let commandCoordinator = Coordinator()
     let sidekickPresentation = SidekickPresentation()
     @MainActor final class Summary { var isBusy = false; var dismissals = 0; func dismiss() { isBusy = false; dismissals += 1 } }
@@ -188,14 +195,14 @@ enum SidekickInstructionStore { static func resetLearning() {} }
     static func beginTeardown() async { active = true }
     static func endTeardown() { active = false }
 }
-@MainActor final class HostedConnectorClient {
-    static let shared = HostedConnectorClient()
-    func disconnectAll() async throws {}
-}
 @MainActor final class DirectMCPConnections {
     static let shared = DirectMCPConnections(); var fails = false
     enum Failure: Error { case fixture }
     func removeAll() async throws { if fails { throw Failure.fixture } }
+}
+@MainActor final class HostedConnectorClient {
+    static let shared = HostedConnectorClient()
+    func disconnectAll() async throws {}
 }
 @MainActor final class CycleStore { static let shared = CycleStore(); func wipeEverything() async {} }
 enum Diagnostics {
@@ -204,7 +211,7 @@ enum Diagnostics {
     static func removeForCleanup(_ url: URL, phase: Phase, reason: String) {}
 }
 enum VaultGenerator { static let vaultRoot = URL(fileURLWithPath: "/unused-fixture") }
-enum ProactiveCycle { static func resetAll() {} }
+enum ProactiveCycle { static let lastCycleKey = "fixture.lastCycle"; static func resetAll() {} }
 enum OutlookCalendarToolPolicy { static let pendingDirectory = URL(fileURLWithPath: "/unused-fixture") }
 enum LifetimeStats { static func reset() {} }
 @MainActor final class MirrorClient { static let shared = MirrorClient(); func deleteRemote() async throws {} }
@@ -250,6 +257,14 @@ extension SafeAppRelaunch { func fixtureWait() async { await preparation?.value 
             && !d.bool(forKey: PersonalSetupProgress.homeKey), "fresh migration creates no completion or Home admission")
         SourceSelection.migrateLegacyFolderDefaults(hadPersonalSetup: false, defaults: d)
         check(SourceSelection.folderKeys.allSatisfy { !d.bool(forKey: $0) }, "fresh migration has no implicit local sources")
+        d.set(1, forKey: "onboarding.step")
+        PersonalSetupProgress.migrate(defaults: d)
+        check(!d.bool(forKey: PersonalSetupProgress.homeKey) && d.integer(forKey: "onboarding.step") == 1,
+              "relaunch at the model/email screen cannot migrate a new user past onboarding")
+        d.set(true, forKey: "onboarding.emailSubmitted")
+        PersonalSetupProgress.migrate(defaults: d)
+        check(d.bool(forKey: "onboarding.emailSubmitted") && !d.bool(forKey: PersonalSetupProgress.homeKey),
+              "relaunch preserves email completion without inventing Home admission")
         for step in [0, 1, 2, 3, 4, 8] {
             clear(); d.set(step, forKey: "onboarding.step")
             let legacy = PersonalSetupProgress.migrate(defaults: d)

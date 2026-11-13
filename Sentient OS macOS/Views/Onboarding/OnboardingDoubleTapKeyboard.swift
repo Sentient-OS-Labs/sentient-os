@@ -1,5 +1,5 @@
 // OnboardingDoubleTapKeyboard.swift
-// A face-on keyboard locates the default right Command key. Custom bindings show their
+// A face-on keyboard locates the right Command or right Option key. Custom bindings show their
 // own keycap and label without pointing at a different physical key.
 // The invitation's slow Sentient color field pauses outside the waiting beat and with
 // Reduce Motion. Each tap gently pulses the glow around the key, with no particles or expanding ring.
@@ -11,13 +11,18 @@ struct OnboardingDoubleTapKeyboard: View {
     let pressed: Bool
     let inviting: Bool
     let reduceMotion: Bool
-    var tapFeedback: OnboardingDoubleTapDemo.TapFeedback? = nil
+    struct TapFeedback: Equatable {
+        let began: Date
+        let confirmed: Bool
+        let duration: TimeInterval
+    }
+    var tapFeedback: TapFeedback? = nil
     var key: ShortcutKey = .rightCommand
     let action: () -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if key == .rightCommand {
+            if key == .rightCommand || key == .rightOption {
                 surroundings
                     .frame(width: 760, height: 200)
                     .mask {
@@ -47,7 +52,7 @@ struct OnboardingDoubleTapKeyboard: View {
             }
 
             // Keep the focal key and its soft glow outside the surrounding deck's fade.
-            commandKey.position(x: 374, y: 85)
+            commandKey.position(x: key == .rightOption ? 442.5 : 374, y: 85)
         }
         .frame(width: 760, height: 200)
     }
@@ -69,8 +74,13 @@ struct OnboardingDoubleTapKeyboard: View {
 
             HStack(alignment: .top, spacing: 8) {
                 KeyboardKeycap(label: "", width: 294, height: 54)
-                Color.clear.frame(width: 68, height: 54) // right Command, drawn above the fade
-                KeyboardKeycap(label: "option", symbol: "option", width: 53, height: 54)
+                if key == .rightOption {
+                    KeyboardKeycap(label: "command", symbol: "command", width: 68, height: 54)
+                    Color.clear.frame(width: 53, height: 54) // right Option, drawn above the fade
+                } else {
+                    Color.clear.frame(width: 68, height: 54) // right Command, drawn above the fade
+                    KeyboardKeycap(label: "option", symbol: "option", width: 53, height: 54)
+                }
                 arrowKeys
             }
             .offset(x: 38, y: 58)
@@ -141,7 +151,7 @@ struct OnboardingDoubleTapKeyboard: View {
                         .overlay(alignment: .leading) {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(String(key.label.suffix(1))).font(.system(size: 22, weight: .medium))
-                                Text(key == .rightCommand ? "command"
+                                Text(key == .rightCommand ? "command" : key == .rightOption ? "option"
                                      : String(key.spokenLabel.split(separator: " ").first ?? ""))
                                     .font(.system(size: 8.5, weight: .medium))
                             }
@@ -153,7 +163,7 @@ struct OnboardingDoubleTapKeyboard: View {
                         .offset(y: pressed && !reduceMotion ? 1.5 : 0)
                         .scaleEffect(pressed && !reduceMotion ? 0.965 : 1)
                 }
-                .frame(width: 68, height: 54)
+                .frame(width: key == .rightOption ? 53 : 68, height: 54)
                 .animation(.easeOut(duration: 0.4), value: inviting)
                 .animation(reduceMotion ? nil : .spring(duration: pressed ? 0.1 : 0.25, bounce: 0.12), value: pressed)
             }

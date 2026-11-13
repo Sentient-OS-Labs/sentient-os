@@ -252,3 +252,10 @@ It never uploads the existing full export, which can contain prompts and an acco
 The server accepts only this schema; clients cannot read other users' reports or overwrite a
 receipt. No credentials are persisted in the report, logged, or followed across HTTP redirects.
 The new backend migration must be applied by the release owner; it is not deployed by local tests.
+
+## Automatic analysis history
+
+`DiagnosticHistory` stores plugged-in idle attempts separately from overnight attempts, retaining
+up to 30 of each. The optional stored field decodes older ledgers without migration or data loss.
+This keeps idle work from changing the overnight-success timestamp. The existing export and
+reporting controls continue to apply.

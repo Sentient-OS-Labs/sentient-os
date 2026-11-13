@@ -13,7 +13,7 @@
     "HOURLY_CAP": "60",
     "MAX_IMAGE_BASE64_BYTES": "2000000",
     "MAX_KNOWLEDGE_BASE_BYTES": "700000",
-    "MODEL": "gpt-6-sol",
+    "MODEL": "gpt-6.1-sol",
     "SUPABASE_URL": "https://hjqedlalhfoxwehxhton.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_MFHS0LDzdAW1lGyEf1MUig_BzqObIr9",
     "SCRIBE_ENABLED": "true",

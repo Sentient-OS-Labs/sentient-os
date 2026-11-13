@@ -26,6 +26,7 @@ final class AppState {
     /// One analysis owner and one overnight clock, independent of the app's windows.
     let processing = ProcessingCoordinator.shared
     let scheduler = OvernightScheduler()
+    let pluggedInScheduler = PluggedInAnalysisScheduler()
 
     /// The "do this for me" brain: the right-⌘ tap-to-type hotkey (two taps → a reply draft) + the
     /// notch's mic + the one shared codex run + the notch's status phase. Both the home command bar
@@ -199,6 +200,12 @@ final class AppState {
             guard hasCompletedOnboarding, !isUninstalling, !processing.isSuspended else { return }
             processing.resumeMonitoring()
             scheduler.reevaluate()
+            pluggedInScheduler.start(processing: processing, enabled: { [weak self] in
+                guard let self else { return false }
+                return !isUninstalling && scheduler.isEnabled
+            }, interactionBusy: { [weak self] in
+                self?.commandCoordinator.run.isRunning ?? true
+            })
         }
     }
 
@@ -206,6 +213,7 @@ final class AppState {
     /// App-owned presentation outlives RootView, so replacing Home with onboarding alone
     /// cannot discard an old conversation/search/card surface.
     func didResetPersonalData() {
+        pluggedInScheduler.stop()
         let conversation = commandCoordinator.run.conversation
         conversation.consumeDestination()
         sidekickPresentation.didResetApp(generation: conversation.generation)

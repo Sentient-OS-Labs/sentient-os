@@ -4,6 +4,7 @@ import AppKit
 /// a screenshot also covers diagrams, canvas content and gaps in an app's accessibility tree.
 @MainActor enum SummaryCapture {
     static func capture(displayID: CGDirectDisplayID, target: SummaryAccessibility.Target?) async throws -> SummarySource {
+        guard target?.pid != getpid() else { throw SummaryAccessibility.Failure.ownApplication }
         guard Permissions.hasAccessibility() else {
             Permissions.requestAccessibility()
             throw SummaryAccessibility.Failure.permission

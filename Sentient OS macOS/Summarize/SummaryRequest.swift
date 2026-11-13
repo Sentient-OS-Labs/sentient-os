@@ -9,10 +9,11 @@ nonisolated enum SummaryRequest {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased().replacingOccurrences(of: "’", with: "'")
         // Full-sentence grammar, not a keyword search. Modifiers describe only summary format.
-        let prefix = #"(?:(?:hey\s+)?sentient[,\s]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?summari[sz]e"#
-        let target = #"(?:\s+(?:this(?:\s+(?:screen|page|article|email|message|document|chart|conversation|code))?|that|it|(?:my|the)\s+(?:current\s+)?screen|what(?:'s|\s+is)\s+on\s+(?:(?:my|the)\s+)?screen|what\s+i(?:'m|\s+am)\s+looking\s+at))?"#
-        let format = #"(?:\s+(?:briefly|concisely|simply|quickly|in\s+(?:(?:[1-9]|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:short\s+)?(?:bullets?|bullet\s+points?|sentences?|paragraphs?)|plain\s+english|simple\s+terms|english|spanish|french|german|hindi|japanese|chinese|korean|portuguese|arabic)))?"#
-        let pattern = "^" + prefix + target + #"(?:\s+for\s+me)?"# + format + #"(?:\s+for\s+me)?"# + #"(?:[,\s]+please)?[.!?]*$"#
+        let prefix = #"(?:(?:hey\s+)?(?:sentient|sidekick)[,\s]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:just\s+)?"#
+        let target = #"(?:this(?:\s+(?:screen|page|article|email|message|document|chart|conversation|code))?|that|it|the\s+(?:current\s+)?(?:screen|page|article|email|message|document|chart|conversation|code)|my\s+(?:current\s+)?screen|what(?:'s|\s+is)\s+on\s+(?:(?:my|the)\s+)?screen|what\s+i(?:'m|\s+am)\s+looking\s+at)"#
+        let action = #"(?:summari[sz]e(?:\s+"# + target + #")?|give\s+me\s+a\s+summary\s+of\s+"# + target + ")"
+        let format = #"(?:\s+(?:briefly|concisely|simply|quickly|in\s+(?:(?:(?:[1-9]|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(?:short\s+)?(?:bullets?|bullet\s+points?|sentences?|paragraphs?)|plain\s+english|simple\s+terms|english|spanish|french|german|hindi|japanese|chinese|korean|portuguese|arabic)))?"#
+        let pattern = "^" + prefix + action + #"(?:\s+for\s+me)?"# + format + #"(?:\s+for\s+me)?"# + #"(?:[,\s]+please)?[.!?]*$"#
         guard normalized.range(of: pattern, options: .regularExpression) != nil else { return nil }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }

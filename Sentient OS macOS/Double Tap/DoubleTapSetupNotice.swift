@@ -1,23 +1,27 @@
-// The short, click-through explanation after a Double Tap that needs personal setup.
+// Short, click-through explanations after Double Tap needs setup or finds no reply box.
 import AppKit
 import SwiftUI
 
 @MainActor
 final class DoubleTapSetupNotice {
-    static let message = "Finish Sentient setup and analysis to use Double Tap."
+    nonisolated static let message = "Finish Sentient setup and analysis to use Double Tap."
+    nonisolated static let noReplyMessage = "Couldn’t find a reply box. Use Magic Reply to respond to a message or email."
     static let duration: Duration = .seconds(3)
     private var panel: NSPanel?
 
     /// Polling the pointer only while visible works without requesting input-monitoring access.
     /// This panel never becomes key, activates Sentient, or intercepts the user's clicks.
-    func show() async {
+    func show(message: String = DoubleTapSetupNotice.message) async {
         guard !Task.isCancelled else { return }
         let panel = self.panel ?? makePanel()
+        let host = NSHostingView(rootView: DoubleTapSetupNoticeView(message: message))
+        panel.contentView = host
+        panel.setContentSize(host.fittingSize)
         position(panel)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.orderFrontRegardless()
         NSAccessibility.post(element: panel, notification: .announcementRequested,
-            userInfo: [.announcement: Self.message, .priority: NSAccessibilityPriorityLevel.low.rawValue])
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.low.rawValue])
         defer { dismiss() }
         let until = ContinuousClock.now + Self.duration
         while ContinuousClock.now < until && !Task.isCancelled {
@@ -46,10 +50,8 @@ final class DoubleTapSetupNotice {
     }
 
     private func makePanel() -> NSPanel {
-        let host = NSHostingView(rootView: DoubleTapSetupNoticeView())
-        let panel = DoubleTapNoticePanel(contentRect: NSRect(origin: .zero, size: host.fittingSize),
+        let panel = DoubleTapNoticePanel(contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.contentView = host
         panel.isFloatingPanel = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -70,8 +72,10 @@ private final class DoubleTapNoticePanel: NSPanel {
 }
 
 private struct DoubleTapSetupNoticeView: View {
+    var message = DoubleTapSetupNotice.message
+
     var body: some View {
-        Text(DoubleTapSetupNotice.message)
+        Text(message)
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(.white)
             .lineSpacing(3)

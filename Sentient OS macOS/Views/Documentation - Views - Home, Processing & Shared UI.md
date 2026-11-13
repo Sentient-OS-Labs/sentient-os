@@ -25,7 +25,7 @@ serif italic display, no borrowed brand hues.
 | `Briefing.swift` | The card model (`Briefing`, `BriefingDeck`), built from a `PreparedAction`, from the gift markdown, or from the two hard-coded demo decks. |
 | `BriefingCard.swift` | One card through its four lives (sealed envelope → offer → working → done), `OfferButton`, the envelope. |
 | `HomePopovers.swift` | Home's Analysis popover (things understood, vault counts, Analyze Now, the run footer, overnight-on-battery switch, source chips) and Knowledge's optional Use with your AIs popover. `SourceChip`, `HomeStats`. |
-| `HomeShortcuts.swift` | Double Tap's persistent toolbar lesson and deferred ready hint, plus the proactive screen's temporary notch cue. Uses the configured shortcut and local discovery acknowledgements. |
+| `HomeShortcuts.swift` | The proactive screen’s temporary notch cue, using the configured shortcut and local discovery acknowledgements. |
 | `Sidekick/` | Shared conversation presentation/composer, selectable Markdown, atmosphere/glass, measured overview layout and scoped scroll-to-dock gesture. Storage and runtime contracts are in the Sidekick Conversation Backend documentation. |
 | `PromptBar.swift` | Legacy command bar retained for remaining callers; Home uses `SidekickComposer`. |
 | `ProcessingView.swift` | Analysis progress content hosted by the app-owned processing window; `RunSource` and `RunSource.connectors(from:)`. |
@@ -96,7 +96,7 @@ without a colored glow. The durable successful-task milestone
 shifts emphasis to Finish setup without resetting chat or automatically opening setup. The subtle CTA
 glow remains visible alongside a finished conversation; active work and pending recovery questions
 suppress it until the task is idle. During pending
-setup, Analysis and the Double Tap lesson route to Finish setup; after setup they show the actual
+setup, Analysis routes to Finish setup; after setup it shows the actual
 processing status. Paused and attention states explicitly say setup is saved, while Double Tap and
 personal context still wait for initial analysis.
 
@@ -163,17 +163,8 @@ Missing anchors fall back to a fade. Geometry follows resizing rather than keepi
 Analysis and Knowledge have navigation icons; Settings uses a 22pt gear in a 44×40pt target. Search is
 only shown while in conversation.
 
-Double Tap stays immediately left of Analysis in both Home modes. Its popover explains the actual
-configured key, the unsent draft, and the initial-analysis requirement; opening it never captures
-the screen or starts drafting. In chat below 980pt, Analysis and Knowledge use their labeled accessibility
-icons so the Double Tap label and chat controls remain visible without overlapping.
-
-When the persisted initial-analysis milestone becomes available, a short “Double Tap is ready”
-hint and finite gold highlight wait for visible, focused Home, including when analysis finishes
-behind its separate progress window. The hint never takes focus.
-Its completion timestamp is acknowledged only after a full viewing or an explicit ready-button
-click; hiding Home early leaves it pending. The small two-press key demonstration runs only while
-its popover is active, and becomes static with Reduce Motion or Low Power Mode.
+The top navigation provides Analysis, Knowledge and Settings. In compact chat, Analysis and
+Knowledge use their labeled accessibility icons to leave room for conversation controls.
 
 On the proactive screen, the otherwise-empty Proactive dock slot carries a quiet “Try the notch”
 cue. It becomes the configured shortcut hint when idle notch clicks are disabled. The explicit
