@@ -32,10 +32,11 @@ struct IslandBackdropBlur: NSViewRepresentable {
 
 struct IslandRestingSurface: View {
     var backdrop: NSImage?
+    var shape = NotchShape(topCornerRadius: 3, bottomCornerRadius: 3, isIsland: true)
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        Capsule()
+        shape
             .fill(.black.opacity(reduceTransparency ? 0.85 : 0.28))
             .overlay {
                 if let backdrop, !reduceTransparency {
@@ -46,8 +47,8 @@ struct IslandRestingSurface: View {
                 LinearGradient(colors: [.white.opacity(0.16), .white.opacity(0.035)],
                                startPoint: .top, endPoint: .bottom)
             }
-            .clipShape(Capsule())
-            .overlay { Capsule().strokeBorder(.white.opacity(0.23), lineWidth: 0.5) }
+            .clipShape(shape)
+            .overlay { shape.stroke(.white.opacity(0.23), lineWidth: 0.5) }
             .shadow(color: .black.opacity(0.16), radius: 2, y: 1)
     }
 }
@@ -96,9 +97,6 @@ final class NotchEntryHandle {
     }
 
     func show() {
-        if let view = panel.contentView as? HandleView {
-            view.setHovered(isIsland && view.hitRect.contains(panel.convertPoint(fromScreen: NSEvent.mouseLocation)), animated: false)
-        }
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.orderFrontRegardless()
         NotchSpace.shared?.pin(panel)
@@ -117,8 +115,6 @@ final class NotchEntryHandle {
         let onPress: () -> Void
         let onActivate: () -> Void
         private let isIsland: Bool
-        private var pillLayer: CALayer?
-        private var hovered = false
         var hitRect: NSRect { isIsland ? NSRect(x: 6, y: 3, width: 84, height: 18) : bounds }
         init(backdrop: NSImage?, isIsland: Bool, onHover: @escaping () -> Void, onPress: @escaping () -> Void,
              onActivate: @escaping () -> Void) {
@@ -137,7 +133,6 @@ final class NotchEntryHandle {
                 host.frame = NSRect(x: 12, y: 9, width: 72, height: 6)
                 host.wantsLayer = true
                 addSubview(host)
-                pillLayer = host.layer
             } else {
                 layer?.backgroundColor = NSColor.white.withAlphaComponent(0.001).cgColor
             }
@@ -157,35 +152,10 @@ final class NotchEntryHandle {
         override func hitTest(_ point: NSPoint) -> NSView? { hitRect.contains(point) ? self : nil }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         override func mouseEntered(with event: NSEvent) {
-            if isIsland { setHovered(true) }
-            else { onHover() }
+            onHover()
         }
-        override func mouseExited(with event: NSEvent) { if isIsland { setHovered(false) } }
+        override func mouseExited(with event: NSEvent) {}
 
-        func setHovered(_ value: Bool, animated: Bool = true) {
-            guard hovered != value, let pillLayer else { return }
-            hovered = value
-            let previous = pillLayer.presentation()?.transform ?? pillLayer.transform
-            let sx: CGFloat = value ? 84.0 / 72 : 1
-            let sy: CGFloat = value ? 1.5 : 1
-            // AppKit owns the layer's anchor point. Compensate explicitly so the
-            // top-center stays fixed instead of the pill growing sideways/upward.
-            var next = CATransform3DMakeScale(sx, sy, 1)
-            next.m41 = (1 - sx) * (0.5 - pillLayer.anchorPoint.x) * pillLayer.bounds.width
-            next.m42 = (1 - sy) * (1 - pillLayer.anchorPoint.y) * pillLayer.bounds.height
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            pillLayer.transform = next
-            CATransaction.commit()
-            if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                let animation = CABasicAnimation(keyPath: "transform")
-                animation.fromValue = NSValue(caTransform3D: previous)
-                animation.toValue = NSValue(caTransform3D: next)
-                animation.duration = value ? 0.14 : 0.18
-                animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                pillLayer.add(animation, forKey: "pill.hover")
-            } else { pillLayer.removeAnimation(forKey: "pill.hover") }
-        }
         override func mouseDown(with event: NSEvent) { onPress() }
         override func accessibilityPerformPress() -> Bool { onActivate(); return true }
     }

@@ -7,8 +7,7 @@ follow up on an email, or carry information between apps without restating the w
 The request still needs to make your intent clear, and results depend on the model and available context.
 
 Sidekick is also the shared status surface while a user-requested task runs. Tap the Sidekick key
-(right Command by default) or click the notch to type. Hold the physical notch or use its microphone
-to dictate. Double-tapping the key drafts a reply through Double Tap. Ordinary commands share the
+(right Command by default) or click the notch to type. Hold the same key or the physical notch for 250 ms to dictate, then release to send. The microphone also supports click-to-start dictation. Double-tapping the key drafts a reply through Magic Reply. Ordinary commands share the
 selected frontier backend and computer-task run; the notch's Summarize and Proofread actions have
 small, dedicated request paths.
 
@@ -49,25 +48,53 @@ card fire ──► coordinator.beginExternalRun ──────────�
 `NotchPhase`: `hidden · opening · listening · transcribing · typing · running · finishing(outcome) ·
 notice(message)`.
 
-**Input and routing.** A completed shortcut tap waits for the Double Tap interval before opening
-the type field. Notch presses support click-to-type and hold-to-dictate. Voice stops recording before
+**Input and routing.** A completed shortcut tap waits for the Magic Reply interval before opening
+the type field. A standalone 250 ms shortcut hold starts the shared dictation session and consumes
+the tap. Release submits once. Other keys, modifier combinations, clicks, shortcut rebinding and
+lost releases cancel a keyboard hold. The hold follows the configured shared shortcut key, with
+right Command as the default. Polling combines device-independent modifier flags with the left/right identity from native
+key events before validating the hold. Raw key-code polling can report a right-side modifier
+as its left-side counterpart, so it does not determine hold ownership. Regression tests use the generic flags returned
+by `NSEvent.modifierFlags`, alongside the richer flags from individual key events. Notch presses support click-to-type and hold-to-dictate. Voice stops recording before
 finalization; only the finished transcript is submitted. Escape and the explicit controls dismiss or
 cancel the active input. Ordinary Sidekick actions keep their existing permission/setup gates.
 
-The typing notch has small Summarize and Proofread shortcut chips. Explicit
-voice and notch-typed requests route to these features before the ordinary provider gate. Mentions,
+The typing notch presents **Take Over · Magic Reply · Summarize · Proofread**, in that order.
+Take Over is the primary action, Magic Reply the personal drafting action, and the two utilities
+have a quieter treatment. Short, explicit voice and notch-typed requests route directly through
+`SidekickActionRequest`, `SummaryRequest`, or `ProofreadRequest`. Direct aliases include “respond to this,” “draft a response,”
+“summarize the page,” “give me a summary of this,” “fix the grammar,” and “fix typos in this.”
+Polite prefixes can include “just.” Summary format instructions remain attached to the request.
+“Reply saying …” forwards the complete instruction to Magic Reply for this draft only. Mentions,
 negations, conversation replies and unrelated commands retain their existing semantics. No knowledge
 analysis or Sidekick subscription is required for these covered utility requests.
 
 Before the notch becomes key, `Proofread` captures the original selection. The field waits for that
-bounded read, and an intervening input/application change cancels the delayed focus transfer. The
-active display is also remembered for Summarize. Ordinary submissions and adopted actions reject
-while proofreading owns the editing path; Double Tap and Proofread exclude one another through paste
+bounded read. An intervening input/application change cancels the delayed focus transfer. The active display is also remembered for Summarize. Ordinary submissions and adopted actions reject
+while proofreading owns the editing path; Magic Reply and Proofread exclude one another through paste
 cleanup. Summarize remains a separate read-only request.
 
-The main Sidekick agent also receives `summarize_screen` and `proofread_text` through its per-run
+Take Over launches the existing foreground Sidekick run with a short visible request and separate
+app-owned action context. The context identifies the originating app/window/display as data, asks
+Sidekick to infer and complete the visible task, and uses `ask_user` choices for material ambiguity.
+It retains existing permission and action boundaries, and survives retry through `actionContext`.
+The run-owned Take Over identity also survives retry and drives the Lumen cursor/startup caption.
+Take Over is agent execution itself, not a recursive agent tool.
+
+Magic Reply retracts the notch and synchronously releases its nonactivating panel's keyboard
+focus, then starts the same Magic Reply run as the keyboard shortcut. Both use the same provider,
+knowledge base, writing samples, custom instructions, caret light, screenshot classification
+and paste transport. The button uses the display remembered when the notch opened. Background
+Proofread selection capture does not delay or disable Magic Reply. A missing reply field gets
+local feedback. Every entry drafts for review and leaves sending to the user.
+
+The main Sidekick agent also receives `magic_reply`, `summarize_screen` and `proofread_text` through its per-run
 `sentient_recovery` MCP server, shared by Home, notch replies and card tasks. Natural-language
-requests outside the quick matcher can therefore use the same specialist services. Summarize opens
+requests outside the quick matcher can therefore use the same specialist services. `magic_reply`
+reads the originating or explicitly observed app window, uses the same personalized reply engine,
+and returns `draft_text`, `applied: false`, `sent: false`. Explicit reply requirements are passed
+through the shared custom-instruction transport. It is cancellable and bounds inference to 30 seconds.
+The agent shows or inserts that draft using its normal verified editing tools. Summarize opens
 the normal reader and returns its text plus the captured app/window identity. The default target is
 the external app captured at invocation; an explicit observed application ID can select another
 running app. A Home request with no external target requires that explicit app choice.
@@ -101,8 +128,10 @@ monitor when Sentient owns keyboard input, and the explicit Stop controls. There
 monitor. Proofread additionally treats a fresh Sidekick-key tap as cancellation; a single tap does
 not silently stop an ordinary running Sidekick task.
 
-**Completion.** `run.onFinished` → `.finishing(outcome)`: ✓ and stopped flourish for 1.5 s, a failure
-holds 5 s (its caption carries the ✗ reason). `message_user` final answers include the explicit
+**Completion.** The app chooses one terminal cue from the committed result. A final answer
+uses the response view; a successful action without an answer uses “All set” for 1.15 s.
+Home focus, active input and an already read/dismissed answer suppress duplicate completion
+UI. Stopped retains its 1.5 s notice; failures use recovery rather than success artwork. `message_user` final answers include the explicit
 `completion: "done" | "could_not"` field. `AgentStatus.resolve` checks this task-scoped claim after a
 clean provider exit, with the exact final `STATUS: DONE` / `STATUS: COULD_NOT` line as a compatibility
 fallback. A refusal from either source wins over a contradictory DONE. Without either source the
@@ -183,7 +212,7 @@ draft; submission uses the normal coordinator gate with the displayed message's 
 Return sends inline without opening Home, and rejected/active-task submissions retain the draft.
 Selected-text Reply targets that quote and focuses the inline field. Auto-presentation remains
 non-key; only editing requests keyboard focus. Focus or an unsent draft holds attention so a timeout
-or newer message cannot replace the preview mid-reply. Closing keeps the draft/reference for Home.
+or newer message cannot replace the preview mid-reply. Closing retains the notch draft. Submitted replies still enter the same conversation shown in Home.
 `test_sidekick_notch_reply.py` exercises native editing/Return and renders the real view in an inert
 nonactivating panel; attention and layout fixtures cover timing, coalescing and bounded reading space.
 
@@ -255,7 +284,7 @@ screen contents. The proactive executor passes no frames.
 
 Your request, useful knowledge and screen/app context give meaning to a short handoff. Sidekick can
 read more context as a task requires; a visible page is not its only source of understanding.
-Frontier Model Choice controls its inference provider, while Double Tap's provider is independent.
+Frontier Model Choice controls its inference provider, while Magic Reply's provider is independent.
 
 A user starts each task. The notch shows progress, and STOP cancels the active run. The task may
 perform the actions the user requested, so this is an execution surface, not always a draft for a
@@ -307,8 +336,18 @@ without audio or providers.
 
 ### Speech vocabulary and retention
 
-Scribe realtime receives the preferred system language and keyterms `summarise`, `summarize`,
-`proofread`, `sentient os`, `sentient`, and `jesai`. The Cloudflare relay issues single-use tokens;
-the Mac connects directly to ElevenLabs. The included configuration sets `SCRIBE_ZERO_RETENTION=false`.
-Zero retention depends on provider account capabilities and must be verified for the deployed setup.
-The existing client fails closed on a retention warning when zero retention is requested.
+Scribe realtime receives the preferred system language and the shared vocabulary for Sentient,
+Sidekick, Magic Reply, Take Over, Summarize and Proofread. The Cloudflare relay issues single-use
+tokens; microphone audio travels directly from the Mac to ElevenLabs. The included configuration
+sets `SCRIBE_ZERO_RETENTION=false`. Zero retention depends on provider account capabilities and
+must be verified for the deployed setup. The client fails closed on a retention warning when zero
+retention is requested. Keyboard release finalizes only its owned voice session; cancelled or stale
+holds cannot submit a later microphone session.
+
+### Independent unsent drafts
+
+Home edits `run.conversation.draft`; the notch edits `CommandCoordinator.notchDraft`,
+including stopped dictation and inline response replies. Dismiss/reopen preserves each
+surface's own text. Sending or correcting one does not discard the other's unsent text.
+Both submit through the same coordinator and run, so progress, history and responses are
+shared immediately after submission. Clearing the conversation clears both drafts.

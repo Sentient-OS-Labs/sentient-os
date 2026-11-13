@@ -10,6 +10,7 @@ import test_sidekick_app as app
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--app', type=Path, required=True)
 parser.add_argument('--runs', type=int, default=1)
+parser.add_argument('--island-only', action='store_true')
 args = parser.parse_args()
 _, executable = app.resolve_app(args.app)
 original_stop = app.stop_owned
@@ -23,6 +24,7 @@ app.stop_owned = stop_with_sample
 for index in range(args.runs):
     root = Path(tempfile.mkdtemp(prefix='sentient-sidekick-app-switching-')).resolve()
     root.chmod(0o700); (root / app.MARKER).write_text('1\n'); (root / 'vault').mkdir(mode=0o700)
+    if args.island_only: (root / 'island-only').touch()
     fixture = app.fixture(root, 'chatgpt')
     runtime = (Path.home() / 'Library/Application Support/SentientOS/Private Codex').resolve()
     print('Switching fixture: ' + str(root), flush=True)

@@ -30,7 +30,8 @@ def declaration(source: str, signature: str) -> str:
 FIXTURE = r'''
 import Foundation
 
-enum CodexTrigger { case onboarding, analyzeNow, overnight }
+enum ProactiveCycle { static let lastCycleKey = "fixture.lastCycle" }
+enum CodexTrigger { case onboarding, analyzeNow, overnight, pluggedInIdle }
 func Log(_ value: String) {}
 enum AppState { static let onboardingKey = "hasCompletedOnboarding" }
 enum ShortcutKey: Equatable { case rightCommand, leftCommand }
@@ -69,26 +70,26 @@ final class Recovery {
     func reopen() { reopened += 1; isVisible = true }
 }
 final class Run { var isClearingChat = false; var isRunning = false; let recovery = Recovery() }
-final class Proofread {
-    var isRunning = false
-    func cancel() { isRunning = false }
-    func clearPreparedSelection() {}
-}
-enum ScreenCapture { static func summaryDisplay() -> UInt32 { 1 } }
-enum SummaryAccessibility { static func target() -> String? { "fixture" } }
-final class Dictation { func endContext() {} }
+enum ScreenCapture { static func summaryDisplay() -> Int? { nil } }
+enum SummaryAccessibility { static func target() -> Int? { nil } }
+final class FixtureProofread { var selectionActivity: ShortcutActivity?; var isRunning = false; func cancel() {}; func clearPreparedSelection() {} }
+final class FixtureDictation { func endContext() {} }
 final class CommandCoordinator {
-    let run = Run()
-    let proofread = Proofread()
-    let dictation = Dictation()
-    var summaryDisplayID: UInt32?
-    var summaryTarget: String?
+    let proofread = FixtureProofread(), dictation = FixtureDictation()
+    var summaryDisplayID: Int?, summaryTarget: Int?
     func prepareProofreadSelection() {}
+    let run = Run()
     var phase = NotchPhase.hidden
     var phaseToken = 0
     var hotkeyPair = ShortcutTapPair()
     var pendingSingleTap: Task<Void, Never>?
-    var doubleTapDemoKeyChanged: ((Bool) -> Void)?
+    var onboardingReplyLessonActive = false
+    var demoTask: Task<Void, Never>?, dismissalPreviewTask: Task<Void, Never>?
+    var physicalTapTransition = false, pointerDismissal = false, notchDismissalPreview = false
+    var notchAnimationSpeed = 1.0, physicalTapSpringResponse = 0.52
+    var notchPhysicalSpringResponse: Double?
+    func cancelOnboardingActionAnimation() { demoTask?.cancel(); demoTask = nil }
+    func clearMagicReplyTarget() {}
     var onboardingDemoArmed = false
     var messageReplyFocused = false
     enum Anchor { case mainDisplay }
@@ -105,6 +106,7 @@ final class CommandCoordinator {
         hotkeyTapped(key, at: time, activity: ShortcutActivity.current)
     }
     func interrupt() { interruptHotkeyGesture() }
+    func endHotkeyDictation(send: Bool) {}
     // COORDINATOR_METHODS
 }
 enum OvernightScheduler {
@@ -262,8 +264,7 @@ final class ProcessingCoordinator {
         let planRestricted = CommandCoordinator()
         planRestricted.tap(1_300)
         try await until { planRestricted.phase == .typing }
-        check(ComputerUseGate.shared.refreshes == 1 && DoubleTap.shared.captures == 0,
-              "knowledge-only plans can open the notch for independently covered quick actions")
+        check(ComputerUseGate.shared.refreshes == 1, "legacy knowledge-only flag does not hide Sidekick before analysis")
     }
 
     static func plans() throws {

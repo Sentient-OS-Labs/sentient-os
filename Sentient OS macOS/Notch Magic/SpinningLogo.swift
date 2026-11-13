@@ -13,6 +13,7 @@ struct SpinningLogo: View {
     var size: CGFloat = 20
     var fast: Bool = false            // running → quicker spin
     var paused = false               // retained hidden surfaces do not keep a display clock alive
+    var coreScale: CGFloat = 1
 
     // Anchor (angle + wall-time) so a period change re-bases the spin instead of jumping it.
     @State private var anchorAngle: Double = 0
@@ -21,14 +22,18 @@ struct SpinningLogo: View {
     private static func period(fast: Bool) -> Double { fast ? 2 : 13 }   // seconds / revolution (2s = the fast "processing" spin)
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: fast ? 1.0 / 60.0 : 1.0 / 30.0, paused: paused)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            let angle = anchorAngle + (paused ? 0 : (t - anchorTime) / Self.period(fast: fast) * 360)
-            WebsiteLogoMark(size: size, haloAngle: angle)
+        ZStack {
+            // Only the transformed halo ticks. Ring, core and their hover animation
+            // are outside the clock and share the parent's panel transition.
+            TimelineView(.animation(minimumInterval: fast ? 1.0 / 60.0 : 1.0 / 30.0, paused: paused)) { ctx in
+                let t = ctx.date.timeIntervalSinceReferenceDate
+                let angle = anchorAngle + (paused ? 0 : (t - anchorTime) / Self.period(fast: fast) * 360)
+                WebsiteLogoHalo(size: size).equatable()
+                    .rotationEffect(.degrees(angle))
+            }
+            WebsiteLogoForeground(size: size, coreScale: coreScale)
         }
-        // The spin is wall-clock driven — never let a parent's animation (the notch morph) interpolate
-        // the gradient angle, or a speed change reverse-spins it for the morph's duration.
-        .transaction { $0.animation = nil }
+        .frame(width: size, height: size)
         .onChange(of: fast) { oldFast, _ in
             let t = Date().timeIntervalSinceReferenceDate
             if !paused { anchorAngle += (t - anchorTime) / Self.period(fast: oldFast) * 360 }
@@ -49,7 +54,23 @@ struct SpinningLogo: View {
 struct WebsiteLogoMark: View {
     var size: CGFloat = 20
     var haloAngle: Double = 0
+    var coreScale: CGFloat = 1
 
+    var body: some View {
+        ZStack {
+            WebsiteLogoHalo(size: size).equatable()
+                .rotationEffect(.degrees(haloAngle))
+            WebsiteLogoForeground(size: size, coreScale: coreScale)
+        }
+        .frame(width: size, height: size)
+        .allowsHitTesting(false)
+    }
+}
+
+/// Rasterize the invariant gradient + Gaussian once at the current backing scale.
+/// Rotation is applied outside this layer; neither rotation nor core hover changes it.
+private struct WebsiteLogoHalo: View, Equatable {
+    let size: CGFloat
     private static let stops: [Gradient.Stop] = [
         .init(color: Color(red: 253 / 255.0, green: 226 / 255.0, blue: 163 / 255.0), location: 0),
         .init(color: Color(red: 1, green: 142 / 255.0, blue: 60 / 255.0), location: 0.14),
@@ -63,15 +84,28 @@ struct WebsiteLogoMark: View {
 
     var body: some View {
         let diameter = 42.0098
-        let scale = size / diameter
+        let radius = 10.0824 * size / diameter
+        Circle()
+            .fill(LinearGradient(stops: Self.stops,
+                startPoint: UnitPoint(x: 0, y: (35.5433 - 20.1647) / diameter),
+                endPoint: UnitPoint(x: (62.4934 - 20.1647) / diameter, y: (36.7669 - 20.1647) / diameter)))
+            .frame(width: size, height: size)
+            .blur(radius: radius)
+            // Preserve the Gaussian's transparent extent before flattening it.
+            .padding(radius * 4)
+            .drawingGroup()
+            .frame(width: size, height: size)
+            .allowsHitTesting(false)
+    }
+}
+
+private struct WebsiteLogoForeground: View {
+    let size: CGFloat
+    let coreScale: CGFloat
+
+    var body: some View {
+        let scale = size / 42.0098
         ZStack {
-            Circle()
-                .fill(LinearGradient(stops: Self.stops,
-                    startPoint: UnitPoint(x: 0, y: (35.5433 - 20.1647) / diameter),
-                    endPoint: UnitPoint(x: (62.4934 - 20.1647) / diameter, y: (36.7669 - 20.1647) / diameter)))
-                .frame(width: size, height: size)
-                .rotationEffect(.degrees(haloAngle))
-                .blur(radius: 10.0824 * scale)
             Circle().fill(.white.opacity(0.007))
                 .frame(width: 54.6127 * scale, height: 54.6127 * scale)
                 .blur(radius: 4.20098 * scale)
@@ -79,6 +113,7 @@ struct WebsiteLogoMark: View {
                 .frame(width: size, height: size)
             Circle().fill(.white)
                 .frame(width: 16.804 * scale, height: 16.804 * scale)
+                .scaleEffect(coreScale)
         }
         .frame(width: size, height: size)
         .allowsHitTesting(false)

@@ -127,6 +127,7 @@ nonisolated enum CodexCLI {
     }
 }
 nonisolated final class SidekickInteraction: Sendable {
+    let onWorkWindow: (@MainActor @Sendable (SidekickWorkWindow?) -> Void)? = nil
     func endExecution(streamID: UUID) {}
     func observeToolEvent(_ line: String, streamID: UUID) throws {}
     static let current: SidekickInteraction? = nil
@@ -400,8 +401,6 @@ import AppKit
         }
         // Expired waiting calls cannot execute late after the upstream request times out.
         do {
-            // Leave time for initial dispatch under concurrent build/test load, while the
-            // scripted first call still outlasts the queued request's real deadline.
             let (server,script) = try await open([reply], delay: .milliseconds(1500), timeout: 0.5)
             let first = Task { try await server.respond(request(30)) }; try await started(script)
             let expired = try await server.respond(request(31,"click"))
@@ -466,7 +465,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-passthrough-") as direc
         str(APP / "Diagnostics/ComputerUseDiagnosticPolicy.swift"),
         str(APP / "Driver/OpenAIComputerUseProbe.swift"),
         str(APP / "Driver/NativePermissionReadiness.swift"),
-        str(APP / "Driver/NativeComputerUseServer.swift"),
+        str(APP / "Driver/NativeComputerUseServer.swift"), str(APP / "Notch Magic/SidekickWorkWindow.swift"),
         str(APP / "Cloud/ComputerUseStream.swift"), str(APP.parent / "Scripts/Fixtures/NativeHelperPermissionNoteStub.swift"), "-o", str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)

@@ -59,6 +59,7 @@ SUPPORT += r'''
 nonisolated enum ModelBackend: Sendable { case chatgpt; static let current = ModelBackend.chatgpt }
 
 nonisolated final class SidekickInteraction: Sendable {
+    let onWorkWindow: (@MainActor @Sendable (SidekickWorkWindow?) -> Void)? = nil
     static let current: SidekickInteraction? = nil
     let computerUseCheckConsent = ComputerUseDiagnosticConsent()
 }
@@ -330,6 +331,6 @@ with tempfile.TemporaryDirectory(prefix="sentient-native-session-recovery-") as 
                     *[str(APP / p) for p in ["Diagnostics/NativeComputerUseFailure.swift",
                         "Diagnostics/ComputerUseDiagnosticConsent.swift", "Diagnostics/ComputerUseDiagnosticPolicy.swift",
                         "Driver/OpenAIComputerUseProbe.swift", "Driver/NativePermissionReadiness.swift",
-                        "Driver/OpenAIComputerUseSession.swift", "Driver/NativeComputerUseServer.swift"]],
+                        "Driver/OpenAIComputerUseSession.swift", "Driver/NativeComputerUseServer.swift", "Notch Magic/SidekickWorkWindow.swift"]],
                     str(APP.parent / "Scripts/Fixtures/NativeHelperPermissionNoteStub.swift"), "-o", str(executable)], check=True, env=env, timeout=60)
     subprocess.run([str(executable)], check=True, env=env, timeout=45)

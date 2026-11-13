@@ -10,7 +10,8 @@
 //  or message reply box pastes nothing. Nothing about a run ever shows on the notch: the feedback
 //  is the light at the caret (CaretSwirl, placed by CaretLocator) that gathers while the reply is
 //  drafted and blooms as the text lands, then the paste itself. Missing personal setup gets a
-//  short mouse-following explanation after the swirl; other failures go to the log and Dev Tools.
+//  short mouse-following explanation after the swirl, as does finding no reply box.
+//  Other failures go to the log and Dev Tools.
 //
 //  On by default: an unset `doubletap.enabled` means on, so a fresh install and a Release build
 //  (which has no Dev Tools) enable Double Tap after analysis or with an imported knowledge base;
@@ -77,7 +78,8 @@ final class DoubleTap {
     /// Run once; `completion` arrives on the main actor exactly once. A tap while a draft is in
     /// flight is ignored rather than restarted: cancelling the first run would fade the ring the
     /// second one just started, and the paste would arrive twice.
-    func start(completion: @escaping @MainActor (Result) -> Void) {
+    func start(displayID: CGDirectDisplayID? = nil, preference: String = "",
+               completion: @escaping @MainActor (Result) -> Void) {
         guard !Proofread.shared.isRunning else { completion(.stopped); return }
         guard !isDrafting else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
         guard Self.isReady else { showSetupRequired(completion: completion); return }
@@ -97,7 +99,9 @@ final class DoubleTap {
         let began = Date()
         let work = Task { [weak self] in
             guard let self else { return }
-            let result = await Diagnostics.$current.withValue(operation) { await self.perform() }
+            let result = await Diagnostics.$current.withValue(operation) {
+                await self.perform(displayID: displayID, preference: preference)
+            }
             let outcome: DiagnosticHistory.Outcome = switch result {
             case .pasted: .pasteDispatched
             case .notAMessage: .notAMessage
@@ -107,10 +111,17 @@ final class DoubleTap {
             DiagnosticHistory.finish(.doubleTap, id: runID, outcome: outcome, reason: self.diagnosticReason,
                 phase: (operation.phase ?? self.phase).rawValue,
                 measurements: ["elapsed_ms": Int(Date().timeIntervalSince(began) * 1000)])
+            Log("⌘⌘ draft finished: \(outcome.rawValue) · \(self.diagnosticReason ?? "none")")
             self.activeRunID = nil
-            self.task = nil
             if case .pasted = result { InviteProgram.shared.record(.doubleTap) }
             if case .pasted = result {} else { self.swirl.dissolve() }   // the light fades when nothing lands
+            if case .notAMessage = result, !Task.isCancelled {
+                if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    try? await Task.sleep(for: .seconds(SwirlMath.dissolveDuration))
+                }
+                await self.setupNotice.show(message: DoubleTapSetupNotice.noReplyMessage)
+            }
+            self.task = nil
             completion(result)
         }
         task = work
@@ -154,7 +165,7 @@ final class DoubleTap {
         }
     }
 
-    private func perform() async -> Result {
+    private func perform(displayID: CGDirectDisplayID?, preference: String = "") async -> Result {
         if let problem = DoubleTapInference.configurationProblem {
             diagnosticReason = "configuration"; return .failed(problem)
         }
@@ -167,7 +178,7 @@ final class DoubleTap {
         let target = CaretLocator.locate()
         swirl.begin(at: target)
         let started = Date()
-        guard let shot = await ScreenCapture.grabDisplayUnderCursor() else {
+        guard let shot = await ScreenCapture.grabDisplayUnderCursor(displayID: displayID) else {
             diagnosticReason = "screen_capture_unavailable"
             return .failed("no screenshot (Screen Recording?)")
         }
@@ -183,7 +194,8 @@ final class DoubleTap {
         if Task.isCancelled { return .stopped }
         do {
             phase = .request
-            let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot)
+            let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot,
+                                                           preference: preference)
             let t = outcome.timing
             if let activeRunID {
                 var counts = ["capture_ms": captureMs, "inference_ms": Int(t.total * 1000)]
@@ -199,7 +211,7 @@ final class DoubleTap {
                 + " · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
                 + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0), cache writes \(t.cacheWriteTokens.map { String($0) } ?? "—"))"
                 + " · out \(t.outputTokens ?? 0) · reasoning \(t.reasoningTokens ?? 0)"
-                + " · \(outcome.verdict == .notAMessage ? "not a reply box" : "reply pasted")"
+                + " · \(outcome.verdict == .notAMessage ? "not a reply box" : "reply generated")"
                 + " · light at the \(target.source.rawValue)"
             switch outcome.verdict {
             case .notAMessage:
@@ -215,6 +227,7 @@ final class DoubleTap {
                 guard await ReplyPaste.insert(reply) else {
                     diagnosticReason = "paste_failed"; return .failed("could not paste reply")
                 }
+                lastReport = lastReport.map { $0 + " · paste dispatched" }
                 return .pasted
             }
         } catch DoubleTapInference.Failure.cancelled {

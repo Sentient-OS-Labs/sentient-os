@@ -10,7 +10,7 @@ nonisolated enum DiagnosticHistory {
     static let processID = UUID()
     private static let lock = Mutex(())
 
-    enum Kind: String, Codable, Sendable { case doubleTap, overnight }
+    enum Kind: String, Codable, Sendable { case doubleTap, overnight, pluggedInIdle }
     enum Outcome: String, Codable, Sendable {
         case running, pasteDispatched, notAMessage, stopped, failed, blocked, timedOut
         case completed, partial, offline, degraded, stalled, interrupted
@@ -42,19 +42,38 @@ nonisolated enum DiagnosticHistory {
         var lastOvernightSuccessAt: Date?
         var doubleTap: [Run] = []
         var overnight: [Run] = []
+        // Optional for backwards-compatible decoding of existing diagnostic ledgers.
+        var pluggedInIdle: [Run]?
         var errors: [Failure] = []
+
+        subscript(kind: Kind) -> [Run] {
+            get {
+                switch kind {
+                case .doubleTap: doubleTap
+                case .overnight: overnight
+                case .pluggedInIdle: pluggedInIdle ?? []
+                }
+            }
+            set {
+                switch kind {
+                case .doubleTap: doubleTap = newValue
+                case .overnight: overnight = newValue
+                case .pluggedInIdle: pluggedInIdle = newValue
+                }
+            }
+        }
     }
 
     /// Snapshot marks an unfinished attempt from an earlier launch honestly. Nothing is uploaded.
     static func snapshot(defaults: UserDefaults = .standard) throws -> State {
         try lock.withLock { _ in
             var state = try load(defaults)
-            for kind in [Kind.doubleTap, .overnight] {
-                var runs = kind == .doubleTap ? state.doubleTap : state.overnight
+            for kind in [Kind.doubleTap, .overnight, .pluggedInIdle] {
+                var runs = state[kind]
                 for i in runs.indices where runs[i].outcome == .running && runs[i].processID != processID {
                     runs[i].outcome = .interrupted
                 }
-                if kind == .doubleTap { state.doubleTap = runs } else { state.overnight = runs }
+                state[kind] = runs
             }
             return state
         }
@@ -66,13 +85,11 @@ nonisolated enum DiagnosticHistory {
         let run = Run(id: UUID(), processID: processID, beganAt: Date(),
                       provider: provider, model: model.map { safe($0) })
         update(defaults) { state in
-            if kind == .doubleTap {
-                state.doubleTap.append(run)
-                state.doubleTap = Array(state.doubleTap.suffix(50))
-            } else {
+            var runs = state[kind]
+            runs.append(run)
+            state[kind] = Array(runs.suffix(kind == .doubleTap ? 50 : 30))
+            if kind == .overnight {
                 state.firstOvernightAttemptAt = state.firstOvernightAttemptAt ?? run.beganAt
-                state.overnight.append(run)
-                state.overnight = Array(state.overnight.suffix(30))
             }
         }
         return run.id
@@ -83,7 +100,7 @@ nonisolated enum DiagnosticHistory {
                        phase: String? = nil, measurements: [String: Int] = [:],
                        stages: [String: String] = [:], defaults: UserDefaults = .standard) {
         update(defaults) { state in
-            var runs = kind == .doubleTap ? state.doubleTap : state.overnight
+            var runs = state[kind]
             guard let i = runs.firstIndex(where: { $0.id == id }), runs[i].outcome == .running else { return }
             runs[i].finishedAt = Date()
             runs[i].outcome = outcome
@@ -91,10 +108,8 @@ nonisolated enum DiagnosticHistory {
             runs[i].phase = phase
             runs[i].measurements.merge(measurements) { _, new in new }
             runs[i].stages = stages.mapValues { safe($0) }
-            if kind == .doubleTap { state.doubleTap = runs } else {
-                state.overnight = runs
-                if outcome == .completed { state.lastOvernightSuccessAt = runs[i].finishedAt }
-            }
+            state[kind] = runs
+            if kind == .overnight && outcome == .completed { state.lastOvernightSuccessAt = runs[i].finishedAt }
         }
     }
 
@@ -191,7 +206,8 @@ nonisolated enum DiagnosticHistory {
         lock.withLock { _ in
             var state = (try? load(defaults)) ?? State()
             body(&state)
-            if state.recordingStartedAt == nil && (!state.doubleTap.isEmpty || !state.overnight.isEmpty || !state.errors.isEmpty) {
+            if state.recordingStartedAt == nil && (!state.doubleTap.isEmpty || !state.overnight.isEmpty
+                || !(state.pluggedInIdle ?? []).isEmpty || !state.errors.isEmpty) {
                 state.recordingStartedAt = Date()
             }
             // Never report storage errors through Diagnostics: that would recurse into this sink.

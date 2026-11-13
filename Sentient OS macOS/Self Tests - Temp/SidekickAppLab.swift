@@ -50,7 +50,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
         let env = ProcessInfo.processInfo.environment
         guard env["SENTIENT_SELFTEST"] == "sidekickapp", CommandLine.arguments.count == 1,
               let path = env["LAB_SIDEKICK_ROOT"], path.hasPrefix("/"),
-              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-dictation", "ui-voice-continuity", "ui-island-colors", "ui-notch-motion", "ui-surface-switching", "ui-summarize", "live-summary", "ui-proofread", "ui-discovery", "ui-invitation", "ui-small-onboarding", "ui-late-gift", "ui-personal-setup", "ui-personal-sources", "ui-connector-setup", "ui-stress", "live-workflows", "live-quick-actions"].contains(stage),
+              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear", "ui-polish", "ui-dictation", "ui-voice-continuity", "ui-island-colors", "ui-notch-motion", "ui-surface-switching", "ui-summarize", "live-summary", "ui-proofread", "ui-physical-tap", "ui-tap-rhythm", "live-physical-sensor", "ui-discovery", "ui-invitation", "ui-magic-reply", "ui-small-onboarding", "ui-late-gift", "ui-personal-setup", "ui-personal-sources", "ui-connector-setup", "ui-stress", "live-workflows", "live-quick-actions"].contains(stage),
               let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = ModelBackend(rawValue: selected), provider != .custom else { throw Failure.configuration }
         let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
@@ -124,12 +124,21 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "ui-invitation":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickPolishLab.runInvitation(app: state, root: c.root)) { _, new in new }
+            case "ui-magic-reply":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickPolishLab.runMagicReply(app: state, root: c.root)) { _, new in new }
             case "ui-small-onboarding":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickPolishLab.runSmallOnboarding(app: state, root: c.root)) { _, new in new }
             case "ui-polish":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickPolishLab.run(app: state, root: c.root)) { _, new in new }
+            case "live-physical-sensor":
+                checks.merge(try await PhysicalTapLab.probe(root: c.root)) { _, new in new }
+            case "ui-tap-rhythm":
+                checks.merge(try await PhysicalTapLab.rhythm(root: c.root)) { _, new in new }
+            case "ui-physical-tap":
+                checks.merge(try await PhysicalTapLab.run(root: c.root)) { _, new in new }
             case "ui-proofread":
                 checks.merge(try await ProofreadLab.run(root: c.root)) { _, new in new }
             case "live-summary":

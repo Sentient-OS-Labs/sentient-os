@@ -93,7 +93,7 @@ struct SummaryView: View {
 
         }
         .id(summary.requestID)
-        .background(.black)
+        .background(SummaryBackdrop())
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.12), lineWidth: 1).allowsHitTesting(false))
         .ignoresSafeArea()
         .onChange(of: summary.requestID) { _, _ in copied = false }
@@ -123,5 +123,45 @@ struct SummaryView: View {
         if summary.sourceInfo?.truncated == true { detail += " · summarized from excerpts" }
         if let date = summary.capturedAt { detail += " · " + date.formatted(date: .omitted, time: .shortened) }
         return detail
+    }
+}
+
+
+/// Quiet, dark frost: the desktop supplies only a diffuse hint of color. The
+/// opaque text sits above the material, never inside a blur or vibrancy group.
+struct SummaryBackdrop: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        ZStack {
+            if reduceTransparency {
+                Color.black
+            } else {
+                SummaryBackdropMaterial()
+                // Even over a white window, retain a dark field behind body text.
+                Color.black.opacity(contrast == .increased ? 0.90 : 0.82)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct SummaryBackdropMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.isEmphasized = false
+        view.appearance = NSAppearance(named: .darkAqua)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        // Clicking the source app must not change the reader's frost or contrast.
+        view.state = .active
     }
 }

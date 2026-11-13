@@ -34,7 +34,10 @@ struct NotchMetrics: Equatable {
     var compactMode = false
     var setupVisible = false
     var quickActionsAvailable = true
-    var quickActionsHeight: CGFloat { quickActionsAvailable ? 24 : 0 }
+    var quickActionsHeight: CGFloat { quickActionsAvailable ? 38 : 0 }
+    /// User-marked sensor: 54 px left of the camera across a 370 px physical notch.
+    /// Use hardware width, never the expanded panel width, to keep the target fixed.
+    var lightSensorOffset: CGFloat { cameraCenterOffset - (hardwareNotch?.width ?? baseWidth) * (54.0 / 370.0) }
 
     func showingQuickActions(_ available: Bool) -> Self {
         var result = self; result.quickActionsAvailable = available; return result
@@ -62,8 +65,8 @@ struct NotchMetrics: Equatable {
     var baseHeight: CGFloat { hasHardwareIsland ? hardwareBarHeight : max(hardwareNotch?.height ?? 0, 32) }
 
     var islandCornerRadius: CGFloat { hasHardwareIsland ? topRowHeight / 2 : 24 }
-    var islandActivityHeight: CGFloat { 48 }
-    var topRowHeight: CGFloat { hasHardwareCutout ? baseHeight : islandActivityHeight }
+    var islandActivityHeight: CGFloat { 56 }
+    var topRowHeight: CGFloat { hasHardwareCutout ? baseHeight : 48 }
     /// The centered header stays still; expanded content starts below the menu bar.
     var bodyTopPad: CGFloat { hasHardwareIsland ? hardwareMenuHeight - topInset - topRowHeight : 0 }
     var headerContentHeight: CGFloat { topRowHeight + bodyTopPad }
@@ -166,7 +169,7 @@ struct NotchMetrics: Equatable {
             if hasHardwareIsland { return CGSize(width: baseWidth, height: baseHeight) }
             return hardwareNotch ?? islandRestingSize
         case .opening:
-            return CGSize(width: hasHardwareIsland ? runningWidth : baseWidth + 76, height: hasPhysicalNotch ? baseHeight + notchBottomCover : topRowHeight)
+            return CGSize(width: hasHardwareIsland ? runningWidth : baseWidth + 76, height: hasPhysicalNotch ? baseHeight + notchBottomCover : hasHardwareCutout ? topRowHeight : islandActivityHeight)
         case .listening:
             return CGSize(width: dictationWidth, height: dictationHeight)
         case .transcribing:
@@ -201,7 +204,8 @@ struct NotchMetrics: Equatable {
 
     func radii(for phase: NotchPhase) -> (top: CGFloat, bottom: CGFloat) {
         if !hasPhysicalNotch {
-            let r = min(size(for: phase).height / 2, islandCornerRadius)
+            let r = isInlineIsland(for: phase) ? size(for: phase).height / 2
+                : min(size(for: phase).height / 2, islandCornerRadius)
             return (top: r, bottom: r)
         }
         if isCompact(for: phase) {
@@ -250,12 +254,12 @@ struct NotchMetrics: Equatable {
         max(1, min(Int((readBackMeasuredHeight(text) / readBackLineHeight).rounded()), maxReadBackLines))
     }
 
-    /// How long to linger on the read-back, scaling LINEARLY by line count: 4s for a one-liner up to 9s
-    /// at the line cap. (Running width is constant across screens, so a default `NotchMetrics` reads true.)
+    /// A brief confirmation before showing live progress: 0.5s for a short phrase,
+    /// capped at 2.5s for long dictation. Task execution starts immediately underneath.
     static func readBackDuration(for text: String) -> Double {
         let m = NotchMetrics(hardwareNotch: nil)
         let t = Double(m.readBackLineCount(text) - 1) / Double(max(m.maxReadBackLines - 1, 1))
-        return 4 + t * 5
+        return 0.5 + t * 2
     }
 
     static let preview = NotchMetrics(hardwareNotch: CGSize(width: 200, height: 37))
@@ -270,38 +274,49 @@ struct NotchView: View {
     var displayID: CGDirectDisplayID = 0
 
     var body: some View {
-        NotchContent(phase: coordinator.phase,
+        NotchContent(phase: coordinator.displayedNotchPhase,
                      readBack: coordinator.readBack,
-                     statusLine: coordinator.run.statusLine,
+                     statusLine: coordinator.workWindowFeedback ?? coordinator.run.statusLine,
                      dictation: coordinator.dictation,
                      setupCaption: coordinator.setupCaption,
                      activity: coordinator.run.isRunning && !coordinator.run.isOffline
                          ? coordinator.run.conversation.latestActivity.flatMap { SidekickActivityPresentation.steps([$0]).first } : nil,
+                     workAppIdentifier: coordinator.run.isRunning ? coordinator.run.workAppIdentifier
+                         : coordinator.phase == .finishing(.success) ? coordinator.run.completionAppIdentifier : nil,
                      remembering: coordinator.run.remembering,
                      rememberingLabel: coordinator.run.isDemo ? "Remembering…" : "Remembering",
                      personalizing: coordinator.run.isPersonalizing,
                      isThinking: coordinator.run.isStarting && !coordinator.run.isOffline,
-                     hovering: coordinator.notchHovering,
-                     demoText: coordinator.demoDraft,
+                     hovering: coordinator.notchHovering || coordinator.notchDismissalPreview,
+                     animationSpeed: coordinator.notchAnimationSpeed,
+                     physicalSpringResponse: coordinator.notchPhysicalSpringResponse,
+                     onboardingDemo: coordinator.onboardingDemoArmed,
+                     demoAction: coordinator.onboardingDemoAction,
+                     actionCue: coordinator.onboardingActionCue,
                      showStop: !coordinator.run.isDemo,
                      metrics: metrics.showingSetup(coordinator.setupCaption != nil),
                      islandBackdrop: islandBackdrop,
                      recovery: coordinator.run.recovery,
                      message: coordinator.dictation.replyMessage ?? coordinator.notchMessage,
                      isTaskRunning: coordinator.run.isRunning,
+                     isTakingOver: coordinator.run.isTakingOver,
                      isTaskFinishing: coordinator.run.hasDeliveredFinalAnswer,
                      isProofreading: coordinator.proofread.isRunning,
-                     inputReady: !coordinator.proofread.isCapturingSelection && !coordinator.proofread.captureWasInterrupted,
+                     inputReady: coordinator.notchInputReady,
                      focusRequest: coordinator.notchFocusRequest,
                      shortcutProblems: coordinator.quickActionHotkeys.problems,
                      messageReplyFocused: coordinator.messageReplyFocused,
                      messageReplySelection: coordinator.run.conversation.replyReference?.messageID == coordinator.notchMessage?.event.id
                          ? coordinator.run.conversation.replyReference?.selectedText : nil,
-                     draft: Binding(get: { coordinator.run.conversation.draft },
-                                    set: { coordinator.run.conversation.draft = $0 }),
+                     draft: Binding(get: { coordinator.notchDraft },
+                                    set: { coordinator.notchDraft = $0 }),
                      onBack: { coordinator.backFromRecovery() },
                      onStop: { coordinator.stop() },
+                     canShowWorkWindow: coordinator.canShowWorkWindow,
+                     onShowWorkWindow: { coordinator.showWorkWindow() },
                      onSubmitText: { coordinator.submitTyped($0) },
+                     onTakeOver: { coordinator.takeOver() },
+                     onMagicReply: { coordinator.magicReply() },
                      onSummarize: { coordinator.summarizeScreen() },
                      onProofread: { coordinator.proofreadSelection() },
                      onOpenConversation: {
@@ -337,6 +352,7 @@ struct NotchContent: View {
     var dictation = DictationPresentation()
     var setupCaption: CommandCoordinator.SetupCaption? = nil
     var activity: SidekickActivityPresentation.Step? = nil
+    var workAppIdentifier: String? = nil
     var remembering: String? = nil
     var rememberingLabel = "Remembering"
     var personalizing = false
@@ -345,9 +361,11 @@ struct NotchContent: View {
     /// drop shadow — no glow, no content — and a click opens the type field. Honored only while
     /// `.hidden`; any real phase owns the shape.
     var hovering: Bool = false
-    /// The onboarding demo's auto-typing: when set, the type field's draft mirrors it (the show
-    /// runs through the REAL TextField). nil = the user owns the field.
-    var demoText: String? = nil
+    var animationSpeed = 1.0
+    var physicalSpringResponse: Double?
+    var onboardingDemo = false
+    var demoAction: OnboardingNotchAction = .takeOver
+    var actionCue: OnboardingActionCue = .idle
     /// False during the onboarding demo run — scripted theater has nothing to STOP.
     var showStop: Bool = true
     let metrics: NotchMetrics
@@ -357,6 +375,7 @@ struct NotchContent: View {
     var recovery: SidekickRecovery? = nil
     var message: SidekickConversationStore.Record? = nil
     var isTaskRunning = false
+    var isTakingOver = false
     var isTaskFinishing = false
     var isProofreading = false
     var inputReady = true
@@ -367,7 +386,11 @@ struct NotchContent: View {
     var draft: Binding<String> = .constant("")
     var onBack: () -> Void = {}
     var onStop: () -> Void = {}
+    var canShowWorkWindow = false
+    var onShowWorkWindow: () -> Void = {}
     var onSubmitText: (String) -> Bool = { _ in false }
+    var onTakeOver: () -> Void = {}
+    var onMagicReply: () -> Void = {}
     var onSummarize: () -> Void = {}
     var onProofread: () -> Void = {}
     var onOpenConversation: () -> Void = {}
@@ -393,9 +416,22 @@ struct NotchContent: View {
     @Environment(\.islandColorTreatment) private var colorTreatment
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private var isVoice: Bool { phase == .listening || phase == .transcribing }
+    private var isSuccessfulCompletion: Bool { phase == .finishing(.success) }
+    private let completionTint = Color(red: 0.73, green: 0.88, blue: 0.82)
     private var layoutPhase: NotchPhase { dictation.layoutPhase(for: phase) }
+    var showsTapLocationGuide: Bool {
+        guard metrics.hasPhysicalNotch, metrics.quickActionsAvailable,
+              !isTaskRunning, !isTakingOver else { return false }
+        // Use the actual phase: reply dictation borrows the expanded message layout.
+        switch phase {
+        case .hidden: return hovering
+        case .typing, .message, .recovery: return true
+        default: return false
+        }
+    }
     private var controlSize: CGFloat { metrics.isCompact(for: layoutPhase) ? metrics.compactControlSlot : metrics.controlSlot }
-    private var usesGlass: Bool { islandGlassEnabled && metrics.usesGlassSurface(for: layoutPhase) }
+    private var usesLumenSurface: Bool { (layoutPhase == .typing && metrics.quickActionsAvailable) || isTakingOver }
+    private var usesGlass: Bool { !usesLumenSurface && islandGlassEnabled && metrics.usesGlassSurface(for: layoutPhase) }
     private var isReplyVoice: Bool { dictation.replyMessage != nil && isVoice }
     private var displayedMessage: SidekickConversationStore.Record? {
         isReplyVoice ? dictation.replyMessage : message
@@ -411,7 +447,7 @@ struct NotchContent: View {
     private var needsBackdropBlur: Bool {
         // External work uses native glass alone; the physical notch keeps its diffuse lower glass.
         if metrics.hasPhysicalNotch { return true }
-        if #available(macOS 26.0, *) { return layoutPhase != .running }
+        if #available(macOS 26.0, *) { return layoutPhase != .running && !isSuccessfulCompletion }
         return true // Older systems still need their material fallback.
     }
     private struct TypingFocusKey: Equatable {
@@ -436,7 +472,7 @@ struct NotchContent: View {
         let recoveryID: UUID?
     }
     private var materialKey: MaterialKey {
-        .init(phase: layoutPhase, metrics: metrics, messageID: layoutPhase == .message ? displayedMessage?.event.id : nil, recoveryID: layoutPhase == .recovery ? recovery?.content?.id : nil)
+        .init(phase: isSuccessfulCompletion ? .running : layoutPhase, metrics: metrics, messageID: layoutPhase == .message ? displayedMessage?.event.id : nil, recoveryID: layoutPhase == .recovery ? recovery?.content?.id : nil)
     }
     @State private var settledMaterial: MaterialKey?
     private var showsMaterial: Bool {
@@ -448,9 +484,9 @@ struct NotchContent: View {
 
     var body: some View {
         let hoverIdle = hovering && phase == .hidden     // the swollen click affordance — idle only
-        let size = hoverIdle ? metrics.hoverSize
-                             : metrics.size(for: layoutPhase, readBack: isVoice ? nil : readBack, remembering: remembering, personalizing: personalizing,
-                                            recoveryContent: recovery?.content, messageContent: displayedMessage)
+        let phaseSize = metrics.size(for: layoutPhase, readBack: isVoice ? nil : readBack, remembering: remembering, personalizing: personalizing,
+                                     recoveryContent: recovery?.content, messageContent: displayedMessage)
+        let size = hoverIdle ? metrics.hoverSize : phaseSize
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: layoutPhase)
         let glowScale = metrics.glowScale(for: layoutPhase)
         let visible = phase != .hidden
@@ -458,7 +494,19 @@ struct NotchContent: View {
         // with convex corners and a closed glow perimeter. Both morph on the same fixed canvas.
 
         ZStack(alignment: .top) {
-            if !islandGlassEnabled {
+            if phase == .running, canShowWorkWindow {
+                Button(action: onShowWorkWindow) {
+                    Color.clear.contentShape(NotchShape(topCornerRadius: radii.top,
+                        bottomCornerRadius: radii.bottom, isIsland: !metrics.hasPhysicalNotch))
+                }
+                .frame(width: size.width, height: size.height)
+                .buttonStyle(.plain)
+                .transition(.identity)
+                .accessibilityLabel("Show Sidekick’s work window")
+                .accessibilityIdentifier("notch.showWorkWindow")
+                .help("Show the window Sidekick is using")
+            }
+            if !islandGlassEnabled && !usesLumenSurface {
                 glow(radii, lineWidth: 13 * glowScale, blur: 17 * glowScale, strength: 0.75)
                 glow(radii, lineWidth: 6 * glowScale, blur: 6 * glowScale, strength: 0.95)
             }
@@ -467,7 +515,7 @@ struct NotchContent: View {
                 .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom, isIsland: !metrics.hasPhysicalNotch))
                 .shadow(color: .black.opacity(visible || hoverIdle ? 0.55 : 0), radius: 9, y: 3)
                 .overlay {
-                    if metrics.hasPhysicalNotch {
+                    if metrics.hasPhysicalNotch && !usesLumenSurface {
                         NotchThinkingUnderlight(visible: thinkingLightVisible,
                             protectedHeight: metrics.topRowHeight + metrics.notchBottomCover,
                             reduceMotion: reduceMotion || lowPowerMode)
@@ -475,13 +523,23 @@ struct NotchContent: View {
                     }
                 }
                 .overlay {
-                    if islandGlassEnabled, metrics.hasPhysicalNotch {
+                    if usesLumenSurface {
+                        NotchSkirtShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom,
+                                        isIsland: !metrics.hasPhysicalNotch)
+                            .stroke(.white.opacity(0.11), lineWidth: 0.5)
+                            .allowsHitTesting(false)
+                    } else if islandGlassEnabled, metrics.hasPhysicalNotch {
                         // An overlay receives the shell's actual interpolated bounds.
                         // A sibling stack could negotiate a different size mid-morph.
                         ZStack {
+                            if isSuccessfulCompletion {
+                                NotchSkirtShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom)
+                                    .stroke(completionTint.opacity(0.25), lineWidth: 0.75)
+                            } else {
                             notchLineGlow(radii, lineWidth: 10 * glowScale, blur: 12 * glowScale, strength: 0.30)
                             notchLineGlow(radii, lineWidth: 3 * glowScale, blur: 4 * glowScale, strength: 0.55)
                             notchLineGlow(radii, lineWidth: 1.4 * glowScale, blur: 0.45, strength: 1)
+                            }
                         }
                         .opacity(visible ? 1 : 0)
                         .allowsHitTesting(false)
@@ -489,7 +547,8 @@ struct NotchContent: View {
                 }
                 .overlay {
                     if !metrics.hasHardwareCutout {
-                        IslandRestingSurface(backdrop: islandBackdrop)
+                        IslandRestingSurface(backdrop: islandBackdrop,
+                            shape: NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom, isIsland: true))
                             .opacity(visible ? 0 : 1)
                             .allowsHitTesting(false)
                     }
@@ -502,7 +561,7 @@ struct NotchContent: View {
                 .contentShape(Rectangle().inset(by: -4))
                 .onTapGesture(perform: onNotchClick)
                 .allowsHitTesting(hoverIdle)
-            if islandGlassEnabled {
+            if islandGlassEnabled && !usesLumenSurface {
                 if !metrics.hasPhysicalNotch {
                     IslandColorSurface(treatment: selectedColorTreatment,
                         shape: NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom,
@@ -511,17 +570,40 @@ struct NotchContent: View {
                         lightingStrength: underlightStrength,
                         blackBody: !usesGlass,
                         showsHalo: !metrics.hasPhysicalNotch)
+                        .overlay {
+                            NotchThinkingUnderlight(visible: thinkingLightVisible,
+                                protectedHeight: 0, reduceMotion: reduceMotion || lowPowerMode,
+                                maximumDepth: 14)
+                                .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom, isIsland: true))
+                        }
                         .opacity(visible ? 1 : 0)
                 }
-            } else {
+            } else if !usesLumenSurface {
                 glow(radii, lineWidth: 3 * glowScale, blur: 0.6 * glowScale, strength: 1)
             }
+            if isSuccessfulCompletion {
+                NotchCompletionUnderlight(reduceMotion: reduceMotion || lowPowerMode)
+                    .frame(width: size.width, height: size.height)
+                    .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom, isIsland: !metrics.hasPhysicalNotch))
+            }
             content(size: size)
+                .compositingGroup()
                 .opacity(visible ? 1 : 0)              // icons + caption dissolve as the shell retracts into the cutout
                 .blur(radius: reduceMotion || visible ? 0 : 7)
                 .scaleEffect(reduceMotion || visible ? 1 : 0.97, anchor: .top)
                 .frame(width: size.width, height: size.height, alignment: .top)
                 .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom, isIsland: !metrics.hasPhysicalNotch))
+            if metrics.hasPhysicalNotch && metrics.quickActionsAvailable && !isTaskRunning && !isTakingOver {
+                NotchTapLocationGuide(expanded: layoutPhase == .typing,
+                    visible: showsTapLocationGuide)
+                    .frame(width: 38, height: 26)
+                    .offset(x: metrics.lightSensorOffset - metrics.horizontalOffset(for: layoutPhase),
+                            y: metrics.baseHeight + metrics.notchBottomCover - 1)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Tap the notch just above this arrow, left of the camera")
+                    .accessibilityIdentifier("notch.physicalTapLocation")
+                    .accessibilityHidden(!showsTapLocationGuide)
+            }
         }
         .frame(width: size.width, height: size.height)
         .background {
@@ -536,16 +618,19 @@ struct NotchContent: View {
         .scaleEffect(reduceMotion || visible || hoverIdle || !metrics.hasPhysicalNotch ? 1 : 0.94, anchor: .top)
         .offset(x: metrics.horizontalOffset(for: layoutPhase), y: hoverIdle ? metrics.hoverTopInset : metrics.topInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // One transaction owns the shell, border and content geometry throughout a handoff.
-        .animation(morph, value: MorphKey(phase: phase, size: size, compact: metrics.compactMode,
+        // Exclude hover-only geometry from the phase key. Otherwise a hover change
+        // also starts the inner phase animation and overrides the original hover spring
+        // with the previous physical tap's accelerated timing.
+        .animation(morph, value: MorphKey(phase: phase, size: phaseSize, compact: metrics.compactMode,
             readBack: readBack, remembering: remembering, personalizing: personalizing,
             messageID: displayedMessage?.event.id, recoveryID: recovery?.content?.id))
+        .modifier(NotchLightingClockHost(paused: ambientAnimationPaused && materialAnimationPaused))
         .animation(hoverMorph, value: hovering)          // the hover swell/settle — snappier than the phase morph
         .task(id: readingGlowID) { await settleReadingGlow() }
         .task(id: materialKey) { await settleMaterial() }
         .task(id: TypingFocusKey(phase: phase, ready: inputReady, request: focusRequest)) {
             fieldFocused = false
-            guard phase == .typing, inputReady else { return }
+            guard phase == .typing, inputReady, !onboardingDemo else { return }
             // Cancel a pending focus request when a click-away beats the opening.
             await Task.yield()
             guard !Task.isCancelled else { return }
@@ -640,33 +725,40 @@ struct NotchContent: View {
     }
 
     private var materialAnimationPaused: Bool {
-        if reduceMotion || lowPowerMode { return true }
+        if usesLumenSurface || reduceMotion || lowPowerMode { return true }
         switch layoutPhase {
-        case .hidden, .message, .recovery: return true
+        case .hidden, .message, .recovery, .finishing: return true
         default: return false
         }
     }
 
     private var ambientAnimationPaused: Bool {
-        if reduceMotion || lowPowerMode { return true }
+        if usesLumenSurface || reduceMotion || lowPowerMode { return true }
         switch layoutPhase {
-        case .running, .listening, .transcribing, .finishing: return false
+        case .running, .listening, .transcribing: return false
         default: return true // no clocks behind an ordered-out panel or while reading/typing
         }
     }
 
     /// The same brand mark drifts slowly while waiting for a prompt. Keep the larger
     /// ambient effects paused during typing, and stop every clock when the notch is hidden.
-    private var identityAnimationPaused: Bool { reduceMotion || lowPowerMode || phase == .hidden }
+    private var identityAnimationPaused: Bool { usesLumenSurface || reduceMotion || lowPowerMode || phase == .hidden }
 
     private var morph: Animation {
+        if let response = physicalSpringResponse {
+            // One spring in both directions, retargeted from the current presentation.
+            // A faster cadence shortens response; no completed-open/closed waypoint.
+            return reduceMotion ? .easeOut(duration: min(0.12,response))
+                : .spring(response: response, dampingFraction: 0.86, blendDuration: 0)
+        }
         if phase == .hidden {
             // A bounded, monotonic retract finishes before the panel orders out.
             // Reusing the opening spring left a bouncing tail that was visibly cut short.
-            return reduceMotion ? .easeOut(duration: 0.18)
-                : .timingCurve(0.33, 0, 0.20, 1, duration: 0.50)
+            return (reduceMotion ? Animation.easeOut(duration: 0.18)
+                : .timingCurve(0.33, 0, 0.20, 1, duration: 0.50)).speed(animationSpeed)
         }
-        return reduceMotion ? .easeInOut(duration: 0.24) : .spring(response: 0.52, dampingFraction: 0.72)
+        return (reduceMotion ? Animation.easeInOut(duration: 0.24) : .spring(response: 0.52, dampingFraction: 0.72))
+            .speed(animationSpeed)
     }
 
     private var hoverMorph: Animation {
@@ -684,39 +776,121 @@ struct NotchContent: View {
     // MARK: Content
 
     @ViewBuilder private func content(size: CGSize) -> some View {
-        if metrics.isCompact(for: layoutPhase) { compactContent }
-        else if metrics.isInlineIsland(for: layoutPhase) { islandActivityContent(size: size) }
-        else {
-            // Remove outgoing native field/button views immediately. Their AppKit backing
-            // views otherwise linger outside the shrinking shell during a voice transition.
-            expandedContent(size: size).transition(.identity)
+        let compact = metrics.isCompact(for: layoutPhase)
+        let inline = metrics.isInlineIsland(for: layoutPhase)
+        let expanded = !compact && !inline && (metrics.hasPhysicalNotch || phase != .hidden)
+        ZStack(alignment: .top) {
+            if compact { compactContent }
+            else if inline { islandActivityContent(size: size) }
+            // Keep this gate outside the conditional branch. Removed AppKit-backed
+            // descendants can outlive an identity transition; the persistent gate
+            // must hide them immediately while the outer shell continues its spring.
+            Group {
+                if expanded {
+                    expandedContent(size: size)
+                        .transition(.asymmetric(insertion: contentReveal.animation(
+                            .easeOut(duration: reduceMotion ? 0.16 : 0.24).delay(reduceMotion ? 0.24 : 0.28)),
+                            removal: .identity))
+                }
+            }
+            .opacity(expanded ? 1 : 0)
+            .allowsHitTesting(expanded)
+            .accessibilityHidden(!expanded)
+            .transaction { transaction in
+                if !expanded {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
+        }
+    }
+
+    private var islandApp: (name: String, identifier: String?, symbol: String)? {
+        guard (phase == .running || isSuccessfulCompletion), !isVoice, !retainsTranscript, setupCaption == nil,
+              !personalizing, remembering == nil else { return nil }
+        let identifier = activity?.appIdentifier ?? workAppIdentifier
+        guard identifier != nil || activity?.appName != nil else { return nil }
+        return (activity?.appName ?? identifier.flatMap(SidekickActivityIcon.displayName) ?? "Sidekick",
+                identifier, activity?.symbol ?? "macwindow")
+    }
+
+    @ViewBuilder private func identityMark(size: CGFloat, working: Bool) -> some View {
+        if isTakingOver && phase == .running {
+            if canShowWorkWindow {
+                Button(action: onShowWorkWindow) {
+                    LumenCursor(size: size * 0.85, illuminated: true)
+                        .frame(width: size, height: size)
+                        .contentShape(Rectangle().inset(by: -5))
+                }
+                .buttonStyle(.plain)
+                .help("Show what Sidekick is working on")
+                .accessibilityLabel("Show Take Over work window")
+            } else {
+                LumenCursor(size: size * 0.85, illuminated: true)
+                    .frame(width: size, height: size)
+            }
+        } else {
+            NotchIdentityMark(size: size, working: working, animated: !identityAnimationPaused,
+                onActivate: phase == .running && canShowWorkWindow ? onShowWorkWindow : nil)
         }
     }
 
     private func islandActivityContent(size: CGSize) -> some View {
-        HStack(spacing: 10) {
-            NotchIdentityMark(size: controlSize, working: phase == .running || isTaskRunning || isProofreading,
-                              animated: !identityAnimationPaused)
-                .frame(width: controlSize, height: controlSize)
+        HStack(spacing: 12) {
             Group {
-                if isVoice || retainsTranscript {
+                if let app = islandApp {
+                    ZStack(alignment: .bottomTrailing) {
+                        SidekickActivityIcon(identifier: app.identifier, symbol: app.symbol, size: 28)
+                            .frame(width: 32, height: 32, alignment: .leading)
+                        WebsiteLogoMark(size: 10)
+                            .padding(2).background(.black, in: Circle())
+                            .offset(x: 2, y: 2)
+                    }
+                    .frame(width: 32, height: 32)
+                    .allowsHitTesting(false)
+                } else {
+                    identityMark(size: controlSize, working: phase == .running || isTaskRunning || isProofreading)
+                        .frame(width: 32, height: 32)
+                }
+            }
+            Group {
+                if let app = islandApp {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(app.name)
+                            .font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.94))
+                        Text(isSuccessfulCompletion ? "All set" : SidekickActivityPresentation.islandSubtitle(statusLine, activity: activity))
+                            .font(.system(size: 10.5)).foregroundStyle(isSuccessfulCompletion ? completionTint : .white.opacity(0.58))
+                    }
+                    .lineLimit(1).truncationMode(.tail)
+                    .allowsHitTesting(false)
+                } else if isVoice || retainsTranscript {
                     NotchVoiceCaption(presentation: dictation, submittedText: retainsTranscript ? readBack : nil)
-                } else { caption }
+                } else { caption.fixedSize(horizontal: false, vertical: true) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: phase == .finishing(.failed) ? 32 : metrics.captionHeight)
-            HStack(spacing: 8) {
+            .frame(height: 34, alignment: .center)
+            HStack(spacing: 10) {
                 if showsHistoryControl { conversationButton }
                 rightControl.frame(width: controlSize, height: controlSize)
             }
         }
-        .padding(.horizontal, metrics.hPad)
+        .padding(.horizontal, (metrics.islandActivityHeight - controlSize) / 2)
         .frame(width: size.width, height: size.height)
+    }
+
+    private func completionBadge(identifier: String, size: CGFloat) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            SidekickActivityIcon(identifier: identifier, symbol: "app", size: size)
+            WebsiteLogoMark(size: max(6, size * 0.3)).padding(2).background(.black, in: Circle())
+                .offset(x: 3, y: 3)
+        }
+        .frame(width: size, height: size)
+        .allowsHitTesting(false)
     }
 
     private var compactStatus: SidekickActivityPresentation.NotchStatus {
         if let setupCaption { return .init(text: setupCaption.rawValue, activity: nil) }
-        if phase == .finishing(.success) { return .init(text: "Done", activity: nil) }
+        if phase == .finishing(.success) { return .init(text: "All set", activity: nil) }
         if phase == .finishing(.stopped) { return .init(text: "Stopped", activity: nil) }
         if personalizing { return .init(text: "Learning", activity: nil) }
         if remembering != nil { return .init(text: "Reading", activity: nil) }
@@ -730,8 +904,10 @@ struct NotchContent: View {
                 Group {
                     if let activity = status.activity {
                         SidekickActivityIcon(identifier: activity.appIdentifier, symbol: activity.symbol)
+                    } else if isSuccessfulCompletion, let identifier = workAppIdentifier {
+                        completionBadge(identifier: identifier, size: controlSize)
                     } else {
-                        NotchIdentityMark(size: controlSize, working: phase == .running, animated: !identityAnimationPaused)
+                        identityMark(size: controlSize, working: phase == .running)
                     }
                 }
                 .frame(width: controlSize, height: controlSize)
@@ -816,9 +992,10 @@ struct NotchContent: View {
                         .buttonStyle(.plain)
                         .help(isTaskRunning ? "Stop this task and write a new request" : "Write a new request")
                         .accessibilityLabel(isTaskRunning ? "Stop this task and write a new request" : "Write a new request")
+                    } else if isSuccessfulCompletion, let identifier = workAppIdentifier {
+                        completionBadge(identifier: identifier, size: 20)
                     } else {
-                        NotchIdentityMark(size: metrics.controlSlot, working: phase == .running || isTaskRunning || isProofreading,
-                            animated: !identityAnimationPaused)
+                        identityMark(size: metrics.controlSlot, working: phase == .running || isTaskRunning || isProofreading)
                     }
                 }
                 .frame(width: metrics.hasHardwareIsland ? hardwareWing : nil, alignment: .leading)
@@ -874,21 +1051,23 @@ struct NotchContent: View {
                     .transition(contentReveal)
             } else if layoutPhase == .typing {
                 typingField
+                    .allowsHitTesting(!onboardingDemo)
+                    .accessibilityHidden(onboardingDemo)
                     .disabled(!inputReady && !isVoice)
                     .frame(height: metrics.fieldRowHeight)
                     .transition(contentReveal)
                 if metrics.quickActionsAvailable {
-                    HStack(spacing: 6) {
-                        notchAction("Summarize", shortcut: .summarize, identifier: "notch.summarize", action: onSummarize)
-                            .help(shortcutProblems[.summarize]?.explanation ?? "Summarize your visible screen with OpenAI through Sentient (\(QuickActionShortcut.summarize.label))")
-                        notchAction("Proofread", shortcut: .proofread, identifier: "notch.proofread", action: onProofread)
-                            .disabled(!inputReady)
-                            .help(shortcutProblems[.proofread]?.explanation ?? "Correct your selected text with OpenAI through Sentient (\(QuickActionShortcut.proofread.label))")
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    NotchQuickActionRow(inputReady: inputReady, actionsEnabled: !isVoice && !isTaskRunning,
+                        animate: !reduceMotion && !lowPowerMode,
+                        actionCue: actionCue, demoAction: demoAction,
+                        summarizeHelp: shortcutProblems[.summarize]?.explanation ?? "Summarize what you’re looking at (\(QuickActionShortcut.summarize.label))",
+                        proofreadHelp: shortcutProblems[.proofread]?.explanation ?? "Polish your selected text (\(QuickActionShortcut.proofread.label))",
+                        onTakeOver: onTakeOver, onMagicReply: onMagicReply,
+                        onSummarize: onSummarize, onProofread: onProofread)
+                    .allowsHitTesting(!onboardingDemo)
+                    .accessibilityHidden(onboardingDemo)
                     .frame(height: metrics.quickActionsHeight)
                     .padding(.top, metrics.quickActionGap)
-                    .disabled(isVoice)
 
                 }
 
@@ -907,22 +1086,6 @@ struct NotchContent: View {
         .frame(width: size.width, height: size.height, alignment: .top)
     }
 
-    private func notchAction(_ title: String, shortcut: QuickActionShortcut, identifier: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Text(title).font(.system(size: 10.5, weight: .medium))
-                Text(shortcut.label).font(.system(size: 9.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(shortcutProblems[shortcut] == nil ? 0.35 : 0.25)).accessibilityHidden(true)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 20)
-            .fixedSize(horizontal: true, vertical: false)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(NotchActionButtonStyle()).accessibilityIdentifier(identifier)
-        .accessibilityHint(shortcutProblems[shortcut]?.explanation ?? shortcut.spokenLabel)
-    }
-
     @ViewBuilder private var rightControl: some View {
         switch phase {
         case .typing:
@@ -935,10 +1098,14 @@ struct NotchContent: View {
             // The onboarding demo is theater — nothing real to stop, so no STOP.
             if showStop { NotchStopButton(action: onStop, diameter: metrics.hasPhysicalNotch ? 18 : controlSize) } else { Color.clear.frame(width: 1, height: 18) }
         case .finishing(let outcome):
-            Image(systemName: Self.outcomeSymbol(outcome))
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Self.outcomeColor(outcome))
-                .allowsHitTesting(false)
+            if outcome == .success {
+                NotchCompletionCheck(size: controlSize, reduceMotion: reduceMotion || lowPowerMode)
+            } else {
+                Image(systemName: Self.outcomeSymbol(outcome))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Self.outcomeColor(outcome))
+                    .allowsHitTesting(false)
+            }
         case .recovery:
             Button { recovery?.dismiss() } label: {
                 Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
@@ -977,9 +1144,9 @@ struct NotchContent: View {
                 if isVoice && dictation.composedText(dictation.text).isEmpty {
                     PromptDictationWaveform(levels: dictation.levels)
                 } else if !isVoice && draftText.isEmpty {
-                    Text(dictation.error ?? "What can I take over for you?")
+                    Text(dictation.error ?? "What can I take over?")
                         .font(.system(size: 13, design: .serif)).italic()
-                        .foregroundStyle(.white.opacity(usesGlass ? 0.65 : 0.4))
+                        .foregroundStyle(.white.opacity(usesGlass || usesLumenSurface ? 0.65 : 0.4))
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -990,7 +1157,7 @@ struct NotchContent: View {
                     .tint(.white)
                     .focused($fieldFocused)
                     .onSubmit { if isVoice { onFinishListening() } else { submitDraft() } }
-                    .disabled(isVoice)
+                    .disabled(isVoice || onboardingDemo)
                     .opacity(isVoice && dictation.composedText(dictation.text).isEmpty ? 0 : 1)
                     .accessibilityLabel("Message Sidekick")
             }
@@ -1024,21 +1191,21 @@ struct NotchContent: View {
 
     /// Fire the typed draft (the field's ⏎ and the send button land here) and clear the field.
     private func submitDraft() {
-        guard demoText == nil else { return }
+        guard !onboardingDemo else { return }
         let text = draft.wrappedValue
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if onSubmitText(text) { draft.wrappedValue = "" }
     }
 
-    private var draftText: String { demoText ?? draft.wrappedValue }
+    private var draftText: String { draft.wrappedValue }
     private var draftBinding: Binding<String> {
-        Binding(get: { draftText }, set: { if demoText == nil { draft.wrappedValue = $0 } })
+        Binding(get: { draftText }, set: { if !onboardingDemo { draft.wrappedValue = $0 } })
     }
 
     private var contentReveal: AnyTransition { reduceMotion ? .opacity : .blurDissolve }
     private var showsHistoryControl: Bool {
         switch layoutPhase {
-        case .typing, .running, .message, .recovery: true
+        case .typing, .running, .message, .recovery, .finishing(.success): true
         default: false
         }
     }
@@ -1104,9 +1271,9 @@ struct NotchContent: View {
             .allowsHitTesting(false)
         case .finishing(let outcome):
             // Failures get a second line so the reason remains readable.
-            Text(statusLine)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.7))
+            Text(outcome == .success ? "All set" : statusLine)
+                .font(outcome == .success ? .system(size: 12, weight: .medium) : .system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(outcome == .success ? 0.9 : 0.7))
                 .lineLimit(outcome == .failed ? 2 : 1).truncationMode(.tail)
                 .allowsHitTesting(false)
         case .notice(let message):
@@ -1144,8 +1311,8 @@ struct NotchContent: View {
     /// screen's "Everything." palette.
     private func rememberingCaption(_ note: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
+            NotchLightingFrames(paused: ambientAnimationPaused) { date in
+                let t = date.timeIntervalSinceReferenceDate
                 let bloom = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 1.5) + 1) / 2   // a 1.5s breathing glow
                 Text(rememberingLabel)
                     .font(.system(size: 13, weight: .medium))
@@ -1211,8 +1378,8 @@ struct NotchContent: View {
             Color(red: 0.92, green: 0.81, blue: 0.69),
             Color(red: 0.45, green: 0.65, blue: 1),
         ] : GlowHalo.stops
-        return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: ambientAnimationPaused)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        return NotchLightingFrames(paused: ambientAnimationPaused) { date in
+            let t = date.timeIntervalSinceReferenceDate
             let angle = ambientAnimationPaused ? 0 : (t.truncatingRemainder(dividingBy: rotationPeriod) / rotationPeriod) * 360
             let breathe = ambientAnimationPaused ? 0.5 : (sin(t * 2 * .pi / 3.2) + 1) / 2
             AngularGradient(colors: colors, center: .center, angle: .degrees(angle))
@@ -1242,6 +1409,7 @@ struct NotchContent: View {
 
     private var underlightStrength: Double {
         guard phase != .hidden else { return 0 }
+        if isSuccessfulCompletion { return 0.12 }
         if let id = readingGlowID, id != settledGlowID, !reduceMotion, !lowPowerMode { return 1 }
         switch layoutPhase {
         case .running, .opening, .transcribing: return 0.20
@@ -1294,7 +1462,8 @@ struct NotchContent: View {
         switch phase {
         case .hidden: return hovering ? "Sentient — click to type a task" : ""
         case .opening: return "Sentient"
-        case .typing: return "Type a task for Sentient, or click the microphone to say it"
+        case .typing: return onboardingDemo ? "Sidekick demonstration. \(demoAction.title)."
+            : "Type a task for Sentient, or click the microphone to say it"
         case .listening: return "Sentient is listening. Release the notch, click stop, or press Return to send."
         case .transcribing: return "Sentient is transcribing"
         case .running: return "Sentient is working. \(metrics.isCompact(for: phase) ? compactStatus.text : progressCaption)"
@@ -1324,14 +1493,25 @@ private struct NotchIdentityMark: View {
     let size: CGFloat
     let working: Bool
     let animated: Bool
+    var onActivate: (() -> Void)? = nil
+    @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride
     private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
 
     var body: some View {
-        SpinningLogo(size: size, fast: working, paused: reduceMotion || !animated)
+        ZStack {
+            Color.clear.contentShape(Circle())
+                .onTapGesture { onActivate?() }
+                .onHover { value in
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3)) { hovering = value }
+                }
+            SpinningLogo(size: size, fast: working, paused: reduceMotion || !animated,
+                         coreScale: hovering ? 1.25 : 1)
+        }
+        .frame(width: size, height: size)
+        .onDisappear { hovering = false }
         .accessibilityHidden(true)
-        .allowsHitTesting(false)
     }
 }
 
@@ -1477,15 +1657,4 @@ private struct NotchPreviewStage<Content: View>: View {
 }
 #Preview("notice") {
     NotchPreviewStage { NotchContent(phase: .notice("didn’t catch that"), readBack: nil, statusLine: "", metrics: .preview) }
-}
-
-private struct NotchActionButtonStyle: ButtonStyle {
-    @State private var hovering = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white.opacity(configuration.isPressed ? 1 : hovering ? 0.85 : 0.58))
-            .background(.white.opacity(configuration.isPressed ? 0.12 : hovering ? 0.07 : 0.025), in: Capsule())
-            .overlay { Capsule().strokeBorder(.white.opacity(hovering ? 0.16 : 0.07), lineWidth: 0.5) }
-            .onHover { hovering = $0 }
-    }
 }

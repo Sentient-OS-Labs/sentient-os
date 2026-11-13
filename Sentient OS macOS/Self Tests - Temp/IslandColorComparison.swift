@@ -10,13 +10,14 @@ import SwiftUI
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let frame = Frame()
         let selected = FileManager.default.fileExists(atPath: root.appendingPathComponent("selected-underlight").path)
+        let done = FileManager.default.fileExists(atPath: root.appendingPathComponent("done-preview").path)
         let layout = FileManager.default.fileExists(atPath: root.appendingPathComponent("layout-refinement").path)
         let reference = NSImage(contentsOf: root.appendingPathComponent("website-logo.png"))
         let hybrid = FileManager.default.fileExists(atPath: root.appendingPathComponent("hardware-island").path)
-        let rootView = layout ? AnyView(LayoutRefinement(hardwareIsland: hybrid)) : reference.map { AnyView(LogoMatch(reference: $0)) }
+        let rootView = done ? AnyView(DoneComparison()) : layout ? AnyView(LayoutRefinement(hardwareIsland: hybrid)) : reference.map { AnyView(LogoMatch(reference: $0)) }
             ?? (selected ? AnyView(SelectedUnderlight(frame: frame)) : AnyView(Comparison(frame: frame)))
         let host = NSHostingView(rootView: rootView)
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 170, width: layout || selected || reference != nil ? 1280 : 1656, height: layout ? 840 : 732),
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 170, width: done ? 1040 : layout || selected || reference != nil ? 1280 : 1656, height: done ? 500 : layout ? 840 : 732),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         // Keep this owned comparison full-size even when Stage Manager is enabled.
@@ -26,7 +27,9 @@ import SwiftUI
         defer { window.close() }
         try await Task.sleep(for: .milliseconds(2800))
         _ = try await SidekickPolishLab.capture(host, name: "comparison", directory: directory)
-        if reference != nil || layout { return }
+        if done { return }
+        if layout { try await verifyWorkingClicks(root: root); return }
+        if reference != nil { return }
         // Sample one complete, deterministic 12-second color cycle. Capture real native
         // views, with all other animation paused, so the comparison isolates the material.
         for index in 0..<36 {
@@ -34,6 +37,99 @@ import SwiftUI
             try await Task.sleep(for: .milliseconds(50))
             _ = try await SidekickPolishLab.capture(host, name: String(format: "frame-%03d", index), directory: directory)
         }
+    }
+
+    private struct DoneComparison: View {
+        private func cell(_ title: String, notch: Bool, withApp: Bool) -> some View {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.58))
+                ZStack(alignment: .top) {
+                    Color(red: 0.13, green: 0.16, blue: 0.21)
+                    NotchContent(phase: .finishing(.success), readBack: nil, statusLine: "✓ done",
+                        workAppIdentifier: withApp ? "com.apple.Notes" : nil,
+                        metrics: notch ? .preview : NotchMetrics(hardwareNotch: nil))
+                    if notch {
+                        Color.black.frame(height: 4)
+                    }
+                }
+                .frame(height: 150).clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        var body: some View {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack { Text("WITH APP CONTEXT"); Spacer(); Text("WITHOUT APP CONTEXT"); Spacer() }
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.5))
+                HStack(spacing: 28) {
+                    cell("MacBook notch", notch: true, withApp: true)
+                    cell("MacBook notch", notch: true, withApp: false)
+                }
+                HStack(spacing: 28) {
+                    cell("External island", notch: false, withApp: true)
+                    cell("External island", notch: false, withApp: false)
+                }
+            }
+            .padding(30).background(Color(red: 0.025, green: 0.028, blue: 0.036))
+        }
+    }
+
+    private static var notesActivity: SidekickActivityPresentation.Step {
+        SidekickActivityPresentation.steps([.init(sequence: 1, event: .init(taskID: UUID(),
+            kind: .activity, text: "Reading Notes", activity: .init(toolID: "notes", name: "sentient_native.get_app_state",
+                arguments: "{\"app\":\"com.apple.Notes\"}", status: .started)))])[0]
+    }
+
+    private static func verifyWorkingClicks(root: URL) async throws {
+        var results: [String: Bool] = [:]
+        for (name, metrics) in [("island", NotchMetrics(hardwareNotch: nil)), ("notch", NotchMetrics.preview)] {
+            var focused = 0, stopped = 0, opened = 0
+            let host = NSHostingView(rootView: NotchContent(phase: .running, readBack: nil,
+                statusLine: "→ sentient_native.get_app_state", activity: notesActivity, metrics: metrics,
+                onStop: { stopped += 1 }, canShowWorkWindow: true, onShowWorkWindow: { focused += 1 },
+                onOpenConversation: { opened += 1 }).frame(width: 800, height: 240))
+            host.sizingOptions = []
+            host.frame = NSRect(x: 0, y: 0, width: 800, height: 240)
+            let panel = NotchPanel(contentRect: NSRect(x: 150, y: 200, width: 800, height: 240),
+                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false; panel.contentView = host
+            panel.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .milliseconds(800))
+            host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+            _ = try await SidekickPolishLab.capture(host, name: name + "-hit-target", directory: root)
+            // The local SwiftUI AX projection can expose unnamed wrapper nodes.
+            // Hit the real native view using this fixture's known layout geometry.
+            let size = metrics.size(for: .running)
+            let local = NSRect(x: (800 - size.width) / 2 + metrics.horizontalOffset(for: .running),
+                y: 240 - metrics.topInset - size.height, width: size.width, height: size.height)
+            let bodyFrame = panel.convertToScreen(local)
+            let inset = metrics.hasPhysicalNotch ? metrics.hPad : (metrics.islandActivityHeight - metrics.controlSlot) / 2
+            let controlY = metrics.hasPhysicalNotch ? bodyFrame.maxY - metrics.topPad - metrics.topRowHeight / 2 : bodyFrame.midY
+            let stopPoint = CGPoint(x: bodyFrame.maxX - inset - metrics.controlSlot / 2, y: controlY)
+            let openPoint = CGPoint(x: stopPoint.x - metrics.controlSlot - (metrics.hasPhysicalNotch ? 12 : 10), y: controlY)
+            let points = [CGPoint(x: bodyFrame.midX, y: bodyFrame.midY),
+                          CGPoint(x: bodyFrame.midX, y: bodyFrame.minY + 5),
+                          CGPoint(x: bodyFrame.minX + 35, y: bodyFrame.midY)]
+            for point in points {
+                try SidekickPolishLab.postClick(window: panel, screenPoint: point)
+                try await Task.sleep(for: .milliseconds(120))
+            }
+            results[name + "_body_padding_and_icon"] = focused == points.count && stopped == 0 && opened == 0
+            try SidekickPolishLab.postClick(window: panel, screenPoint: stopPoint)
+            try await Task.sleep(for: .milliseconds(120))
+            results[name + "_stop_exclusive"] = stopped == 1 && focused == points.count
+            try SidekickPolishLab.postClick(window: panel, screenPoint: openPoint)
+            try await Task.sleep(for: .milliseconds(120))
+            results[name + "_open_exclusive"] = opened == 1 && focused == points.count
+            host.rootView = NotchContent(phase: .running, readBack: nil,
+                statusLine: "→\u{00a0}sentient_native.press_key", workAppIdentifier: "com.apple.Notes", metrics: metrics,
+                onStop: { stopped += 1 }, canShowWorkWindow: true, onShowWorkWindow: { focused += 1 },
+                onOpenConversation: { opened += 1 }).frame(width: 800, height: 240)
+            try await Task.sleep(for: .milliseconds(500))
+            _ = try await SidekickPolishLab.capture(host, name: name + "-metadata-gap", directory: root)
+            panel.orderOut(nil); panel.contentView = nil; panel.close()
+        }
+        try JSONSerialization.data(withJSONObject: results, options: [.sortedKeys, .prettyPrinted])
+            .write(to: root.appendingPathComponent("work-click-checks.json"))
+        guard results.values.allSatisfy({ $0 }) else { throw NSError(domain: "WorkWindowClickFixture", code: 2) }
     }
 
     private struct LayoutRefinement: View {
@@ -61,8 +157,8 @@ import SwiftUI
                 Text(hardwareIsland ? "Hardware island · protected center" : "External island · balanced spacing").font(.system(size: 25, weight: .medium))
                 HStack(spacing: 24) {
                     cell("WORKING", height: 126) {
-                        NotchContent(phase: .running, readBack: "Tell me something cool.", statusLine: "Thinking it through…",
-                                     metrics: metrics)
+                        NotchContent(phase: .running, readBack: nil, statusLine: "→ sentient_native.get_app_state",
+                                     activity: IslandColorComparison.notesActivity, metrics: metrics)
                     }
                     cell("LISTENING", height: 126) {
                         NotchContent(phase: .listening, readBack: nil, statusLine: "", dictation: speech,

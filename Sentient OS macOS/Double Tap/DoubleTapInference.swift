@@ -81,6 +81,7 @@ enum DoubleTapInference {
         case http(Int, DoubleTapProvider)
         case relay(String)
         case api(String)
+        case network(URLError.Code)
         case empty
         case incomplete
         case cancelled
@@ -98,6 +99,7 @@ enum DoubleTapInference {
             case .http(let status, _): "http_\(status)"
             case .relay: "relay_rejected"
             case .api: "provider_response_failed"
+            case .network(let code): code == .timedOut ? "network_timeout" : "network_error"
             case .empty: "empty_reply"
             case .incomplete: "incomplete_reply"
             case .cancelled: "cancelled"
@@ -123,6 +125,8 @@ enum DoubleTapInference {
                 }
             case .relay(let why): return why
             case .api: return "inference failed; check provider and model"
+            case .network(let code):
+                return code == .timedOut ? "connection timed out; please try again" : "connection failed; please try again"
             case .empty: return "empty reply"
             case .incomplete: return "reply incomplete; please try again"
             case .cancelled: return "stopped"
@@ -134,11 +138,12 @@ enum DoubleTapInference {
 
     /// One streamed call. `screenshot` is JPEG bytes (already downscaled); `vault` is the knowledge
     /// base root. Throws `Failure`; a cancelled Task surfaces as `.cancelled`.
-    static func draft(screenshot: Data, vault: URL, session: URLSession = .shared) async throws -> Outcome {
+    static func draft(screenshot: Data, vault: URL, session suppliedSession: URLSession? = nil,
+                      preference: String = "") async throws -> Outcome {
         let provider = DoubleTapProvider.current
         let api = provider.api
         let model = provider.model
-        let customInstructions = CustomInstructions.doubleTap
+        let customInstructions = CustomInstructions.doubleTap + (preference.isEmpty ? "" : "\n\nFor this reply, the user requested:\n" + preference)
         guard customInstructions.utf8.count <= CustomInstructions.doubleTapByteLimit else {
             throw Failure.instructionsTooLarge
         }
@@ -157,6 +162,8 @@ enum DoubleTapInference {
             request = try relayRequest(base: base, image: screenshot, knowledgeBase: packed.text,
                                        customInstructions: customInstructions, identity: ScreenRelay.identity())
         }
+        var ownedSession: URLSession?
+        defer { ownedSession?.invalidateAndCancel() }
         let started = Date()
         var timing = Timing()
         var text = ""
@@ -164,7 +171,37 @@ enum DoubleTapInference {
         var servedModel = model
         do {
             Diagnostics.step(.request, source: "doubletap")
-            let (bytes, response) = try await session.bytes(for: request)
+            let response: URLResponse
+            let lines: AsyncThrowingStream<String, Error>
+            if provider == .sentient, suppliedSession == nil, DoubleTapRelayTransport.canUseHTTP2(for: request) {
+                let relay = try await DoubleTapRelayTransport.response(for: request, started: started)
+                response = relay.http
+                timing.firstToken = relay.firstText
+                lines = AsyncThrowingStream { continuation in
+                    for line in relay.body.components(separatedBy: .newlines) { continuation.yield(line) }
+                    continuation.finish()
+                }
+            } else {
+                // Direct providers retain URLSession and its proxy/authentication behavior.
+                // A fresh pool prevents a failed connection from poisoning later drafts.
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.timeoutIntervalForRequest = idleTimeout
+                configuration.timeoutIntervalForResource = 35
+                configuration.urlCache = nil
+                let session = suppliedSession ?? URLSession(configuration: configuration)
+                if suppliedSession == nil { ownedSession = session }
+                let (bytes, nativeResponse) = try await session.bytes(for: request)
+                response = nativeResponse
+                lines = AsyncThrowingStream { continuation in
+                    let reader = Task {
+                        do {
+                            for try await line in bytes.lines { continuation.yield(line) }
+                            continuation.finish()
+                        } catch { continuation.finish(throwing: error) }
+                    }
+                    continuation.onTermination = { _ in reader.cancel() }
+                }
+            }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if provider == .sentient,
                let reportedModel = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "x-relay-model") {
@@ -178,7 +215,7 @@ enum DoubleTapInference {
                 }
                 var detail = ""
                 if provider == .sentient {
-                    for try await line in bytes.lines {
+                    for try await line in lines {
                         detail += String(line.prefix(400 - detail.count))
                         if detail.count >= 400 { break }
                     }
@@ -187,7 +224,7 @@ enum DoubleTapInference {
                                            : Failure.http(status, provider)
             }
             Diagnostics.step(.stream, source: "doubletap")
-            for try await line in bytes.lines {
+            for try await line in lines {
                 guard line.hasPrefix("data:") else { continue }
                 let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                 if json == "[DONE]" { break }
@@ -218,8 +255,9 @@ enum DoubleTapInference {
         } catch {
             if Task.isCancelled { throw Failure.cancelled }
             Diagnostics.report(.doubleTapFailed, phase: .stream, error: error, source: "doubletap")
-            Diagnostics.current?.markReported(Failure.api("wrapped_network_error"))
-            throw Failure.api(ErrorLabel(error))
+            let failure = (error as? URLError).map { Failure.network($0.code) } ?? Failure.api(ErrorLabel(error))
+            Diagnostics.current?.markReported(failure)
+            throw failure
         }
         timing.total = Date().timeIntervalSince(started)
         guard !Task.isCancelled else { throw Failure.cancelled }
@@ -489,8 +527,8 @@ enum DoubleTapInference {
     **Reply immediately. Do not reason, plan, or deliberate before answering: read the screen, \
     decide, and write the output straight away.**
 
-    You are Double Tap, a feature of Sentient OS on this Mac. The user just double-tapped a key while \
-    their cursor sat in a text box. The screenshot is their screen at that moment.
+    You are Magic Reply, Sidekick's personal reply feature in Sentient OS on this Mac. The user \
+    requested a reply through Sidekick or its Double Tap shortcut. The screenshot shows the reply context.
 
     Who the user is: the person the knowledge base below describes. They own this Mac and the \
     account on screen: "me" in an email's recipients, the sending side of a chat. Write as them, \

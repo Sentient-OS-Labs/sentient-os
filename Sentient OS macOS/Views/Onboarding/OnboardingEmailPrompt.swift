@@ -1,6 +1,6 @@
 // OnboardingEmailPrompt.swift
-// Required email entry when onboarding reaches the source picker. submit() validates the
-// address; a durable enqueue is followed by an optional company welcome before source selection.
+// Required email modal over onboarding's model connection. submit() validates the
+// address; a durable enqueue and optional company welcome return to model setup.
 // Doc: Documentation - Onboarding.md
 
 import SwiftUI
@@ -90,7 +90,7 @@ struct OnboardingEmailPrompt: View {
                 }
             }
 
-            Text("Your email is saved for occasional feedback invitations.")
+            Text("Your email is only saved for the founders to reach out for feedback. We never spam you.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondary)
                 .lineSpacing(3)

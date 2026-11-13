@@ -6,7 +6,7 @@
 
 Sentient OS is an open-source personal AI for your Mac. It understands the context of your life and work overnight, so you can hand off a task, draft the right reply in two taps, or wake up to useful work already prepared for your approval. Your own apps. Your logged-in browser. The stuff you were about to do yourself.
 
-**On-device understanding. Your choice of AI. Knowledge you own.** We do the high-volume understanding on your Mac, keep your knowledge in ordinary Markdown files, and let you choose the model that puts it to work. A compatible local model can handle the rest of the inference too :)
+**On-device understanding. Your choice of AI. Knowledge you own.** We do the high-volume understanding on your Mac, keep your knowledge in ordinary Markdown files, and let you choose the model that puts it to work. Compatible local models can also power knowledge organization, Sidekick, and reply drafting. Quick actions and voice have separate cloud routes described below.
 
 [**download for macOS**](https://github.com/Sentient-OS-Labs/sentient-os/releases/latest) · [watch it work](https://sentient-os.ai/) · [for teams](#your-team-has-better-things-to-do) · [privacy](#personal-ai-privacy-at-its-core)
 
@@ -18,7 +18,7 @@ brew install --cask sentient-os-labs/tap/sentient-os
 
 <sub>Our next 1,000 users keep Sentient free for life. Your chosen AI provider's charges, if any, are separate.</sub>
 
-[sidekick](#a-little-handoff-a-lot-off-your-plate) · [double tap](#the-reply-you-meant-to-send) · [proactive intelligence](#a-head-start-before-you-even-ask) · [local inference](#all-the-ai-on-your-own-mac) · [under the hood](#our-engine-your-silicon) · [faq](#a-few-good-questions) · [build from source](#make-it-yours)
+[sidekick](#a-little-handoff-a-lot-off-your-plate) · [magic reply](#the-reply-you-meant-to-send) · [proactive intelligence](#a-head-start-before-you-even-ask) · [local inference](#all-the-ai-on-your-own-mac) · [under the hood](#our-engine-your-silicon) · [faq](#a-few-good-questions) · [build from source](#make-it-yours)
 
 ## the task is small. the briefing isn't.
 
@@ -57,18 +57,20 @@ Click the notch, tap your right Command key to type, or hold it to speak. **Side
 - **Update the CRM.** Carry the call's decisions into the deal: proposal stage, revised scope, next step, and the follow-up you agreed on.
 - **Finish this form.** Fill the vendor portal's company details without making you reconstruct your business in another prompt.
 
+The notch also offers Take Over, Magic Reply, Summarize, and Proofread. On supported built-in displays, an optional physical tap near the notch opens quick access; controls and calibration live in Settings → Notch & Shortcuts.
+
 The useful detail often lives somewhere else: a meeting note, a conversation, a file on your Mac. Sidekick brings it into the task.
 
 ## the reply you meant to send.
 
-<sub><samp>double tap · in two taps</samp></sub>
+<sub><samp>magic reply · in two taps</samp></sub>
 
 Fifteen unread messages. Several perfectly lovely people. Somehow, answering them has become an entire afternoon's ambition :c
 
-Put your cursor in a reply field and double tap your **right Command key**. Double Tap uses the conversation on screen, your knowledge, and a one-time set of writing examples to draft a reply in your voice, right there. Read it, tweak it, send it. **The draft stays unsent.**
+Put your cursor in a reply field and double tap your **right Command key**. Magic Reply uses the conversation on screen, your knowledge, and a one-time set of writing examples to draft a reply in your voice, right there. Read it, tweak it, send it. **The draft stays unsent.**
 
 <p align="center">
-  <img src=".github/readme/double-tap.gif" width="820" alt="Three Double Tap recordings play back to back: an informed email reply in Gmail, a project update in Slack, and a reply about weekend plans in iMessage. Each reply stays unsent." />
+  <img src=".github/readme/double-tap.gif" width="820" alt="Three Magic Reply recordings play back to back: an informed email reply in Gmail, a project update in Slack, and a reply about weekend plans in iMessage. Each reply stays unsent." />
 </p>
 
 **For your life:**
@@ -86,7 +88,7 @@ Put your cursor in a reply field and double tap your **right Command key**. Doub
 
 An informed draft, in the email or Slack conversation you're already having. No need to rummage through three other apps before you can answer.
 
-Writing examples are editable in `writingstyle.md`; Sentient doesn't continuously collect new ones. Double Tap also has its **own provider setting**, including compatible local models. Both live in **Settings → Double Tap**. If you change Sidekick's shortcut to right Option, Double Tap follows that choice.
+Writing examples are editable in `writingstyle.md`; Sentient doesn't continuously collect new ones. Magic Reply also has its **own provider setting**, including compatible local models. Both live in **Settings → Magic Reply**. If you change Sidekick's shortcut to right Option, Magic Reply follows that choice.
 
 ## a head start. before you even ask.
 
@@ -124,6 +126,8 @@ At **3 AM**, Sentient can wake your plugged-in Mac, even with the lid closed. It
 
 Your files, saved screenshots, iMessage, WhatsApp, Apple Notes, **Apple Mail and Apple Calendar** can all feed the on-device model. Useful summaries become connected notes about your people, projects, plans and preferences. Your chosen frontier model consolidates them into the knowledge base that powers the day's assistance.
 
+With overnight analysis enabled, Sentient can also resume eligible analysis while the Mac is plugged in and idle. Active use suspends that work, and the shared coordinator preserves its progress.
+
 Keep Sentient running in the menu bar with overnight wake set up. Plugged in is the default; battery runs are an explicit option, with charge and thermal checks.
 
 Getting a sleeping, lid-shut Mac to wake up, run local inference, and return to sleep took some exploring. The result is a purpose-built wake helper, bounded awake sessions, and checkpoints that let interrupted processing resume. [The scheduler's engineering story is here.](Sentient%20OS%20macOS/Scheduling/Documentation%20-%20Overnight%20Scheduler%20%26%20Wake%20Helper.md)
@@ -156,7 +160,7 @@ help in the apps you're already using
 
 <sub>Example knowledge, with personal details omitted. Plain files underneath.</sub>
 
-**Double Tap has a separate choice.** For low latency, we cover an OpenAI API route with **Zero Data Retention, free** for our first users. You can choose your own provider for Double Tap in **Settings → Double Tap**, including a compatible local model. A screenshot of the display under your pointer, your knowledge including one-time writing examples, and your instructions pass through our relay when you use the covered route to make an unsent draft.
+**Magic Reply has a separate choice.** For low latency, we cover an OpenAI API route with **Zero Data Retention, free** for our first users. You can choose your own provider for Magic Reply in **Settings → Magic Reply**, including a compatible local model. A screenshot of the display under your pointer, your knowledge including one-time writing examples, and your instructions pass through our relay when you use the covered route to make an unsent draft.
 
 **Quick actions and voice use separate cloud services.** Press **⌘,** to summarize a document or conversation, or **⌘.** to proofread selected text. Summarize sends bounded source content and a window image through our relay to OpenAI; it can include offscreen text and a verified continuation of the active chat. YouTube summaries retrieve native transcripts through Supadata. Proofread sends only the selection for correction. Explicit voice dictation streams audio to ElevenLabs Scribe. These routes are independent of your Sidekick provider, and provider processing and retention settings apply.
 
@@ -166,15 +170,15 @@ The app and supporting infrastructure are open source. No separate Sentient acco
 
 ## all the ai, on your own mac.
 
-The built-in model handles the high-volume reading. You can also run a **larger local model** for knowledge organization, proactive intelligence and Sidekick, plus a local drafting model for Double Tap. No ChatGPT or Claude subscription required.
+The built-in model handles the high-volume reading. You can also run a **larger local model** for knowledge organization, proactive intelligence and Sidekick, plus a local drafting model for Magic Reply. No ChatGPT or Claude subscription required.
 
 Once the models and runtimes are downloaded, those local-model workflows can run offline. Summarize, Proofread and voice dictation use their separate cloud services. Browsing websites and sending email also need internet.
 
 To set it up:
 
 1. Run a compatible vision-capable model in LM Studio or another supported local server. The main frontier connection uses the Responses API and a vision check.
-2. Select it in **Settings → Frontier Model Choice**.
-3. Select a local drafting provider separately in **Settings → Double Tap**. This client supports compatible Responses and Chat Completions endpoints, including LM Studio and Ollama.
+2. Select it in **Settings → AI Models & Accounts**.
+3. Select a local drafting provider separately in **Settings → Magic Reply**. This client supports compatible Responses and Chat Completions endpoints, including LM Studio and Ollama.
 4. Use local knowledge sources, including Apple Mail and Calendar, and leave optional cloud sharing off.
 
 A model such as [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) gives a sense of the larger vision models available. Fit depends on quantization, context size and spare memory. The model and server also need to support the task. **The 8 GB baseline covers Sentient's built-in model, not an additional 27B model.**
@@ -203,7 +207,7 @@ The repeated understanding stays on-device, and you choose the model for the mor
 
 On-device understanding keeps our costs low. Our business is enterprise: work integrations, commercial licensing and support. Your private context isn't the business model.
 
-Our current launch offer gives the next 1,000 users Sentient free for life. Paid AI providers have their own charges. The covered Double Tap route is a separate offer for our first users. The source is AGPL-3.0. See [licensing](LICENSING.md) for details.
+Our current launch offer gives the next 1,000 users Sentient free for life. Paid AI providers have their own charges. The covered Magic Reply route is a separate offer for our first users. The source is AGPL-3.0. See [licensing](LICENSING.md) for details.
 
 </details>
 
@@ -219,14 +223,14 @@ Hosted connectors depend on the account and plan you connect. A limited ChatGPT 
 <details>
 <summary><b>does sentient record everything i do?</b></summary>
 
-No. It learns from the sources you enable, rather than continuously recording your screen. Invoking Sidekick, Double Tap or Summarize can capture screenshots to understand the task in front of you. Sidekick also uses screenshots while carrying it out.
+No. It learns from the sources you enable, rather than continuously recording your screen. Invoking Sidekick, Magic Reply or Summarize can capture screenshots to understand the task in front of you. Sidekick also uses screenshots while carrying it out.
 
 </details>
 
 <details>
 <summary><b>what actually leaves my mac?</b></summary>
 
-A chosen cloud AI processes context for its work, including summaries, knowledge and task screenshots. Double Tap's covered route passes screen and knowledge context through our relay to OpenAI with Zero Data Retention. You can select a local provider for those workflows. Summarize and Proofread use their separate OpenAI relay routes, YouTube transcript retrieval uses Supadata, and explicit dictation sends audio to ElevenLabs. Optional MCP sharing uploads an encrypted knowledge copy.
+A chosen cloud AI processes context for its work, including summaries, knowledge and task screenshots. Magic Reply's covered route passes screen and knowledge context through our relay to OpenAI with Zero Data Retention. You can select a local provider for those workflows. Summarize and Proofread use their separate OpenAI relay routes, YouTube transcript retrieval uses Supadata, and explicit dictation sends audio to ElevenLabs. Optional MCP sharing uploads an encrypted knowledge copy.
 
 [The architecture above](#personal-ai-privacy-at-its-core) explains the separate paths. [The full policy](https://sentient-os.ai/privacy) also covers diagnostics and service records.
 
@@ -235,7 +239,7 @@ A chosen cloud AI processes context for its work, including summaries, knowledge
 <details>
 <summary><b>can i choose what sentient learns about me?</b></summary>
 
-Yes. Pick the supported sources, folders, conversations, Mail accounts and calendars you want analyzed, and change them in Settings. Double Tap's one-time writing examples are prepared separately from regular analysis selections. Those are yours to inspect and edit too.
+Yes. Pick the supported sources, folders, conversations, Mail accounts and calendars you want analyzed, and change them in Settings. Magic Reply's one-time writing examples are prepared separately from regular analysis selections. Those are yours to inspect and edit too.
 
 </details>
 
@@ -253,14 +257,14 @@ Reset removes local knowledge and analysis state and requests deletion of the sh
 
 Sentient creates a one-time snapshot of automatically selected examples of your own sent messages, using available one-to-one iMessage and WhatsApp conversations and supported connected sent email. The snapshot preserves original wording and recipient context. It isn't continuously refreshed.
 
-Inspect and edit `writingstyle.md` through **Settings → Double Tap → Show writing examples in Finder**. Your edits are preserved. The examples are included in Double Tap requests and in optional knowledge sharing.
+Inspect and edit `writingstyle.md` through **Settings → Magic Reply → Show writing examples in Finder**. Your edits are preserved. The examples are included in Magic Reply requests and in optional knowledge sharing.
 
 </details>
 
 <details>
 <summary><b>can i run sentient 100% offline?</b></summary>
 
-Yes, for AI inference and supported local tasks after setup. Choose local models for both the main frontier backend and Double Tap, use local sources, and leave cloud sharing off. Online tasks still need internet. [Here's the setup.](#all-the-ai-on-your-own-mac)
+Yes, for AI inference and supported local tasks after setup. Choose local models for both the main frontier backend and Magic Reply, use local sources, and leave cloud sharing off. Online tasks still need internet. [Here's the setup.](#all-the-ai-on-your-own-mac)
 
 </details>
 
@@ -274,7 +278,7 @@ Sidekick can see the screen, click, type, attach files and move between your app
 <details>
 <summary><b>will it send messages or do things without asking?</b></summary>
 
-Proactive intelligence prepares suggestions and waits for you to start their actions. Double Tap leaves a draft for you to send. When you hand a task to Sidekick, you're authorizing it to take the steps needed to complete that task. It doesn't ask for a second confirmation before every click.
+Proactive intelligence prepares suggestions and waits for you to start their actions. Magic Reply leaves a draft for you to send. When you hand a task to Sidekick, you're authorizing it to take the steps needed to complete that task. It doesn't ask for a second confirmation before every click.
 
 </details>
 

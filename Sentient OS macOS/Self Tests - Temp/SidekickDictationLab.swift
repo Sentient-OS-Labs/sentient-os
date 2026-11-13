@@ -51,11 +51,7 @@ import ScreenCaptureKit
             if phase == .listening {
                 let size = metrics.size(for: phase)
                 checks[name + "-sidekick-width"] = size.width == metrics.size(for: .running).width
-                if metrics.hasHardwareCutout {
-                    checks[name + "-bottom-transcript"] = size.height == metrics.headerContentHeight + metrics.captionHeight + metrics.bottomPad
-                } else {
-                    checks[name + "-single-row-transcript"] = size.height == metrics.topRowHeight
-                }
+                checks[name + "-bottom-transcript"] = size.height == metrics.topRowHeight + metrics.captionHeight + metrics.bottomPad
                 checks[name + "-camera-clearance"] = metrics.dictationLeftWidth * 2
                     + (metrics.hardwareNotch?.width ?? 0) == size.width
                 checks[name + "-matches-status-height"] = size.height == metrics.runningHeight(caption: metrics.captionHeight)
@@ -239,30 +235,100 @@ import ScreenCaptureKit
             Task { @MainActor in self.failed = true }
         }
     }
-    @Observable final class State { var phase = NotchPhase.hidden }
+    @Observable final class State {
+        var phase = NotchPhase.hidden
+        let speech = DictationPresentation()
+        let message = SidekickConversationStore.Record(sequence: 1,
+            event: .init(taskID: UUID(), kind: .assistantMessage,
+                text: "Here's a small surprise: **octopuses can taste with their arms.**\n\nTheir suckers sense chemicals as they explore, helping them identify food without bringing it to their mouths."))
+    }
     private struct Surface: View {
         let state: State
         var island = false
+        var responseMotion = false
+        var completionMotion = false
         var body: some View {
-            NotchContent(phase: state.phase, readBack: nil, statusLine: "", metrics: island ? NotchMetrics(hardwareNotch: nil) : .preview)
-                .frame(width: 800, height: 220)
+            NotchContent(phase: state.phase, readBack: nil, statusLine: "Thinking it through…", dictation: state.speech, workAppIdentifier: completionMotion ? "com.apple.Notes" : nil,
+                         metrics: island ? NotchMetrics(hardwareNotch: nil) : .preview, message: state.message)
+                .frame(width: 800, height: responseMotion ? 440 : 220)
                 .background(Color(white: 0.12)).preferredColorScheme(.dark)
         }
     }
+    private static func recordResponseMotion(state: State, window: NSWindow, directory: URL, completion: Bool = false) async throws -> [String: Bool] {
+        state.phase = .running
+        try await Task.sleep(for: .milliseconds(800))
+        let content = try await SCShareableContent.currentProcess
+        guard let owned = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) else { return ["response_capture_window": false] }
+        let filter = SCContentFilter(desktopIndependentWindow: owned)
+        let config = SCStreamConfiguration()
+        config.width = 1600; config.height = 880
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
+        config.showsCursor = false; config.capturesAudio = false; config.captureMicrophone = false
+        config.ignoreShadowsSingleWindow = true
+        let output = SCRecordingOutputConfiguration()
+        output.outputURL = directory.appendingPathComponent("response-motion.mp4")
+        let delegate = Recorder()
+        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+        try stream.addRecordingOutput(SCRecordingOutput(configuration: output, delegate: delegate))
+        try await stream.startCapture()
+        let originalFrame = window.frame
+        for _ in 0..<2 {
+            try await Task.sleep(for: .milliseconds(400))
+            if completion {
+                state.phase = .finishing(.success)
+                try await Task.sleep(for: .milliseconds(1150))
+                state.phase = .hidden
+                try await Task.sleep(for: .milliseconds(700))
+                state.phase = .running
+                continue
+            }
+            state.phase = .message
+            try await Task.sleep(for: .milliseconds(1200))
+            state.speech.reset(context: .reply(state.message))
+            state.phase = .listening
+            state.speech.text = "Tell me something else."
+            try await Task.sleep(for: .milliseconds(400))
+            state.phase = .transcribing
+            try await Task.sleep(for: .milliseconds(200))
+            state.phase = .running
+            state.speech.endContext()
+            try await Task.sleep(for: .milliseconds(1000))
+        }
+        if !completion {
+            state.phase = .message
+            try await Task.sleep(for: .milliseconds(90))
+        }
+        state.phase = .hidden
+        try await Task.sleep(for: .milliseconds(700))
+        try await stream.stopCapture()
+        for _ in 0..<100 {
+            if delegate.finished || delegate.failed { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return ["response_motion_recorded": delegate.finished && !delegate.failed,
+                "response_window_frame_stable": window.frame == originalFrame,
+                "response_interrupted_close": state.phase == .hidden]
+    }
+
     static func run(root: URL) async throws -> [String: Bool] {
         let directory = root.appendingPathComponent("motion-snapshots", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let state = State()
         let island = FileManager.default.fileExists(atPath: root.appendingPathComponent("island-motion").path)
-        let host = NSHostingView(rootView: Surface(state: state, island: island))
+        let completionMotion = FileManager.default.fileExists(atPath: root.appendingPathComponent("completion-motion").path)
+        let responseMotion = completionMotion || FileManager.default.fileExists(atPath: root.appendingPathComponent("response-motion").path)
+        let host = NSHostingView(rootView: Surface(state: state, island: island, responseMotion: responseMotion, completionMotion: completionMotion))
         host.sizingOptions = []
         host.safeAreaRegions = []
-        let window = NotchPanel(contentRect: NSRect(x: 200, y: 200, width: 800, height: 220),
+        let window = NotchPanel(contentRect: NSRect(x: 200, y: 200, width: 800, height: responseMotion ? 440 : 220),
                                 styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllApplications, .stationary]
         window.contentView = host; window.makeKeyAndOrderFront(nil)
         defer { window.close() }
+        if responseMotion {
+            return try await recordResponseMotion(state: state, window: window, directory: directory, completion: completionMotion)
+        }
         func liveBackdrops(_ view: NSView) -> Int {
             (view.identifier?.rawValue == "sentient.island.backdrop" ? 1 : 0)
                 + view.subviews.reduce(0) { $0 + liveBackdrops($1) }
@@ -318,7 +384,7 @@ import ScreenCaptureKit
             try await Task.sleep(for: .milliseconds(100))
             checks["activation_and_pending_focus_cannot_reopen"] = coordinator.phase == .hidden && !panel.isKeyWindow
             try await Task.sleep(for: .milliseconds(600))
-            checks["retract_orders_out_after_animation"] = !panel.isVisible
+            checks["retract_keeps_external_pill_or_hides_hardware_notch"] = panel.isVisible == (screen.notchSize == nil)
             coordinator.openNotchFromHome()
             try await Task.sleep(for: .milliseconds(80))
             panel.resignKey()

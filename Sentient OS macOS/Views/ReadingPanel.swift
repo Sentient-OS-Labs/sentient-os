@@ -1,4 +1,4 @@
-// Shared native shell for ephemeral Summary and Proofread readers. Content owns its copy,
+// Native shell for ephemeral reading windows. Content owns its copy,
 // retry and permission actions; the window owns focus, stable sizing and keyboard dismissal.
 // Doc: Documentation - Views - Home, Processing & Shared UI.md
 import AppKit
@@ -10,11 +10,13 @@ import SwiftUI
         super.init(contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
         self.identifier = NSUserInterfaceItemIdentifier(identifier)
+        isRestorable = false
         self.title = title; titleVisibility = .hidden; titlebarAppearsTransparent = true
         isReleasedWhenClosed = false; hidesOnDeactivate = false; isFloatingPanel = true
         becomesKeyOnlyIfNeeded = false; isMovableByWindowBackground = true
         level = .floating; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        backgroundColor = .black; appearance = NSAppearance(named: .darkAqua)
+        isOpaque = false; backgroundColor = .clear
+        appearance = NSAppearance(named: .darkAqua)
         contentMinSize = NSSize(width: 360, height: 260)
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { standardWindowButton(button)?.isHidden = true }
     }

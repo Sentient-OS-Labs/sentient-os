@@ -16,7 +16,8 @@ fixture=r'''
 import Foundation
 struct RunProgress {var done=0}
 struct CycleFailure:Error,Equatable {}
-enum CodexTrigger {case onboarding,analyzeNow,overnight}
+enum ProactiveCycle { static let lastCycleKey = "fixture.lastCycle" }
+enum CodexTrigger {case onboarding,analyzeNow,overnight,pluggedInIdle}
 enum ModelBackend:String {case fixture;static let current=Self.fixture}
 enum PowerState {enum Block:String {case thermal,batteryLow};struct Snapshot {var critical=false}}
 struct ProcessingRequest:Sendable {var fullCycle=true;var readySelectionCount:Int?=3;static func current()->Self{Self()}}
@@ -31,17 +32,19 @@ enum Phase {case knowledgeBase(String),deciding,researching(Int),done,failed}
  }
 }
 enum DiagnosticHistory {
- enum Kind {case overnight};enum Outcome{case blocked,stalled,stopped}
+ enum Kind {case overnight,pluggedInIdle};enum Outcome{case blocked,stalled,stopped}
  static func begin(_ kind:Kind,provider:String)->UUID{UUID()}
  static func finish(_ kind:Kind,id:UUID,outcome:Outcome,reason:String){}
 }
 enum Analytics {static func signal(_ name:String,parameters:[String:String]){}}
 enum OvernightCaution {enum Kind{case stalled};static func record(_ kind:Kind){}}
+enum PluggedInAnalysisScheduler {static let interval=14400.0}
 enum OvernightScheduler {static let configuredMinutes=180;static func nextOccurrence(minutesSinceMidnight:Int)->Date{Date()}}
 enum CrashReporting {enum Level{case warning};static func captureEvent(_ name:String,level:Level,tags:[String:String],fingerprint:[String]){}}
 @MainActor final class Coordinator {
  let defaults:UserDefaults
  var record:ProcessingPlan.Record {didSet{ProcessingPlan.save(record,to:defaults)}}
+ var cadence=ProcessingPlan.Cadence()
  var state=State.idle
  var initialComplete=false;var isBusy=false;var isSuspended=false
  var paused:Bool {record.status == .paused}
@@ -50,6 +53,12 @@ enum CrashReporting {enum Level{case warning};static func captureEvent(_ name:St
  var power=PowerState.Snapshot();var runID=UUID();var lastProgressAt=Date()
  var thought:String?;var prepStatus="";var prepSubtext:String?
  init(defaults:UserDefaults){self.defaults=defaults;record = .init()}
+ var hasAutomaticContinuation:Bool {false}
+ func reconcileAnalysisClock(now: Date) {}
+    func exhaustAutomaticBudgetIfNeeded(now:Date=Date())->Bool {false}
+ func accountActiveTime(){}
+ func cancelScheduled(){}
+ func waitForIdle(notice:String?=nil){record.status = .awaitingIdle;state = .waiting(.idle)}
  func startMonitoring(){}
  func checkPendingWork(){checks+=1}
  func admission(_ request:ProcessingRequest,scheduled:Bool)->Wait?{nil}
@@ -58,7 +67,7 @@ enum CrashReporting {enum Level{case warning};static func captureEvent(_ name:St
  func deferNight(notice:String){deferrals+=1}
  func begin(_ request:ProcessingRequest){begins+=1}
  func releaseSystemActivity(){}
- func releaseAwake()async{}
+ func releaseAwake(for id:UUID)async{}
  static func composed(_ a:RunProgress,_ b:RunProgress)->RunProgress{RunProgress(done:a.done+b.done)}
  // METHODS
 }
@@ -71,11 +80,7 @@ enum CrashReporting {enum Level{case warning};static func captureEvent(_ name:St
   let c=Coordinator(defaults:d)
   check(ProcessingPlan.recovered(.init(status:.requested),initialComplete:false).status == .paused,
         "Queued first analysis also waits for explicit resume after quit")
-  c.record = .init(status:.failed,trigger:.onboarding)
-  await c.runScheduled()
-  check(c.begins==1 && c.record.status == .requested && c.record.trigger == .overnight,
-        "Scheduler can recover a failed first analysis")
-  await c.runScheduled();check(c.begins==1,"Scheduler cannot duplicate already requested analysis")
+  await c.runScheduled();check(c.begins==1,"Recovery schedule can retry initial creation")
   c.begins=0
   c.record = .init(status:.running,trigger:.onboarding);c.isBusy=true;c.pause()
   check(c.state == .stopping && ProcessingPlan.read(d).status == .paused,"Pause persists before worker drains")

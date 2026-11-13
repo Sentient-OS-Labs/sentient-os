@@ -37,7 +37,7 @@ final class NotchWindowController {
 
     private var baseMetrics = NotchMetrics(hardwareNotch: nil)
     private var metrics: NotchMetrics {
-        baseMetrics.showingSetup(coordinator.setupCaption != nil).showingQuickActions(coordinator.quickActionsAvailable)
+        baseMetrics.showingSetup(coordinator.setupCaption != nil).showingQuickActions(coordinator.quickActionsAvailable || coordinator.onboardingDemoArmed)
     }
     /// Which display the current `metrics` were derived from — the anchor can move the overlay between
     /// displays (a notch-click session vs the hotkey's main-display session), and landing on a new
@@ -50,6 +50,49 @@ final class NotchWindowController {
     private var mouseTimer: Timer?
     /// The live poll rate, so re-tuning only rebuilds the timer on an actual tier change.
     private var mouseTimerInterval: TimeInterval = 0
+
+    private struct PointerLayoutKey: Equatable {
+        let metrics: NotchMetrics
+        let phase: NotchPhase
+        let hoverIdle: Bool
+        let readBack: String?
+        let remembering: String?
+        let personalizing: Bool
+        let recovery: SidekickRecoveryContent?
+        let messageText: String?
+    }
+    private struct PointerLayout {
+        let key: PointerLayoutKey
+        let size: CGSize
+        let nearSize: CGSize
+        let path: Path
+    }
+    private var cachedPointerLayout: PointerLayout?
+
+    /// Cache only local geometry. Screen/panel origins are read live so crossing
+    /// displays, changing scaling, or moving the canvas cannot reuse stale positions.
+    private var pointerLayout: PointerLayout {
+        let phase = coordinator.dictation.layoutPhase(for: coordinator.phase)
+        let message = coordinator.dictation.replyMessage ?? coordinator.notchMessage
+        let currentMetrics = metrics
+        let key = PointerLayoutKey(metrics: currentMetrics, phase: phase,
+            hoverIdle: (hovering || coordinator.notchDismissalPreview) && coordinator.phase == .hidden,
+            readBack: coordinator.readBack, remembering: coordinator.run.remembering,
+            personalizing: coordinator.run.isPersonalizing,
+            recovery: coordinator.run.recovery.content, messageText: message?.event.text)
+        if let cachedPointerLayout, cachedPointerLayout.key == key { return cachedPointerLayout }
+        let size = key.hoverIdle ? currentMetrics.hoverSize : currentMetrics.size(for: phase,
+            readBack: key.readBack, remembering: key.remembering, personalizing: key.personalizing,
+            recoveryContent: key.recovery, messageContent: message)
+        let radii = key.hoverIdle ? currentMetrics.hoverRadii : currentMetrics.radii(for: phase)
+        let result = PointerLayout(key: key, size: size,
+            nearSize: currentMetrics.size(for: phase, readBack: key.readBack, messageContent: message),
+            path: NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom,
+                isIsland: !currentMetrics.hasPhysicalNotch)
+                .path(in: CGRect(origin: .zero, size: size)))
+        cachedPointerLayout = result
+        return result
+    }
     /// Local key monitor: Esc cancels the notch's pending input (type field / voice capture). See §4.
     private var keyMonitor: Any?
     /// Hover entry detection: `.mouseMoved` NSEvent monitors, global + local — the same zero-permission
@@ -66,6 +109,7 @@ final class NotchWindowController {
     /// idle check is a bare rect test (recomputed only on build + display changes). `.null` = no notch.
     private var hoverEntryRect: NSRect = .null
     private var notchClickEnabled = NotchPreferences.clickEnabled()
+    private var externalBarEnabled = NotchPreferences.externalBarEnabled()
 
     /// Extra room around the largest notch state so the morph's bounce-overshoot + the glow bloom never
     /// clip at the fixed window's edge. The notch is centered + top-anchored inside this canvas.
@@ -73,14 +117,25 @@ final class NotchWindowController {
     private static let canvasVSlack: CGFloat = 90
     /// After going hidden, wait for the SwiftUI retract animation to fully play (the shell collapses into the
     /// cutout and merges) before ordering the window out — so the window never hard-cuts a still-visible notch.
-    private static let settleDelay: Double = 0.56
+    private static let settleDelay: Double = 1.0
 
     /// Re-asserted on EVERY reveal — macOS drops `.canJoinAllSpaces` when a window is re-ordered, which
     /// otherwise strands the overlay on a single Space. (.fullScreenAuxiliary → also over fullscreen apps.)
     private static let collectionBehavior: NSWindow.CollectionBehavior =
         [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
 
-    init(coordinator: CommandCoordinator) { self.coordinator = coordinator }
+    init(coordinator: CommandCoordinator) {
+        self.coordinator = coordinator
+        coordinator.relinquishNotchFocus = { [weak self] in self?.relinquishKeyboardFocus() }
+    }
+
+    private func relinquishKeyboardFocus() {
+        guard let panel, panel.isKeyWindow else { return }
+        // Ordering out releases a nonactivating panel's window-server keyboard focus.
+        // Reorder within this run-loop pass so its retract animation can still finish.
+        panel.orderOut(nil)
+        panel.orderFrontRegardless()
+    }
 
     #if DEBUG
     private var stoppedForTesting = false
@@ -206,9 +261,12 @@ final class NotchWindowController {
         #endif
         withObservationTracking {
             _ = coordinator.proofread.isCapturingSelection
+            _ = coordinator.notchDismissalPreview
+            _ = coordinator.notchInputReady
             _ = coordinator.proofread.isRunning
             _ = coordinator.notchButtonAvailable
             _ = coordinator.phase
+            _ = coordinator.displayedNotchPhase
             _ = coordinator.notchAnchor
             _ = coordinator.notchFocusRequest
             _ = coordinator.setupCaption
@@ -228,9 +286,8 @@ final class NotchWindowController {
         guard !stoppedForTesting else { return }
         #endif
         guard let panel else { return }
-        if coordinator.phase == .typing, coordinator.proofread.captureWasInterrupted {
-            coordinator.dismissTyping(); return
-        }
+        // Preparing Proofread is best-effort background work. Its selection can
+        // become stale while the user clicks/types; that must never dismiss input.
         host?.update(metrics: metrics, islandBackdrop: entryHandles[metricsDisplayID]?.backdrop, displayID: metricsDisplayID)
         refreshHoverEntryRect()
         syncEntryHandles()
@@ -242,33 +299,57 @@ final class NotchWindowController {
         // the window is already up so there's nothing to choreograph. The panel is KEY only for
         // .typing and .listening (see reveal); .opening never takes it — a double tap must leave
         // keyboard focus in the user's own app for Double Tap's paste.
-        if coordinator.phase != .hidden, hovering { clearHover() }
+        if coordinator.displayedNotchPhase != .hidden, hovering { clearHover() }
 
         // Click-through: while interactive, a cursor poll lets the window receive clicks ONLY over the
         // notch silhouette (the glow + canvas always pass through); otherwise the whole window ignores
         // the mouse so every click sails past. Hovering counts as interactive — the same poll also
         // detects the cursor LEAVING the hover zone (updateMousePassthrough → endHover).
-        if Self.isInteractive(coordinator.phase) || coordinator.proofread.isRunning || hovering {
+        if Self.isInteractive(coordinator.displayedNotchPhase) || coordinator.proofread.isRunning || hovering || coordinator.notchDismissalPreview {
             startMouseTracking()
         } else {
             stopMouseTracking()
             panel.ignoresMouseEvents = true
         }
 
-        if coordinator.phase != .hidden {
+        if coordinator.displayedNotchPhase == .hidden && !allowsRestingBar(on: metricsDisplayID) {
+            if hovering { clearHover() }
+            stopMouseTracking()
+            relinquishKeyboardFocus()
+            panel.orderOut(nil)
+            syncEntryHandles()
+            return
+        }
+
+        // Hidden quick actions return keyboard focus even while the pointer hovers
+        // over the retracting notch.
+        if coordinator.displayedNotchPhase == .hidden || coordinator.notchDismissalPreview {
+            relinquishKeyboardFocus()
+        }
+        if coordinator.displayedNotchPhase != .hidden || coordinator.notchDismissalPreview {
             placeCanvas()                                   // the fixed canvas — NEVER resized per morph
             reveal(makeKey: wantsKey)
-            if coordinator.phase == .recovery { coordinator.run.recovery.setFocused(panel.isKeyWindow) }
+            if coordinator.displayedNotchPhase == .recovery { coordinator.run.recovery.setFocused(panel.isKeyWindow) }
             syncEntryHandles()
         } else if !hovering {
-            panel.resignKey()
+            if !metrics.hasHardwareCutout, entriesAvailable, !panel.isVisible {
+                placeCanvas()
+                reveal()
+                syncEntryHandles()
+            }
+            // Hover exit keeps its original slow spring, including after the one-second
+            // dismissal preview. Do not truncate that tail using the previous tap's speed.
+            let settleDelay = Self.settleDelay
             // Order the window out only AFTER the SwiftUI retract animation has played.
             Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(Self.settleDelay))
-                guard let self, self.sizeToken == token, self.coordinator.phase == .hidden,
-                      !self.hovering else { return }
-                self.panel?.orderOut(nil)
+                try? await Task.sleep(for: .seconds(settleDelay))
+                guard let self, self.sizeToken == token, self.coordinator.displayedNotchPhase == .hidden,
+                      !self.hovering, !self.coordinator.notchDismissalPreview else { return }
+                // Keep the external surface alive as its resting pill. It is the same
+                // host and window on the next hover/open, with no launcher swap.
+                if self.metrics.hasHardwareCutout || !self.entriesAvailable || !self.allowsRestingBar(on: self.metricsDisplayID) { self.panel?.orderOut(nil) }
                 self.syncEntryHandles()
+                if !self.metrics.hasHardwareCutout { self.hoverMouseMoved(at: NSEvent.mouseLocation) }
             }
         }
     }
@@ -299,7 +380,7 @@ final class NotchWindowController {
 
     /// The phases that own the keyboard: the type field, and the open mic (Esc cancels, ⏎ finishes).
     private var wantsKey: Bool {
-        guard NSApp.modalWindow == nil, !coordinator.proofread.isCapturingSelection, !coordinator.proofread.isRunning else { return false }
+        guard NSApp.modalWindow == nil, coordinator.notchInputReady, !coordinator.proofread.isRunning else { return false }
         return coordinator.phase == .typing || coordinator.phase == .listening
             || (coordinator.phase == .transcribing && coordinator.dictation.keepsDraft)
             || (coordinator.phase == .message && coordinator.messageReplyFocused)
@@ -415,8 +496,7 @@ final class NotchWindowController {
     /// (the same half-open trap the hover entry rect dodges with its own +2).
     private var nearZone: NSRect {
         guard let panel else { return .null }
-        let size = metrics.size(for: coordinator.dictation.layoutPhase(for: coordinator.phase),
-            readBack: coordinator.readBack, messageContent: coordinator.dictation.replyMessage ?? coordinator.notchMessage)
+        let size = pointerLayout.nearSize
         let width = max(size.width, metrics.hoverSize.width) + Self.canvasHSlack
         return NSRect(x: panel.frame.midX - width / 2, y: panel.frame.maxY - size.height - 80,
                       width: width, height: size.height + 82)
@@ -437,7 +517,7 @@ final class NotchWindowController {
             panel.ignoresMouseEvents = false
             return
         }
-        let interactive = Self.isInteractive(coordinator.phase) || coordinator.proofread.isRunning || (hovering && coordinator.phase == .hidden)
+        let interactive = Self.isInteractive(coordinator.phase) || coordinator.proofread.isRunning || ((hovering || coordinator.notchDismissalPreview) && coordinator.phase == .hidden)
         // The canvas box gates the EXPENSIVE silhouette test (a Path build + the read-back text
         // measurement): a far cursor can't be over the silhouette, so it never pays for one.
         let receive = interactive && cursorNearNotch() && cursorOverSilhouette()
@@ -451,13 +531,9 @@ final class NotchWindowController {
     /// live silhouette is the swollen hover shape, not the phase's.
     private func cursorOverSilhouette(at location: NSPoint? = nil) -> Bool {
         guard let screen = activeScreen() else { return false }
-        let hoverIdle = hovering && coordinator.phase == .hidden
-        let s = hoverIdle ? metrics.hoverSize
-                          : metrics.size(for: coordinator.dictation.layoutPhase(for: coordinator.phase), readBack: coordinator.readBack,
-                                         remembering: coordinator.run.remembering,
-                                         personalizing: coordinator.run.isPersonalizing,
-                                         recoveryContent: coordinator.run.recovery.content,
-                                         messageContent: coordinator.dictation.replyMessage ?? coordinator.notchMessage)
+        let hoverIdle = (hovering || coordinator.notchDismissalPreview) && coordinator.phase == .hidden
+        let layout = pointerLayout
+        let s = layout.size
         let p = location ?? NSEvent.mouseLocation            // screen coords, origin bottom-left
         let localX = p.x - (screen.frame.midX + metrics.horizontalOffset(for: coordinator.dictation.layoutPhase(for: coordinator.phase)) - s.width / 2)
         let visualInset = hoverIdle ? metrics.hoverTopInset : metrics.topInset
@@ -473,14 +549,11 @@ final class NotchWindowController {
             return localX >= 0 && localX <= s.width && depthFromTop >= -6 && depthFromTop <= s.height + 6
         }
         guard localX >= 0, localX <= s.width, depthFromTop >= 0, depthFromTop <= s.height else { return false }
-        let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: coordinator.dictation.layoutPhase(for: coordinator.phase))
         // ⚠️ Fitts's law at the bezel: a cursor slammed against the screen's top edge reports depth ≈ 0 —
         // a point ON the path's boundary, which `contains` excludes — so the top edge of the notch went
         // click-dead. Test a couple of points INTO the shape instead: the screen edge itself is part of
         // the notch (macOS's own menu bar works this way).
-        return NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom, isIsland: !metrics.hasPhysicalNotch)
-            .path(in: CGRect(x: 0, y: 0, width: s.width, height: s.height))
-            .contains(CGPoint(x: localX, y: max(depthFromTop, 2)))
+        return layout.path.contains(CGPoint(x: localX, y: max(depthFromTop, 2)))
     }
 
     // MARK: Hover — the notch as a button (swell + haptic; click opens tap-to-type)
@@ -574,7 +647,9 @@ final class NotchWindowController {
             return
         }
         switch coordinator.phase {
-        case .typing: coordinator.dismissTyping()
+        case .typing:
+            Log("notch typing dismissal: outside mouse down")
+            coordinator.dismissTypingFromPointer()
         case .opening: _ = coordinator.cancelCurrent()
         case .message: coordinator.dismissMessagePreview()
         case .recovery: coordinator.run.recovery.dismiss()
@@ -603,10 +678,12 @@ final class NotchWindowController {
         // notchButtonAvailable: during onboarding, before the film's notch beat, a click would do
         // NOTHING — so the swell stays off too (a button must never tease a dead click).
         guard notchClickEnabled, !hovering, coordinator.phase == .hidden, coordinator.notchButtonAvailable else { return }
-        if let launcher = entryHandles.values.first(where: { $0.panel.isVisible && $0.panel.frame.contains(location) }) {
-            // The external pill owns immediate native hover feedback. Preparing the
-            // full canvas here delayed that feedback and recreated the SwiftUI tree.
-            if !launcher.isIsland { beginHover(on: launcher.displayID) }
+        if let launcher = entryHandles.values.first(where: {
+            allowsRestingBar(on: $0.displayID)
+                && ($0.panel.isVisible || (panel?.isVisible == true && metricsDisplayID == $0.displayID))
+                && $0.panel.frame.insetBy(dx: $0.isIsland ? 6 : 0, dy: $0.isIsland ? 3 : 0).contains(location)
+        }) {
+            beginHover(on: launcher.displayID)
         } else if hoverEntryRect.contains(location) { beginHover() }
     }
 
@@ -617,7 +694,7 @@ final class NotchWindowController {
     /// edge so a cursor pinned at the very top still counts.
     private func refreshHoverEntryRect() {
         guard notchClickEnabled else { hoverEntryRect = .null; return }
-        if coordinator.run.recovery.isPending, let screen = activeScreen() {
+        if coordinator.run.recovery.isPending, let screen = activeScreen(), allowsRestingBar(on: screen.displayID) {
             let size = Self.metrics(for: screen).size(for: .hidden)
             let inset = Self.metrics(for: screen).topInset
             hoverEntryRect = NSRect(x: screen.cameraCenterX - size.width / 2,
@@ -657,16 +734,17 @@ final class NotchWindowController {
     /// hardware silhouette — black over the black cutout, so its arrival is invisible — then springs
     /// to the grown shape: the dismiss retract-merge trick, played in reverse.
     private func beginHover(on displayID: CGDirectDisplayID? = nil) {
-        guard notchClickEnabled, panel != nil else { return }
-        if coordinator.run.recovery.isPending {
-            if coordinator.run.recovery.reopen() { return }
-        }
+        let targetDisplay = displayID ?? Self.builtInNotchScreen()?.displayID ?? metricsDisplayID
+        guard notchClickEnabled, panel != nil, allowsRestingBar(on: targetDisplay) else { return }
+        // Hover previews only the small entry affordance. Reopening a dismissed
+        // question is an explicit click action owned by openNotchInput.
         hoverDisplayID = displayID ?? Self.builtInNotchScreen()?.displayID
         hovering = true
         sizeToken &+= 1                       // cancel any pending orderOut (a just-finished retract)
         // Place/reset the host before publishing the animated hover. Otherwise its
         // previous display's retract and offset interpolate on the destination screen.
         placeCanvas()
+        host?.layoutSubtreeIfNeeded()
         coordinator.setNotchHovering(true, anchor: pointerAnchor)
         reveal()
         syncEntryHandles()
@@ -685,7 +763,7 @@ final class NotchWindowController {
         hovering = false
         coordinator.setNotchHovering(false)
         Log("notch hover ended")
-        guard coordinator.phase == .hidden else { return }   // an open notch owns the window now
+        guard coordinator.phase == .hidden, !coordinator.notchDismissalPreview else { return }   // active/preview surface owns the window
         stopMouseTracking()
         panel?.ignoresMouseEvents = true
         sizeToken &+= 1
@@ -693,8 +771,8 @@ final class NotchWindowController {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.0))
             guard let self, self.sizeToken == token, self.coordinator.phase == .hidden,
-                  !self.hovering else { return }
-            self.panel?.orderOut(nil)
+                  !self.hovering, !self.coordinator.notchDismissalPreview else { return }
+            if self.metrics.hasHardwareCutout || !self.entriesAvailable || !self.allowsRestingBar(on: self.metricsDisplayID) { self.panel?.orderOut(nil) }
             self.hoverDisplayID = nil
             self.syncEntryHandles()
         }
@@ -734,6 +812,8 @@ final class NotchWindowController {
         add(nc, .notchInteractionChanged) { [weak self] in
             guard let self else { return }
             self.notchClickEnabled = NotchPreferences.clickEnabled()
+            self.externalBarEnabled = NotchPreferences.externalBarEnabled()
+            if self.hovering && !self.allowsRestingBar(on: self.hoverDisplayID ?? self.metricsDisplayID) { self.clearHover() }
             if !self.notchClickEnabled { self.endHover() }
             self.refreshHoverEntryRect()
             self.applyPhase()
@@ -758,10 +838,13 @@ final class NotchWindowController {
                                         object: nil, queue: .main) { [weak self] note in
             let activatedPID = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
             MainActor.assumeIsolated {
-                guard let self, self.coordinator.phase != .hidden else { return }
+                guard let self, self.coordinator.displayedNotchPhase != .hidden else { return }
                 if let activatedPID, activatedPID != ProcessInfo.processInfo.processIdentifier,
                    NSApp.modalWindow == nil {
-                    if self.coordinator.phase == .typing { self.coordinator.dismissTyping(); return }
+                    if self.coordinator.phase == .typing {
+                        Log("notch typing dismissal: workspace activation")
+                        self.coordinator.dismissTyping(); return
+                    }
                     if self.coordinator.phase == .opening { _ = self.coordinator.cancelCurrent(); return }
                 }
                 if self.panel?.isKeyWindow != true { self.reveal() }
@@ -801,7 +884,7 @@ final class NotchWindowController {
         guard let screen = activeScreen() else { panel?.orderOut(nil); return }
         applyMetrics(for: screen)                       // same display can still mean a new notch geometry
         placeCanvas()                                   // re-size/re-center the canvas for the new display
-        if coordinator.phase != .hidden { reveal(makeKey: wantsKey) }
+        if coordinator.displayedNotchPhase != .hidden { reveal(makeKey: wantsKey) }
         syncEntryHandles()
     }
 
@@ -852,25 +935,30 @@ final class NotchWindowController {
         for screen in NSScreen.screens {
             let id = screen.displayID
             entryHandles[id] = NotchEntryHandle(screen: screen, onHover: { [weak self] in
-                guard let self, self.coordinator.phase == .hidden, !self.hovering,
+                guard let self, self.allowsRestingBar(on: id), self.coordinator.phase == .hidden, !self.hovering,
                       self.coordinator.notchButtonAvailable else { return }
                 self.beginHover(on: id)
             }, onPress: { [weak self] in
-                guard let self, self.entriesAvailable else { return }
+                guard let self, self.entriesAvailable, self.allowsRestingBar(on: id) else { return }
                 if self.coordinator.phase == .hidden, !self.hovering { self.beginHover(on: id) }
                 self.coordinator.notchMouseDown(anchor: .display(id))
             }, onActivate: { [weak self] in
-                self?.coordinator.notchClicked(anchor: .display(id))
+                guard let self, self.allowsRestingBar(on: id) else { return }
+                self.coordinator.notchClicked(anchor: .display(id))
             })
         }
         if let screen = activeScreen() { applyMetrics(for: screen) }
         syncEntryHandles()
     }
 
+    private func allowsRestingBar(on displayID: CGDirectDisplayID) -> Bool {
+        externalBarEnabled || CGDisplayIsBuiltin(displayID) != 0
+    }
+
     private var entriesAvailable: Bool {
         guard notchClickEnabled, coordinator.notchButtonAvailable, !coordinator.run.isClearingChat else { return false }
         switch coordinator.phase {
-        case .hidden: return !coordinator.run.isRunning
+        case .hidden: return !coordinator.run.isRunning || coordinator.run.recovery.isPending
         case .typing, .message, .recovery: return true
         default: return false
         }
@@ -881,8 +969,7 @@ final class NotchWindowController {
         for (id, launcher) in entryHandles {
             // The live morph owns its handle until the retract has fully settled.
             let covered = panel?.isVisible == true && metricsDisplayID == id
-                && (coordinator.phase != .hidden || hovering)
-            if available && !covered { launcher.show() }
+            if available && !covered && allowsRestingBar(on: id) { launcher.show() }
             else { launcher.panel.orderOut(nil) }
         }
     }

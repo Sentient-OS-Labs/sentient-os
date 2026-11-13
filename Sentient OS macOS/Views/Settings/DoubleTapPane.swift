@@ -1,5 +1,5 @@
 // DoubleTapPane.swift
-// Settings for Double Tap: autosaved reply instructions and provider-specific API key/model controls.
+// Settings for Magic Reply: autosaved reply instructions and provider-specific API key/model controls.
 // DoubleTapCredentials keeps unsaved keys in view state and persists them only to Keychain on Save.
 // Doc: Documentation - Settings.md
 
@@ -10,6 +10,7 @@ import AppKit
 struct DoubleTapPane: View {
     @AppStorage(CustomInstructions.doubleTapKey) private var instructions = ""
     @AppStorage(DoubleTapProvider.key) private var providerRaw = DoubleTapProvider.sentient.rawValue
+    @AppStorage(ShortcutPreferences.storageKey) private var shortcutRaw = "rightCommand"
     @State private var activity = PipelineActivity.shared
     @State private var hasWritingExamples = WritingStyle.exists()
     @State private var hasWritingSources = WritingStyle.hasSources
@@ -20,18 +21,29 @@ struct DoubleTapPane: View {
     private var provider: DoubleTapProvider { DoubleTapProvider(rawValue: providerRaw) ?? .sentient }
 
     var body: some View {
-        SettingsPane(title: "Double Tap", whisper: "Replies in your voice, ready for you to review.") {
+        SettingsPane(title: "Magic Reply", whisper: "Replies in your voice, ready for you to review.") {
             VStack(alignment: .leading, spacing: 32) {
-                SettingsGroup(label: "Activation", inset: 0) {
-                    ShortcutSetting()
+                VStack(spacing: 0) {
+                    MagicReplyShortcutGuide(key: ShortcutKey(rawValue: shortcutRaw) ?? .rightCommand)
+                    Button("Customize in Notch & Shortcuts") {
+                        MainNavigation.shared.show(.settings, settingsPane: .notchShortcuts)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(SettingsStyle.secondary)
+                    .padding(.bottom, 22)
+                    .accessibilityIdentifier("magicReply.customizeShortcut")
                 }
-                SettingsGroup(label: "Writing instructions", description: "Tell Double Tap how you like to write.") {
+                .background(Color.white.opacity(0.015), in: RoundedRectangle(cornerRadius: 18))
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(SettingsStyle.border, lineWidth: 1))
+                SettingsGroup(label: "Writing instructions", description: "Tell Magic Reply how you like to write.") {
                     VStack(alignment: .leading, spacing: 12) {
                         SettingsTextBox(placeholder: "Keep texts casual and lowercase. Use a professional tone for email.", text: $instructions)
                             .frame(height: 112)
-                            .accessibilityLabel("Double Tap custom instructions")
+                            .accessibilityLabel("Magic Reply custom instructions")
                         if instructions.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count > CustomInstructions.doubleTapByteLimit {
-                            Text("These instructions are too long. Shorten them before using Double Tap.")
+                            Text("These instructions are too long. Shorten them before using Magic Reply.")
                                 .font(.system(size: 13)).foregroundStyle(Theme.Ink.red)
                         } else {
                             Text("Saved automatically for every reply.")
@@ -44,7 +56,7 @@ struct DoubleTapPane: View {
                     VStack(alignment: .leading, spacing: 0) {
                         SettingsRow(title: "Your writing examples", subtitle: hasWritingExamples
                                     ? "A one-time snapshot you can inspect and edit."
-                                    : "Optional. Double Tap can use your instructions and visible conversation.") {
+                                    : "Optional. Magic Reply can use your instructions and visible conversation.") {
                             if hasWritingExamples {
                                 SettingsPillButton(title: "Show in Finder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([
@@ -74,7 +86,7 @@ struct DoubleTapPane: View {
                 SettingsGroup(label: "Drafting model", inset: 0) {
                     SettingsRow(title: provider.label,
                                 subtitle: provider == .sentient
-                                    ? "Model managed by Sentient. Separate from your main AI."
+                                    ? "Separate from your main AI."
                                     : draftingModel.isEmpty ? "Choose a model in AI Models & Accounts."
                                     : "Model: \(draftingModel). Separate from your main AI.") {
                         SettingsPillButton(title: "Change model…") {
@@ -107,30 +119,30 @@ struct DoubleTapPane: View {
             do {
                 try await WritingStyle.generateIfNeeded()
                 writingStatus = WritingStyle.exists() ? "Writing examples are ready."
-                    : "No sent examples were found in your selected sources. Double Tap still works with your conversation and instructions."
+                    : "No sent examples were found in your selected sources. Magic Reply still works with your conversation and instructions."
             } catch is CancellationError { }
             catch {
-                writingStatus = "Examples could not be collected. Check your selected sources and try again. Double Tap remains available."
+                writingStatus = "Examples could not be collected. Check your selected sources and try again. Magic Reply remains available."
             }
         }
     }
 }
 
-/// The single editor for Double Tap's provider, model, endpoint and Keychain credentials.
+/// The single editor for Magic Reply's provider, model, endpoint and Keychain credentials.
 struct DoubleTapModelSettings: View {
     @AppStorage(DoubleTapProvider.key) private var providerRaw = DoubleTapProvider.sentient.rawValue
     private var provider: DoubleTapProvider { DoubleTapProvider(rawValue: providerRaw) ?? .sentient }
 
     var body: some View {
-        ModelSelectionPanel(title: "Double Tap", subtitle: "Quick replies that sound like you.", centered: false) {
+        ModelSelectionPanel(title: "Magic Reply", subtitle: "Quick replies that sound like you.", centered: false) {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsRow(title: "Provider", subtitle: "Independent of your Sidekick model.") {
-                    SettingsMenu(title: "Double Tap provider", value: provider.label, selection: $providerRaw) {
+                    SettingsMenu(title: "Magic Reply provider", value: provider.label, selection: $providerRaw) {
                         ForEach(DoubleTapProvider.allCases) { provider in
                             Text(provider.label).tag(provider.rawValue)
                         }
                     }
-                    .frame(width: 200)
+                    .frame(width: 280)
                 }
                 SettingsHairline(opacity: 0.10)
                 VStack(alignment: .leading, spacing: 18) {
@@ -248,8 +260,8 @@ private struct DoubleTapCredentials: View {
                     SettingsProse("Enter a model ID from \(provider.name) that supports images and text replies.")
                 }
                 if provider.hasCustomEndpoint {
-                    SettingsProse("Choose a model with enough context for your knowledge base. If you use a local server, keep it running with the model loaded. Double Tap stops after 30 seconds.")
-                    Text("Saved automatically. Applies to the next Double Tap reply.")
+                    SettingsProse("Choose a model with enough context for your knowledge base. If you use a local server, keep it running with the model loaded. Magic Reply stops after 30 seconds.")
+                    Text("Saved automatically. Applies to the next Magic Reply reply.")
                         .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
                 } else {
                     SettingsProse("Usage is billed to your \(provider.name) account.")
@@ -306,7 +318,7 @@ private struct DoubleTapCredentials: View {
     }
 }
 
-#Preview("Double Tap") {
+#Preview("Magic Reply") {
     DoubleTapPane().background(Theme.bg).preferredColorScheme(.dark)
         .frame(width: 680, height: 740)
 }

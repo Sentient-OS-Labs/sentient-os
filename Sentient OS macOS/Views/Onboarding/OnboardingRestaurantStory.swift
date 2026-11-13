@@ -4,7 +4,6 @@ import Foundation
 
 enum OnboardingRestaurantStory {
     static let version = "restaurant-v2"
-    static let command = "finish this for me"
     static let duration: Double = 20
 
     enum Beat: String, CaseIterable {

@@ -58,7 +58,8 @@ enum ScreenCapture {
     /// One memory-only still of the selected document window, even if another app covers it.
     /// Without a window target, capture the chosen display excluding our transient overlays.
     @MainActor static func summaryImage(displayID: CGDirectDisplayID, windowPID: pid_t? = nil,
-                                        windowTitle: String? = nil, windowFrame: CGRect? = nil) async throws -> Data {
+                                        windowTitle: String? = nil, windowFrame: CGRect? = nil,
+                                        maxLongEdge: Int = 3_072) async throws -> Data {
         guard Permissions.hasScreenRecording() else { throw SummaryFailure.permission }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -95,7 +96,7 @@ enum ScreenCapture {
             let config = SCStreamConfiguration()
             let width = filter.contentRect.width * CGFloat(filter.pointPixelScale)
             let height = filter.contentRect.height * CGFloat(filter.pointPixelScale)
-            let scale = min(1, 3_072 / max(width, height, 1))
+            let scale = min(1, CGFloat(max(1, maxLongEdge)) / max(width, height, 1))
             config.width = max(1, Int(width * scale)); config.height = max(1, Int(height * scale))
             config.showsCursor = false
             config.ignoreShadowsSingleWindow = true
@@ -152,16 +153,29 @@ enum ScreenCapture {
     /// ONE display: the one under the cursor (Double Tap's proxy for keyboard focus), the main
     /// display when the cursor is on none. Same `screencapture` contract as `grab()`; the NSScreen
     /// order is only guaranteed to match `-D` for the main display (index 0 ↔ `-D 1`).
-    static func grabDisplayUnderCursor() async -> URL? {
+    /// Magic Reply supplies a remembered display ID: resolve it through ScreenCaptureKit instead
+    /// of guessing a screencapture index, and exclude the retracting notch from that image.
+    static func grabDisplayUnderCursor(displayID: CGDirectDisplayID? = nil) async -> URL? {
         guard Permissions.hasScreenRecording() else {
             CaptureDiagnostics(source: .display).record(.skipped, failure: .init(kind: .permission, code: nil, detail: .permissionDenied, stage: .appState), fields: ["sentient_screen_preflight": "false"])
             Log("📸 screenshot skipped — no Screen Recording grant")
             return nil
         }
-        let mouse = NSEvent.mouseLocation
-        let display = (NSScreen.screens.firstIndex { $0.frame.contains(mouse) } ?? 0) + 1
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("sentient-shot-\(UUID().uuidString).jpg")
+        if let displayID {
+            do {
+                let image = try await summaryImage(displayID: displayID, maxLongEdge: DoubleTap.screenshotLongEdge)
+                try Task.checkCancellation()
+                try image.write(to: url, options: .atomic)
+                return url
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                return nil
+            }
+        }
+        let mouse = NSEvent.mouseLocation
+        let display = (NSScreen.screens.firstIndex { $0.frame.contains(mouse) } ?? 0) + 1
         let ok = await capture(display: display, to: url)
         guard ok, FileManager.default.fileExists(atPath: url.path) else {
             try? FileManager.default.removeItem(at: url)

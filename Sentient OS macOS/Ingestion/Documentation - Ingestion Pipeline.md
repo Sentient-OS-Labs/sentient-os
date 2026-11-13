@@ -2,7 +2,7 @@
 
 The one on-device reading pipeline: **Connector → IterativeRun → CycleStore**. Every local source
 (Files, Apple Notes, SiYuan, WhatsApp, iMessage, Apple Mail, Apple Calendar) is a connector on this core. `ProcessingCoordinator` owns analysis independently of the visible window. Analyze Now, onboarding
-and the overnight scheduler submit work to the same owner; `ProcessingView` observes its progress.
+the overnight scheduler, and plugged-in idle scheduling submit work to the same owner; `ProcessingView` observes its progress.
 Timeline sources commit each survivor and progress marker together. Apple Mail has a dedicated checkpoint path; Apple Calendar commits
 an entire validated snapshot with its coverage checkpoint because events can change or disappear.
 
@@ -199,3 +199,12 @@ preserves the feedback list and invitation/lifetime-access records.
 ## Related docs
 
 `Engine/Documentation - On-Device Engine & Triage.md`, `Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md`, `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md`, `Proactive/Documentation - Proactive Intelligence.md` (the cycle tail), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`ProcessingView`).
+
+## Plugged-in idle continuation
+
+`PluggedInAnalysisScheduler` observes AC power, system idle time, sleep, and active Sidekick work.
+It submits to `ProcessingCoordinator`, which owns admission, cancellation, durable cadence and
+progress. The automatic cadence is four hours; an eligible session requires 270 seconds of idle
+time and the existing overnight-analysis setting. Active use or sleep suspends owned automatic
+work. Waiting does not acquire a wake assertion or arm a new wake. User-requested analysis keeps
+its own lifecycle. `Scripts/test_plugged_in_analysis.py` covers the shared scheduling policies.

@@ -113,3 +113,11 @@ physical keyboard or overnight-wake acceptance.
 See `Documentation - Sidekick - General.md`, `Documentation - Sidekick - Notch Window & Visual.md`,
 `Driver/Documentation - Native Computer Use.md`, `Ingestion/Documentation - Ingestion Pipeline.md`
 and `Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md`.
+
+## Input surfaces and work-window navigation
+
+Home and the notch retain independent unsent drafts while sharing submitted messages and task
+state. Clearing the conversation clears both drafts. A verified native state read can expose a
+run-owned work-window target; only the user's navigation action raises that window. Resolution
+failure does not block native tools. Final answers receive high presentation priority, with one
+terminal cue chosen from the committed result rather than duplicated completion notices.

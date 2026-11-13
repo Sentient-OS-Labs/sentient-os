@@ -13,7 +13,7 @@ nonisolated enum SummaryAccessibility {
         var windowTitle: String? = "Article"
         var windowFrame: CGRect? = nil
     }
-    enum Failure: Error { case permission, unavailable }
+    enum Failure: Error { case permission, unavailable, ownApplication }
     static func read(_ target: Target) throws -> SummarySource {
         if target.pid == 0 { throw Failure.unavailable }
         return SummarySource(text: "The complete offscreen article.", application: target.name, scope: "loaded document")
@@ -27,9 +27,11 @@ enum Permissions {
 }
 enum ScreenCapture {
     enum SummaryFailure: Error { case permission, capture, displayGone }
+    static var calls = 0
     static var result: Result<Data, Error> = .success(Data([1, 2, 3]))
     static func summaryImage(displayID: CGDirectDisplayID, windowPID: pid_t?, windowTitle: String?, windowFrame: CGRect?) async throws -> Data {
-        try result.get()
+        calls += 1
+        return try result.get()
     }
 }
 func Log(_ text: String) {}
@@ -62,6 +64,11 @@ func Log(_ text: String) {}
         check(choose([Window(id: 8, pid: 20, title: "Document", frame: frame)], "Document — Microsoft Edge") == 8,
               "full titles normalize a browser suffix")
 
+        Permissions.allowed = false
+        do { _ = try await SummaryCapture.capture(displayID: 1, target: .init(pid: getpid())); fatalError("self capture admitted") }
+        catch SummaryAccessibility.Failure.ownApplication { checks += 1 }
+        check(Permissions.requests == 0 && ScreenCapture.calls == 0, "self summary cannot request permission or take a screenshot")
+        Permissions.allowed = true
         let target = SummaryAccessibility.Target(pid: 20)
         let combined = try await SummaryCapture.capture(displayID: 1, target: target)
         check(!combined.text.isEmpty && combined.image == Data([1, 2, 3]), "normal capture keeps AX and screenshot")

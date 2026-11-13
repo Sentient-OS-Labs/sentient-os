@@ -28,7 +28,13 @@ final class CommandRunModel {
 
     static let offlineMessage = "You might be offline. Retrying..."
 
+    private(set) var activeWorkWindow: SidekickWorkWindow?
+    private(set) var workAppIdentifier: String?
+    private(set) var completionHasAnswer = false
+    private(set) var completionAppIdentifier: String?
     var isRunning = false
+    private var takeOverRunID: UUID?
+    var isTakingOver: Bool { isRunning && takeOverRunID == runID }
     /// A delivered final answer ends the visible work, not the executor's cleanup lock.
     /// New activity invalidates the claim in the conversation recorder.
     var hasDeliveredFinalAnswer: Bool {
@@ -119,6 +125,8 @@ final class CommandRunModel {
     }
 
     func start(_ text: String, mode: AgentMode, source: String = "command", retryContext: String = "",
+               takingOver: Bool = false,
+               actionContext: String = "",
                reply: SidekickConversationEvent.ReplyReference? = nil,
                preflight: (@MainActor () async throws -> Void)? = nil,
                onCompletion: ((Outcome) -> Void)? = nil) {
@@ -127,11 +135,14 @@ final class CommandRunModel {
         guard !task0.isEmpty else { return }
         guard prepareRecovery(context: retryContext, userRequest: task0, source: source, reply: reply, retry: { [weak self] guidance in
             self?.start(task0, mode: mode, source: source, retryContext: retryContext + guidance,
+                        takingOver: takingOver,
+                        actionContext: actionContext,
                         reply: reply, preflight: preflight, onCompletion: onCompletion)
         }) else { return }
         requestCompletion = onCompletion
         activeCardID = reply?.card?.cardID
         let generation = runID
+        takeOverRunID = takingOver ? generation : nil
         self.mode = mode
         self.source = source
         self.runStarted = Date()
@@ -146,8 +157,12 @@ final class CommandRunModel {
         remembering = nil
         rememberClear?.cancel()
         isPreparing = true
+        activeWorkWindow = nil
+        workAppIdentifier = nil
+        completionHasAnswer = false
+        completionAppIdentifier = nil
         isStarting = true
-        startupCaption = SidekickStartupCopy.choose(excluding: startupCaption)
+        startupCaption = takingOver ? "Taking it from here…" : SidekickStartupCopy.choose(excluding: startupCaption)
         statusLine = startupCaption
         watchConnectivity()
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
@@ -186,7 +201,7 @@ final class CommandRunModel {
                         try Task.checkCancellation()
                         let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
                                                         spoken: source == "voice", kbContext: kb,
-                                                        cardContext: cardContext)
+                                                        cardContext: cardContext, actionContext: actionContext)
                         Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
                         #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                                     // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
@@ -303,6 +318,11 @@ final class CommandRunModel {
             taskSummary: source == "proactive_card" ? nil : SidekickTaskSummary(),
             conversationRun: conversationTask,
             quickActions: makeQuickActions?(source),
+            onWorkWindow: { [weak self] target in
+                guard let self, self.runID == generation, self.isRunning else { return }
+                self.activeWorkWindow = target
+                if let identifier = target?.application.bundleID { self.workAppIdentifier = identifier }
+            },
             diagnosticTaskID: diagnosticTaskID, diagnosticAttempt: diagnosticAttempt) { [weak self] question in
             guard let self, self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
@@ -548,6 +568,7 @@ final class CommandRunModel {
         retryAction = nil; interaction = nil
         mode = .computer
         isDemo = true
+        takeOverRunID = runID
         isStarting = false
         isOffline = false
         statusClearTask?.cancel()
@@ -588,6 +609,8 @@ final class CommandRunModel {
     private func finish(_ end: SidekickTaskEnd, line: String, upgradeOffer: SidekickUpgradeOffer? = nil) {
         let outcome = end.outcome
         var completionOutcome = outcome
+        completionHasAnswer = false
+        completionAppIdentifier = workAppIdentifier
         // A path-monitor hint must not overwrite a successful result or disguise the
         // actual terminal error. "Retrying" is shown only while a run is still alive.
         var line = outcome == .stopped
@@ -603,6 +626,7 @@ final class CommandRunModel {
             let saved = conversation.finish(recording, outcome: .init(rawValue: outcome.rawValue) ?? .failed,
                 status: outcome == .stopped ? (stopCause == .user ? "[Stopped by user]" : "Stopped before completion") : line,
                 finalText: lastAttemptDetail)
+            completionHasAnswer = saved && recording.hasCompletionAnswer
             if saved, outcome == .success, !recoveryCancelled, source != "proactive_card" {
                 PersonalSetupProgress.recordSuccessfulTask()
             }
@@ -620,6 +644,8 @@ final class CommandRunModel {
         clearRemembering()
         isOffline = false
         statusLine = line
+        activeWorkWindow = nil
+        workAppIdentifier = nil
         isRunning = false
         isPreparing = false
         isStarting = false
@@ -630,8 +656,8 @@ final class CommandRunModel {
         requestCompletion = nil
         completion?(completionOutcome)
         if let retry = queuedRetry { queuedRetry = nil; retry(); return }
-        if outcome == .failed, !isDemo, !recoveryCancelled { presentFailure(line, upgradeOffer: upgradeOffer) }
-        else { onFinished?(outcome) }
+        if completionOutcome == .failed, !isDemo, !recoveryCancelled { presentFailure(line, upgradeOffer: upgradeOffer) }
+        else { onFinished?(completionOutcome) }
         statusClearTask?.cancel()
         statusClearTask = Task { [weak self] in
             // Failures hold longest — the ✗ line carries the give-up REASON and must be readable.
@@ -919,7 +945,7 @@ final class CommandRunModel {
     /// FrontierRun adds the per-run history snapshot through SidekickInteraction for every execution route.
     nonisolated static func commandPrompt(task: String, mode: AgentMode, screenshots: Int,
                                           spoken: Bool = false, kbContext: String = "",
-                                          cardContext: String = "") -> String {
+                                          cardContext: String = "", actionContext: String = "") -> String {
         let voiceLine = spoken
             ? "\nThe task above was spoken by me and transcribed with speech-to-text. Use common sense for anything that may have been mis-transcribed; but if picking the wrong reading could have a non-trivial outcome, don't act on a guess.\n"
             : ""
@@ -943,6 +969,7 @@ final class CommandRunModel {
         You are Sentient's Sidekick.
 
         THE REQUEST: \(task)
+        \(actionContext)
         \(voiceLine)\(screenLine)
         Use \(mode.promptPhrase) for steps that require inspecting or operating an app or website. If the request can be answered entirely from supplied context or reasoning without an app action, answer directly; do not invent a computer-use step or fail just because tools were unnecessary. When an app action is needed, drive the real apps and websites through the computer-use tools provided for this run. Do NOT fake app actions with AppleScript, osascript, or other GUI-scripting shortcuts.
 

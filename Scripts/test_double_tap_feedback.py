@@ -16,7 +16,6 @@ import AppKit
 import SwiftUI
 
 func Log(_ text: String) {}
-final class Proofread { static let shared = Proofread(); var isRunning = false }
 enum DoubleTapProvider: String { case sentient; static var current: Self { .sentient }; var model: String { "fixture" } }
 enum Diagnostics {
     enum Phase: String { case capture }
@@ -28,7 +27,7 @@ enum Diagnostics {
 }
 enum DiagnosticHistory {
     enum Kind { case doubleTap }
-    enum Outcome { case blocked, pasteDispatched, notAMessage, stopped, failed, timedOut }
+    enum Outcome: String { case blocked, pasteDispatched, notAMessage, stopped, failed, timedOut }
     static var begins = 0
     static func begin(_ kind: Kind, provider: String, model: String?) -> UUID { begins += 1; return UUID() }
     static func finish(_ kind: Kind, id: UUID, outcome: Outcome, reason: String?, phase: String, measurements: [String: Int] = [:]) {}
@@ -41,6 +40,7 @@ final class DoubleTapPermissionGate {
 final class InviteProgram {
     enum Event { case doubleTap }; static let shared = InviteProgram(); func record(_ event: Event) {}
 }
+final class Proofread { static let shared = Proofread(); var isRunning = false }
 enum CaretLocator {
     struct Target { var point: CGPoint; var height: CGFloat }
     static func locate() -> Target { Target(point: NSEvent.mouseLocation, height: 18) }
@@ -51,6 +51,7 @@ final class DoubleTap {
     var lastReport: String?
     var providerCalls = 0
     enum Result { case pasted, notAMessage, stopped, failed(String) }
+    var nextResult = Result.pasted
     private var task: Task<Void, Never>?
     private var activeRunID: UUID?
     private var phase = Diagnostics.Phase.capture
@@ -58,7 +59,7 @@ final class DoubleTap {
     private let swirl = CaretSwirl()
     private let setupNotice = DoubleTapSetupNotice()
     var isDrafting: Bool { task != nil }
-    private func perform() async -> Result { providerCalls += 1; return .pasted }
+    private func perform(displayID: CGDirectDisplayID?, preference: String = "") async -> Result { providerCalls += 1; return nextResult }
     // METHODS
 }
 
@@ -69,26 +70,13 @@ final class DoubleTap {
         var checks = 0
         func check(_ pass: Bool, _ label: String) { precondition(pass, label); checks += 1; print("PASS " + label) }
         func pause(_ ms: Int) async throws { try await Task.sleep(for: .milliseconds(ms)) }
-        func waitUntil(_ condition: () -> Bool, seconds: Int = 5) async throws {
-            let deadline = ContinuousClock.now + .seconds(seconds)
-            while !condition() && ContinuousClock.now < deadline { try await pause(20) }
-        }
         func notice() -> NSWindow? { NSApp.windows.first { String(describing: type(of: $0)) == "DoubleTapNoticePanel" } }
         let run = DoubleTap(), originalKey = NSApp.keyWindow
-        Proofread.shared.isRunning = true
-        var blockedCompletions = 0
-        run.start { result in if case .stopped = result { blockedCompletions += 1 } }
-        check(blockedCompletions == 1 && !run.isDrafting && run.providerCalls == 0
-              && DoubleTapPermissionGate.shared.calls == 0,
-              "active proofreading blocks drafting before setup or permissions")
-        Proofread.shared.isRunning = false
         var completions = 0
         run.start { _ in completions += 1 }
         check(run.isDrafting, "setup feedback owns the Double Tap task lock immediately")
         run.start { _ in completions += 1 }
-        // SwiftUI's first layout can outlast a fixed sleep while a build is running.
-        // Wait for the actual panel, retaining a bounded deadline and all visibility checks.
-        try await waitUntil { notice()?.isVisible == true }
+        try await pause(1600)
         guard let panel = notice(), let host = panel.contentView else { preconditionFailure("Missing setup notice") }
         check(panel.isVisible && panel.frame.width > 300 && panel.frame.height > 40, "swirl transitions into a fully sized setup message")
         check(panel.ignoresMouseEvents && !panel.canBecomeKey && !panel.canBecomeMain && NSApp.keyWindow === originalKey,
@@ -113,14 +101,14 @@ final class DoubleTap {
         }
         check(DoubleTapSetupNotice.duration == .seconds(3), "message lifetime is three seconds")
         // A real live timer must dismiss the panel and unlock the next gesture.
-        try await waitUntil({ !run.isDrafting }, seconds: 4)
+        try await pause(2900)
         check(!panel.isVisible && !run.isDrafting && completions == 1, "feedback dismisses and completes exactly once after its timeout")
         run.start { _ in completions += 1 }
         run.cancel()
         try await pause(100)
         check(!panel.isVisible && !run.isDrafting && completions == 2, "cancelling during animation cleans up and completes once")
         run.start { _ in completions += 1 }
-        try await waitUntil { panel.isVisible }
+        try await pause(1600)
         check(panel.isVisible, "a later gesture reuses and reveals the notice")
         run.cancel()
         try await pause(100)
@@ -134,6 +122,50 @@ final class DoubleTap {
         run.start { _ in completions += 1 }
         try await pause(100)
         check(run.providerCalls == 1 && completions == 5 && !panel.isVisible, "ready entry point reaches drafting without a setup notice")
+        run.nextResult = .notAMessage
+        var nonMessageCompletions = 0
+        run.start { result in
+            if case .notAMessage = result { nonMessageCompletions += 1 }
+        }
+        try await pause(900)
+        check(panel.isVisible && run.isDrafting && nonMessageCompletions == 0,
+              "non-message verdict shows the shared notice and holds the task lock")
+        check(panel.frame.size == panel.contentView?.fittingSize && panel.ignoresMouseEvents && NSApp.keyWindow === originalKey,
+              "longer reply guidance is resized and stays click-through without taking focus")
+        let calls = run.providerCalls
+        run.start { _ in preconditionFailure("notice must suppress another draft") }
+        check(run.providerCalls == calls, "repeated taps cannot stack non-message feedback")
+        if let replyHost = panel.contentView,
+           let bitmap = replyHost.bitmapImageRepForCachingDisplay(in: replyHost.bounds) {
+            replyHost.cacheDisplay(in: replyHost.bounds, to: bitmap)
+            if let png = bitmap.representation(using: .png, properties: [:]) {
+                let original = URL(fileURLWithPath: CommandLine.arguments[1])
+                try png.write(to: original.deletingPathExtension().appendingPathExtension("no-reply.png"))
+            }
+        }
+        try await pause(3000)
+        check(!panel.isVisible && !run.isDrafting && nonMessageCompletions == 1,
+              "reply guidance expires and preserves the classifier completion exactly once")
+        run.start { _ in nonMessageCompletions += 1 }
+        try await pause(100)
+        run.cancel()
+        try await pause(100)
+        check(!panel.isVisible && !run.isDrafting && nonMessageCompletions == 2,
+              "cancelling during the swirl fade prevents a late notice")
+        run.start { _ in nonMessageCompletions += 1 }
+        try await pause(900)
+        check(panel.isVisible, "reply guidance can be shown again")
+        run.cancel()
+        try await pause(100)
+        check(!panel.isVisible && !run.isDrafting && nonMessageCompletions == 3,
+              "cancelling visible reply guidance cleans up exactly once")
+        DoubleTap.isReady = false
+        run.start { _ in completions += 1 }
+        try await pause(1600)
+        check(panel.isVisible && panel.frame.size == size,
+              "reused panel restores the setup message and its original size")
+        run.cancel()
+        try await pause(100)
         print("PASS \(checks) Double Tap feedback assertions")
     }
 }

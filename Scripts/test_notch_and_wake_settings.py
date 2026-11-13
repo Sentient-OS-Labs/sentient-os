@@ -29,7 +29,9 @@ enum LoginItem {
 }
 enum AppState { static let onboardingKey = "fixture.onboarded" }
 enum WakeHelperConfig { static let maxAwakeSeconds = 7200 }
-enum CodexTrigger { case onboarding, analyzeNow, overnight }
+enum ProactiveCycle { static let lastCycleKey = "fixture.lastCycle" }
+enum CodexTrigger { case onboarding, analyzeNow, overnight, pluggedInIdle }
+enum PluggedInAnalysisScheduler { static let interval = 14400.0 }
 enum ModelBackend: String { case chatgpt; static let current = Self.chatgpt }
 enum DiagnosticHistory {
     enum Kind { case overnight }
@@ -81,8 +83,14 @@ final class ProcessingCoordinator {
     enum Timing { case now, overnight }
     enum State { case idle, scheduled }
     enum Block: String { case battery }
-    enum Wait: Equatable { case power(Block), model, sources }
+    enum Wait: Equatable { case power(Block), model, sources, idle }
     var record = ProcessingPlan.Record() { didSet { ProcessingPlan.save(record, to: Fixture.defaults) } }
+    var hasAutomaticContinuation: Bool { false }
+    func reconcileAnalysisClock(now: Date) {}
+    func exhaustAutomaticBudgetIfNeeded(now: Date = Date()) -> Bool { false }
+    var cadence = ProcessingPlan.Cadence()
+    enum Stop { case activity }
+    func stop(_ reason: Stop) {}
     var state = State.idle
     var initialComplete = true
     var isBusy = false
@@ -118,25 +126,25 @@ final class ProcessingCoordinator {
 
 // Replace screen geometry and panel IO, while compiling actual production hover/passthrough methods.
 enum NotchPhase { case hidden, opening, typing, running, listening, transcribing, recovery, message }
-final class PointerPanel { var ignoresMouseEvents = true }
+final class PointerPanel { var ignoresMouseEvents = true; var isVisible=false;var frame=NSRect.zero }
+final class PointerEntry {let panel=PointerPanel();var displayID:UInt32=0;var isIsland=false}
+final class PointerOperation {var isTracking=false;var isRunning=false}
 final class PointerRecovery { func setHovering(_ value: Bool) {} }
 final class PointerRun { let recovery = PointerRecovery() }
-final class PointerPress { var isTracking = false }
-final class PointerProofread { var isRunning = false }
-final class EntryPanel { var isVisible = false; var frame = NSRect.zero }
-final class EntryHandle { let panel = EntryPanel(); var isIsland = false; var displayID: UInt32 = 0 }
 final class PointerCoordinator {
     var phase = NotchPhase.hidden
     var notchButtonAvailable = true
+    var notchDismissalPreview = false
     let run = PointerRun()
-    let notchPress = PointerPress()
-    let proofread = PointerProofread()
+    let notchPress=PointerOperation(),proofread=PointerOperation()
     func setMessagePreviewHovering(_ value: Bool) {}
 }
 final class PointerProbe {
-    var entryHandles: [UInt32: EntryHandle] = [:]
+
     let coordinator = PointerCoordinator()
     var panel: PointerPanel? = PointerPanel()
+    var entryHandles:[UInt32:PointerEntry]=[:]
+    var metricsDisplayID:UInt32?=nil
     var hovering = false
     var notchClickEnabled = true
     var cursorInside = true
@@ -144,11 +152,13 @@ final class PointerProbe {
     static let pollFar = 0.1
     let nearZone = NSRect(x: 0, y: 0, width: 100, height: 40)
     var hoverEntryRect = NSRect(x: 0, y: 0, width: 100, height: 40)
+    var externalBarEnabled = true
+    func allowsRestingBar(on displayID:UInt32)->Bool { externalBarEnabled || displayID == 1 }
     func retuneMouseTimer() {}
-    func beginHover(on displayID: UInt32? = nil) { hovering = true }
+    func beginHover(on displayID:UInt32? = nil) { hovering = true }
     func endHover() { hovering = false; panel?.ignoresMouseEvents = true }
     func cursorNearNotch() -> Bool { cursorInside }
-    func cursorOverSilhouette() -> Bool { cursorInside }
+    func cursorOverSilhouette(at location:NSPoint? = nil) -> Bool { cursorInside }
     func cursorStillHovering() -> Bool { cursorInside }
     // PRODUCTION_POINTER_METHODS
 }
@@ -181,6 +191,10 @@ TESTS = r'''
         check(!NotchPreferences.clickEnabled(in: d), "idle notch click opt-out persists")
         d.set(true, forKey: NotchPreferences.clickEnabledKey)
         check(NotchPreferences.clickEnabled(in: d), "click affordance can be restored")
+        check(NotchPreferences.externalBarEnabled(in:d), "external bar is visible by default")
+        d.set(false,forKey:NotchPreferences.externalBarEnabledKey)
+        check(!NotchPreferences.externalBarEnabled(in:d), "external bar can be disabled independently")
+        check(NotchPreferences.clickEnabled(in:d), "external bar setting preserves notch click preference")
         let pointer = PointerProbe()
         pointer.notchClickEnabled = false
         pointer.hoverMouseMoved(at: NSPoint(x: 50, y: 10))

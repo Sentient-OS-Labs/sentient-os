@@ -639,7 +639,7 @@ struct ProcessingView: View {
             }
             Text(CodexAuth.knowledgeBaseOnly ? "Your main window is ready to use." : "Sidekick is ready to use in your main window.")
                 .font(.system(size: 13)).foregroundStyle(Theme.faint)
-            if state == .scheduled || state == .idle {
+            if state == .scheduled || state == .idle || state == .waiting(.idle) {
                 OnboardingNextButton(title: "Start now") { session.requestNow() }
                     .disabled(session.isBusy || session.isSuspended)
                     .accessibilityIdentifier("analysis.startNow")

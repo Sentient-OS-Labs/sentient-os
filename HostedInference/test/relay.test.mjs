@@ -19,7 +19,7 @@ test('composed relay preserves real legacy health, auth, drafting stream and cou
   assert.equal((await gateway.fetch(new Request('https://fixture/v1/draft',{method:'POST',body:'{}'}),env,{})).status,401);
   const original=globalThis.fetch;
   try{
-    globalThis.fetch=async(url,options)=>{upstreamCalls++;assert.equal(url,'https://api.openai.com/v1/responses');assert.equal(options.headers.authorization,'Bearer fixture-openai');return new Response('data: fixture\n\n');};
+    globalThis.fetch=async(url,options)=>{upstreamCalls++;assert.equal(url,'https://api.openai.com/v1/responses');assert.equal(options.headers.authorization,'Bearer fixture-openai');const body=JSON.parse(options.body);assert.equal(body.model,env.MODEL);assert.equal(body.reasoning.effort,'low');return new Response('data: fixture\n\n');};
     const result=await gateway.fetch(new Request('https://fixture/v1/draft',{method:'POST',headers:{authorization:'Bearer '+'a'.repeat(64)},body:JSON.stringify({image:'AAAA',knowledgeBase:'Synthetic fixture'})}),env,{});
     assert.equal(result.status,200);assert.equal(await result.text(),'data: fixture\n\n');assert.equal(result.headers.get('x-relay-model'),'fixture-model');
     assert.equal(upstreamCalls,1);assert.equal(objects.size,2);assert.equal(hostedCalls,0);

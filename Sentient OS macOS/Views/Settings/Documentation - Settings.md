@@ -36,9 +36,11 @@ gate remains above the transition.
 | `SourcesPane.swift` | Knowledge Sources. |
 | `ConnectorsSection.swift` · `ConnectorConnectSheet.swift` | Connector catalog and account popups. Notion and Granola connect after browser sign-in and a native account check. Tool classification waits until use, and curated knowledge selection is available immediately. |
 | `../ModelSelectionDesign.swift` | Shared animated capsule selectors, centered headings, and atmospheric account panels. |
-| `FrontierModelPane.swift` | AI Models & Accounts: Main AI / Double Tap sections, provider choice and sign-in. |
-| `DoubleTapPane.swift` | Double Tap activation, writing instructions/examples, and the shared `DoubleTapModelSettings` editor used in AI Models & Accounts. |
-| `ProactivePane.swift` | Sidekick activation, instructions, and speed. |
+| `FrontierModelPane.swift` | AI Models & Accounts: Main AI / Magic Reply sections, provider choice and sign-in. |
+| `DoubleTapPane.swift` | Magic Reply shortcut guide, activation, writing instructions/examples, and the shared `DoubleTapModelSettings` editor used in AI Models & Accounts. |
+| `MagicReplyShortcutGuide.swift` | Reuses the onboarding keyboard, serif instruction and glow for Right Command and Right Option. Custom bindings show “Double tap your Sentient key.” |
+| `NotchShortcutsPane.swift` | Shared keyboard shortcut, notch click and appearance controls, physical tap actions and sensitivity. |
+| `ProactivePane.swift` | Sidekick instructions and speed. |
 | `OvernightPane.swift` | Overnight timing, wake readiness, suggestion instructions, and notifications. |
 | `NotificationPermissionSetting.swift` | Shared notification status and permission actions. |
 | `ShareKnowledgePane.swift` | Knowledge Sharing. |
@@ -100,8 +102,12 @@ Onboarding shows only the main-provider selector, never Double Tap model control
 `MainNavigation.modelSettingsSection` is session-only. Explicit Main AI deep links select Main AI;
 Double Tap's Change model action opens the Double Tap section. Reset clears that selection.
 
-**Double Tap.** Activation exposes the same shared shortcut as Sidekick, followed by writing
-instructions and examples. Change model opens AI Models & Accounts → Double Tap. Its independent
+**Notch & Shortcuts.** The first App section owns the shared keyboard shortcut, notch clicking,
+compact mode, physical taps, second-tap action, and tap sensitivity. Existing preference keys
+and live notification handlers follow the controls to this page.
+
+**Magic Reply.** The keyboard illustration links to Notch & Shortcuts for customization. Writing
+instructions and examples follow it. Change model opens AI Models & Accounts → Magic Reply. Its independent
 drafting-provider selection supports: covered Sentient route, OpenAI, OpenRouter,
 Ollama, LM Studio, or another compatible endpoint. Custom endpoints expose API format and model
 controls; API keys are stored in Keychain. Custom reply instructions shape the draft.
@@ -109,13 +115,11 @@ controls; API keys are stored in Keychain. Custom reply instructions shape the d
 snapshot exists, **Collect examples** explicitly retries collection from eligible selected sources.
 No eligible examples leaves the file absent. Double Tap remains available with conversation, knowledge
 and custom instructions; existing files, including deliberately empty ones, are never replaced.
-The info explanation leads with fast, covered drafts and explains the default OpenAI API Zero Data
+The info explanation names GPT-6.1 Sol for covered drafts and explains the default OpenAI API Zero Data
 Retention route, the screenshot/knowledge context and the unsent result. See the Double Tap guide.
 
-**Sidekick.** Activation (the shared shortcut and notch toggle), custom instructions, and speed.
-The key (right ⌘ / right ⌥ / another modifier) is shared with Double Tap and edits the same preference
-from either page, posting `.sidekickHotkeyChanged` to re-key the live monitor. Controls retain
-the standing Sidekick context (`sidekick.context`, fed to the command
+**Sidekick.** Custom instructions and speed. The shared key is configured in Notch & Shortcuts.
+Controls retain the standing Sidekick context (`sidekick.context`, fed to the command
 prompt), and the **Speed vs Intelligence** slider (`ComputerUseSpeed`, read fresh per computer-use
 run: on Codex, Faster / Medium / Smarter → GPT-6 Sol low / GPT-6 Astra low / GPT-6 Astra medium; on the Claude engine the tier
 picks the model too — sonnet·low / sonnet·medium / opus·medium, with the honest model named in the readout;
@@ -167,7 +171,7 @@ The **overnight wake time** defaults to 3 AM and uses local wall-clock time. It 
 or developer schedule through the existing loop, never interrupt an active overnight analysis, and
 do not enable scheduling when it is off. The Analysis popover reflects the selected time.
 
-Under **Sidekick**, **Open Sidekick by clicking the notch** controls only the idle hover
+Under **Notch & Shortcuts**, **Open quick access by clicking the notch** controls only the idle hover
 and click affordance (`sidekick.notchClickEnabled`, default true). Turning it off immediately releases
 an idle hover and leaves the notch available to other apps. Keyboard shortcuts and active Sidekick
 panels, questions and messages keep their normal behavior; no restart is needed.
@@ -251,3 +255,15 @@ success note. Interrupted focus/Space checks remain retryable. Report review, lo
 explicit Supabase send are available afterward; no upload occurs just by running the check.
 Permission checks never reset TCC or automatically regrant access. Changing engines prepares
 the selected dependency without rewriting Codex configuration or login.
+
+### Notch touch calibration
+
+**Notch & Shortcuts → Touch your notch!** starts with the physical-tap switch and sensor-location
+diagram. The optional calibration row below the action and sensitivity settings opens its own window.
+Physical taps default to enabled with Standard tuning and honor the saved on/off preference.
+Optional calibration records a quiet baseline, five taps and two finger passes, then saves the
+strictest passing sensitivity. Failed or cancelled runs preserve the existing tuning. The
+sensitivity picker always offers Gentle, Standard and Firm, independently of calibration.
+Close notch is the default second action; the user can explicitly choose Take Over or another
+action. Accepted physical taps have a 300 ms debounce. See `Documentation - Physical Screen Tap.md`
+for recording integrity and separation checks.

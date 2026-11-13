@@ -67,7 +67,10 @@ final class ScribeRealtimeConnection {
             URLQueryItem(name: "commit_strategy", value: "manual"),
             URLQueryItem(name: "language_code", value: Locale.preferredLanguages.first.flatMap { Locale(identifier: $0).language.languageCode?.identifier } ?? "en"),
             URLQueryItem(name: "enable_logging", value: zeroRetention ? "false" : "true")]
-        url.queryItems! += ["summarise", "summarize", "proofread", "sentient os", "sentient", "jesai"].map { URLQueryItem(name: "keyterms", value: $0) }
+        url.queryItems! += [
+            "summarise", "summarize", "proofread", "sentient os", "sentient", "jesai",
+            "take over", "finish this for me", "proofread this", "summarize this", "summarise this", "reply", "reply to this", "Magic Reply", "Sidekick", "Double Tap"
+        ].map { URLQueryItem(name: "keyterms", value: $0) }
         // A token is opaque. Preserve literal '+' with servers that parse form-style queries.
         url.percentEncodedQuery = url.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         let configuration = URLSessionConfiguration.ephemeral

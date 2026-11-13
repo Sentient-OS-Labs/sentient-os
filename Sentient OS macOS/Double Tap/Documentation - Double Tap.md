@@ -1,4 +1,4 @@
-# Double Tap: a reply in your voice
+# Magic Reply: a reply in your voice
 
 Double tap your Sidekick key, **right Command by default**, with a reply field focused. Sentient reads
 what is on screen, draws on your knowledge and writing examples, and pastes an **unsent draft** for
@@ -9,29 +9,30 @@ already discussed elsewhere. Double Tap is designed for these everyday replies: 
 supplies the immediate question, your knowledge supplies useful context, and your writing examples
 help the reply sound like you. It should use supported facts, not invent an answer to fill a gap.
 
-## Finding Double Tap
+## Entry points and readiness
 
-Home keeps a **Double Tap** button beside Analysis. It opens a short lesson showing the currently
-configured key; it does not capture or draft anything. Double Tap is ready after initial analysis or
-when a populated knowledge base already exists, including one copied from another Mac. Without either,
-the lesson explains setup and links to analysis progress. Once the analysis milestone is saved, a gentle ready
-hint waits for the next visible Home visit and is acknowledged once per initial-analysis completion.
-If the user leaves before seeing the full hint, it stays pending. The demonstration uses two small
-key presses, with a static equivalent for Reduce Motion and Low Power Mode.
+The interface calls this feature **Magic Reply**. Double-tap the configured Sidekick key, use
+Magic Reply in the notch, or make an explicit reply request. The notch route releases its own
+keyboard focus before starting the shared drafting run. Settings → Magic Reply contains the
+provider, writing examples and instructions; Settings → Notch & Shortcuts changes the shared key.
+The onboarding lesson demonstrates an unsent reply with fictional content and no provider call.
 
-An imported vault belongs at `~/Sentient OS - Knowledge Base/`. A readable, nonempty Markdown note
-within the draft size budget is enough; an empty folder or writing samples alone are not. Readiness
-is checked on each gesture, and Home refreshes while visible, so importing does not require a restart.
-This never marks analysis or personal setup as completed. Onboarding must still admit the user to Home,
-and the normal Accessibility, Screen Recording and provider checks still apply.
+Direct drafting requires completed initial analysis or a readable, nonempty imported knowledge
+note within the context budget. Writing samples alone do not satisfy readiness. This never marks
+analysis as complete or changes source consent. Missing setup gets a bounded pointer-following
+notice without capture or inference. Accessibility, Screen Recording and provider checks apply.
+
+The agent-facing `magic_reply` tool uses the same inference engine but returns draft text with
+`applied: false` and `sent: false`. The agent displays or inserts it through its ordinary verified
+editing tools. Every route leaves sending to the user.
 
 ## Your drafting provider
 
 Double Tap has its **own provider setting**, independent of Sidekick and proactive intelligence.
-Open **Settings → Double Tap** to choose the provider, model, custom reply instructions, and writing
+Open **Settings → Magic Reply** to choose the provider, model, custom reply instructions, and writing
 examples.
 
-To keep Double Tap responsive, the default route uses the OpenAI API with **Zero Data Retention**,
+To keep Double Tap responsive, the default route uses **GPT-6.1 Sol** through the OpenAI API with **Zero Data Retention**,
 covered by Sentient for our first users. No API key is needed. A screenshot of the display under your
 pointer, your knowledge base including selected one-time writing examples, and your instructions pass
 through Sentient's relay to generate the draft. This is cloud drafting; the local understanding stage
@@ -59,12 +60,12 @@ analysis does not currently supply this writing-style collector.
 Unavailable sources are omitted from the setup selection. No eligible sent examples leaves the
 snapshot absent; automatic setup never publishes an empty file that would prevent later collection.
 A read failure or changed selection never publishes a partial file. While no snapshot exists, a new
-source/consent identity can trigger another idle attempt; Settings → Double Tap → Collect examples
+source/consent identity can trigger another idle attempt; Settings → Magic Reply → Collect examples
 provides an explicit retry using only the currently selected, connected sources.
 
 **Sentient does not continuously collect new writing-style examples.** If the file already exists,
 setup leaves it alone, and knowledge updates preserve your edits. Use **Show writing examples in
-Finder** in Settings → Double Tap to inspect or edit the snapshot anytime. It is not listed as an
+Finder** in Settings → Magic Reply to inspect or edit the snapshot anytime. It is not listed as an
 ordinary note in the Knowledge window's tree. Existing empty files are preserved too, because Sentient
 cannot infer whether the user intentionally emptied them. Removing the file allows setup again.
 
@@ -93,9 +94,15 @@ style; writing samples are examples of voice, not instructions or current facts.
    complete writing snapshot. README comes first, followed by other notes in path order. Hidden files,
    symbolic links and paths outside the knowledge folder are excluded. An oversized snapshot fails
    with an explanation rather than silently dropping writing examples.
-5. The chosen endpoint receives the instructions, packed context and image. The prompt asks for a
+5. The chosen endpoint receives the instructions, packed context and image. Direct connections to
+   the covered relay use the system curl over HTTP/2/TCP, with TLS verification, a 25-second bound,
+   and temporary request files in an owner-only directory that is removed when the call finishes.
+   This avoids intermittent QUIC upload stalls observed with fresh URLSession connections.
+   Direct providers, local development relays and system-proxy routes retain URLSession. The prompt asks for a
    reply only when a suitable conversation and focused reply field are visible. `NOT_A_MESSAGE`
-   produces no paste.
+   shows “Couldn’t find a reply box. Use Magic Reply to respond to a message or email.” after
+   the swirl fades. This uses the same three-second, pointer-following notice as setup guidance.
+   The draft lock stays held until the notice dismisses, and cancellation dismisses it promptly.
 6. The caret feedback animates while drafting. A successful reply is pasted with Command-V, never
    sent. The previous text clipboard value is restored after the paste delay only if the clipboard still belongs to that paste; this is not a general
    preservation guarantee for every clipboard format. Temporary screenshot files are removed.
@@ -111,13 +118,13 @@ The current interface uses feedback at the caret, not a separate notch task with
 | `DoubleTap.swift` | Hotkey coordination, setup gates, screenshot, deadline, feedback and paste. |
 | `DoubleTapInference.swift` | Context packing, prompt, streaming API calls, response validation and relay identity. |
 | `DoubleTapKnowledge.swift` | Readiness from readable, nonempty imported notes without changing analysis history. |
-| `DoubleTapSetupNotice.swift` | Three-second, click-through setup explanation that follows the mouse. |
+| `DoubleTapSetupNotice.swift` | Three-second, click-through setup and reply-box explanations that follow the mouse. |
+| `DoubleTapRelayTransport.swift` | Bounded HTTP/2 transport for direct covered-relay requests, with system-proxy fallback. |
 | `DoubleTapProvider.swift` | Independent provider, endpoint, API format, model and Keychain preferences. |
 | `WritingStyleSetupView.swift` | The setup surface when writing examples are needed. |
 | `../Vault/WritingStyle.swift` | One-time sample collection and snapshot preservation. |
 | `../Views/Settings/DoubleTapPane.swift` | Provider controls, reply instructions, privacy explanation and Finder access. |
-| `../Views/Onboarding/OnboardingDoubleTapView.swift` | The introductory Double Tap lesson. |
-| `../Views/HomeShortcuts.swift` | The ongoing Home affordance, current-key lesson, and one-shot ready hint. |
+| `../Views/Onboarding/OnboardingMagicReplyView.swift` | The introductory Magic Reply lesson. |
 
 Provider/model defaults and context limits belong in the source rather than a dated benchmark table.
 The relay owns the covered model choice. Text precedes the screenshot in requests; supported OpenAI

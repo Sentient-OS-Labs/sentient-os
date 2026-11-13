@@ -21,6 +21,7 @@ nonisolated final class SidekickInteraction: Sendable {
     let taskSummary: SidekickTaskSummary?
     let conversationRun: SidekickConversationRun?
     let quickActions: SidekickQuickActions?
+    let onWorkWindow: (@MainActor @Sendable (SidekickWorkWindow?) -> Void)?
     let computerUseCheckConsent = ComputerUseDiagnosticConsent()
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
@@ -51,8 +52,10 @@ nonisolated final class SidekickInteraction: Sendable {
          taskSummary: SidekickTaskSummary? = nil,
          conversationRun: SidekickConversationRun? = nil,
          quickActions: SidekickQuickActions? = nil,
+         onWorkWindow: (@MainActor @Sendable (SidekickWorkWindow?) -> Void)? = nil,
          diagnosticTaskID: UUID = UUID(), diagnosticAttempt: Int = 1,
          request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
+        self.onWorkWindow = onWorkWindow
         self.diagnosticTaskID = diagnosticTaskID; self.diagnosticAttempt = diagnosticAttempt
         self.retryContext = retryContext; self.historyContext = historyContext; self.request = request
         self.instructionsSnapshot = instructionsSnapshot; self.personalization = personalization

@@ -44,7 +44,7 @@ struct OvernightPane: View {
 
     private var scheduleCard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Toggle("Overnight analysis", isOn: Binding(
+            Toggle("Automatic analysis", isOn: Binding(
                 get: { overnightRequested },
                 set: { appState.scheduler.setEnabled($0) }))
                 .font(.system(size: 17, weight: .medium))
@@ -56,6 +56,10 @@ struct OvernightPane: View {
                 .foregroundStyle(Theme.Ink.body)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings.overnightStatus")
+            Text("While plugged in, analysis starts every four hours when you’ve been away for 4½ minutes. It pauses when you return and resumes when you’re away again. Your Mac can sleep between runs.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
             SettingsHairline(opacity: 0.07)
             HStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -97,7 +101,7 @@ struct OvernightPane: View {
     }
 
     private var scheduleStatus: String {
-        if !overnightRequested { return "Turn on to keep your knowledge up to date overnight." }
+        if !overnightRequested { return "Turn on to update your knowledge while you’re away and overnight." }
         if appState.processing.paused { return "Analysis is paused. Resume it in Analysis to schedule the next wake." }
         if !appState.hasCompletedPersonalSetup { return "Finish personal setup to start overnight analysis." }
         if let next = appState.scheduler.nextWakeAt {

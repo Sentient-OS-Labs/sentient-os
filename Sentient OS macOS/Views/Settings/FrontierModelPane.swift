@@ -18,7 +18,7 @@ struct FrontierModelPane: View {
                                       subtitle: "Your most intelligent AI clicks around for Sidekick and other frontier work.")
                 ModelChoiceBar(items: [
                     ModelChoiceItem(id: Section.main.rawValue, title: "Main AI", symbol: "sparkles"),
-                    ModelChoiceItem(id: Section.doubleTap.rawValue, title: "Double Tap", symbol: "hand.tap")
+                    ModelChoiceItem(id: Section.doubleTap.rawValue, title: "Magic Reply", symbol: "touchid")
                 ], selection: navigation.modelSettingsSection.rawValue) { raw in
                     if let section = Section(rawValue: raw) { navigation.modelSettingsSection = section }
                 }
@@ -31,7 +31,7 @@ struct FrontierModelPane: View {
                         SettingsProse(PrivacyCopy.customProvider)
                     }
                 } else {
-                    SettingsProse("This model drafts your Double Tap replies. Changing it does not change the main AI.")
+                    SettingsProse("This model drafts your Magic Reply replies. Changing it does not change the main AI.")
                     DoubleTapModelSettings()
                 }
             }

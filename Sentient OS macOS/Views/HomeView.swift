@@ -90,7 +90,6 @@ struct HomeView: View {
     @State private var letter: Briefing?
     @State private var letterShown = false
     @State private var showAnalysis = false
-    @State private var showDoubleTap = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
@@ -203,7 +202,7 @@ struct HomeView: View {
             .background {
                 SidekickOverviewScroll(
                     enabled: isPresented && !kbOnly && !inConversation && !needsPersonalSetup
-                        && !letterShown && !showAnalysis && !showDoubleTap,
+                        && !letterShown && !showAnalysis,
                     activeRect: layout.region, onProgress: followOverviewScroll,
                     onSettle: settleOverviewScroll, onCollapse: dockOverviewFromScroll)
             }
@@ -218,7 +217,7 @@ struct HomeView: View {
         .background(SidekickStyle.base)
         .preferredColorScheme(.dark)
         .tint(SidekickStyle.accent)
-        .background(SidekickWindowPresence { active in
+        .background(SidekickWindowPresence(requiresKeyWindow: true) { active in
             presentation.windowActive = active
             updateConversationVisibility()
         })
@@ -238,7 +237,7 @@ struct HomeView: View {
             caution = OvernightCaution.latest()
             probeHealth()
         }
-        .onDisappear { conversation.isVisible = false }
+        .onDisappear { conversation.isVisible = false; appState.commandCoordinator.homeWindowFocused = false }
         .onChange(of: presentation.surface) { _, surface in
             if surface == .suggestions { overviewPull = 0; gatheringFromScroll = false }
             updateConversationVisibility()
@@ -272,7 +271,6 @@ struct HomeView: View {
                 probeHealth()
             } else {
                 showAnalysis = false
-                showDoubleTap = false
                 showCodexSignIn = false
                 selectedPersonalFeature = nil
             }
@@ -370,7 +368,7 @@ struct HomeView: View {
                             .opacity(inConversation ? 0 : (reducedMotion ? 1 : max(0, 1 - overviewPull / 60)))
                             .blur(radius: inConversation && !reducedMotion ? 6 : 0)
                             .offset(y: reducedMotion ? 0 : (inConversation ? -8 : -min(8, overviewPull * 0.15)))
-                            .allowsHitTesting(false).accessibilityHidden(inConversation)
+                            .allowsHitTesting(!inConversation && overviewPull == 0).accessibilityHidden(inConversation)
                     } else { Spacer(minLength: 0) }
                     if !inConversation || hasCriticalCaution {
                         cautionBanner.frame(maxWidth: min(480, size.width * 0.48))
@@ -382,13 +380,6 @@ struct HomeView: View {
             chromeHeight = value
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var discoveryActive: Bool {
-        isPresented && presentation.windowActive && !letterShown && !showAnalysis
-            && !showCodexSignIn && !showWhatsAppPicker && !showIMessagePicker
-            && !showGmailConnect && !showCalendarConnect && !showAppleMailPicker
-            && !presentation.clearChatConfirmationShown && !appState.commandCoordinator.run.recovery.isPending
     }
 
     private func topBar(compact: Bool) -> some View {
@@ -409,19 +400,12 @@ struct HomeView: View {
                     .keyboardShortcut("f", modifiers: .command)
                 SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
             }
-            if !kbOnly {
-                HomeDoubleTapButton(active: discoveryActive, presented: $showDoubleTap,
-                                    needsPersonalSetup: needsPersonalSetup,
-                                    onFinishSetup: finishPersonalSetup) {
-                    openWindow(id: ProcessingWindowView.windowID)
-                }.zIndex(1)
-            }
             NavItem(title: compact ? nil : (appState.processing.isBusy ? "Analyzing" : "Analysis"), icon: "waveform.path",
                     dot: appState.processing.needsAttention ? Theme.Ink.amber
                         : (appState.processing.initialComplete ? Theme.Ink.green : GlowHalo.stops[4]),
                     emphasized: !needsPersonalSetup && !appState.processing.initialComplete,
                     animateEmphasis: isPresented && presentation.windowActive && !inConversation
-                        && !showAnalysis && !showDoubleTap && !letterShown && !reducedMotion) { showAnalysis = true }
+                        && !showAnalysis && !letterShown && !reducedMotion) { showAnalysis = true }
                 .accessibilityIdentifier("navigation.analysis")
                 .accessibilityLabel(appState.processing.isBusy ? "Analyzing" : "Analysis")
                 .help("Check analysis status")
@@ -480,7 +464,7 @@ struct HomeView: View {
                 .display(27)
                 .foregroundStyle(Theme.Ink.statusInk)
             if !appState.processing.initialComplete || appState.processing.isBusy || appState.processing.needsAttention {
-                Button { openWindow(id: ProcessingWindowView.windowID) } label: {
+                Button { showAnalysis = true } label: {
                     HStack(spacing: 6) {
                         Text(appState.processing.statusLine)
                         Image(systemName: "arrow.up.right").font(.system(size: 9))
@@ -488,6 +472,7 @@ struct HomeView: View {
                     .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("analysis.home.status")
+                .help("Open analysis status")
             } else {
                 Text(model.entries.isEmpty ? "A little help, whenever you need it." : "A few things to make your day easier.")
                     .font(.system(size: 12.5)).foregroundStyle(SidekickStyle.secondary)
@@ -1111,6 +1096,7 @@ struct HomeView: View {
         }
     }
     private func updateConversationVisibility() {
+        appState.commandCoordinator.homeWindowFocused = isPresented && presentation.windowActive
         let visible = isPresented && presentation.windowActive && inConversation && selectedPersonalFeature == nil
         if conversation.isVisible != visible { conversation.isVisible = visible }
         if visible && appState.commandCoordinator.run.recovery.isVisible { appState.commandCoordinator.run.recovery.dismiss() }

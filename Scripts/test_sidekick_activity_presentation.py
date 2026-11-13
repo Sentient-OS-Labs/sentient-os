@@ -51,6 +51,10 @@ typealias Presentation = SidekickActivityPresentation
                       "named app resolves the same brand icon across provider spellings")
             }
         }
+        check(Presentation.islandAction(one("sentient_native.get_app_state", args: json(["app":"Notes"]))) == "Looking around", "badge subtitle omits redundant app name")
+        check(Presentation.islandAction(one("sentient_native.click", args: json(["app":"Notes"]))) == "Clicking", "badge keeps the actual action")
+        let completedBadge = Presentation.steps([record("sentient_native.click", status: .completed, arguments: json(["app":"Notes"]))])[0]
+        check(Presentation.islandAction(completedBadge) == "Thinking…", "completed clicks do not look like active input")
         let started = record("sentient_native.get_app_state", sequence: 2, arguments: #"{"app":"com.apple.Safari"}"#)
         let other = record("Bash", sequence: 3, toolID: "stream-a:item_1", arguments: "echo fixture")
         let ended = record("sentient_native.get_app_state", sequence: 8, status: .completed,
@@ -117,6 +121,16 @@ typealias Presentation = SidekickActivityPresentation
         check(spotify.title == "Looking at Spotify" && spotify.appIdentifier == "com.spotify.client", "Spotify shares readable activity and icon identity across chat and notch")
         let whatsapp = one("sentient_native.type_text", args: #"{"app":"net.whatsapp.WhatsApp"}"#)
         check(whatsapp.title == "Entering text in WhatsApp" && whatsapp.appIdentifier == "net.whatsapp.WhatsApp", "WhatsApp shares readable activity and icon identity across chat and notch")
+        for marker in ["→sentient_native.press_key", "→\u{00a0}sentient_native.press_key", "→\tsentient_native.press_key", "sentient_native.press_key"] {
+            check(Presentation.notchStatus(marker, activity: nil).text == "Using the keyboard",
+                  "native tool markers never leak while metadata catches up")
+        }
+        check(Presentation.notchStatus("→ sentient_native.get_app_state\nThinking about the next step…", activity: nil).text == "Thinking about the next step…",
+              "rolling status does not expose a previous raw tool line")
+        check(Presentation.islandSubtitle("→\u{00a0}sentient_native.get_app_state", activity: nil) == "Looking at an app",
+              "metadata gap has a human-readable subtitle")
+        check(one("sentient_native.press_key", args: json(["app":"Spotify", "description":"sentient_native.press_key"])).title == "Using the keyboard in Spotify",
+              "a raw tool ID is not accepted as a friendly description")
         for marker in ["→ sentient_native.get_app_state", "Earlier narration\n→ sentient_native.get_app_state"] {
             let notch = Presentation.notchStatus(marker, activity: spotify)
             check(notch.text == spotify.title && notch.activity?.appIdentifier == "com.spotify.client",

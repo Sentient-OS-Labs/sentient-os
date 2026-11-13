@@ -46,7 +46,7 @@ func Log(_ line:String){}
  var isRunning=false;var isClearingChat=false;let conversation=Conversation()
  var preflight:(@MainActor () async throws->Void)?;var completion:((Outcome)->Void)?
  var received:SidekickConversationEvent.ReplyReference?
- func start(_ text:String,mode:AgentMode,source:String,reply:SidekickConversationEvent.ReplyReference?,preflight:(@MainActor () async throws->Void)?,onCompletion:((Outcome)->Void)?){isRunning=true;received=reply;self.preflight=preflight;completion=onCompletion}
+ func start(_ text:String,mode:AgentMode,source:String,takingOver:Bool,actionContext:String?,reply:SidekickConversationEvent.ReplyReference?,preflight:(@MainActor () async throws->Void)?,onCompletion:((Outcome)->Void)?){isRunning=true;received=reply;self.preflight=preflight;completion=onCompletion}
 }
 @MainActor final class CommandCoordinator {
  let run=CommandRunModel();enum Phase {case running}

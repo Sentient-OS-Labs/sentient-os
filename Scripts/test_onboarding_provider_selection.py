@@ -29,6 +29,17 @@ def declaration(source, signature):
 
 
 view = (APP / "Views/Onboarding/OnboardingFrontierModelView.swift").read_text()
+flow = (APP / "Views/Onboarding/OnboardingView.swift").read_text()
+# Keep the form reachable through the actual production view, not just an unused file.
+assert "OnboardingFrontierModelView(onContinue: finishModelSetup, canContinue: emailSubmitted)" in flow
+assert "OnboardingEmailPrompt(onSaved: finishEmailSetup)" in flow
+assert '@AppStorage("onboarding.emailSubmitted")' in flow
+assert '@AppStorage("onboarding.step")' in flow
+flow_methods = "\n".join(declaration(flow, signature) for signature in (
+    "private func advance()", "private func finishModelSetup()",
+    "private func finishEmailSetup()", "private func goBack()",
+    "private var shouldScheduleEmailPrompt: Bool", "private func presentEmailPromptAfterDelay() async",
+))
 picker = (APP / "Views/FrontierEnginePicker.swift").read_text()
 for event in ("backendRaw", "presetRaw", "tab"):
     assert f".onChange(of: {event}) {{ cancelContinue() }}" in view, event
@@ -54,6 +65,26 @@ methods = "\n".join(declaration(view, signature) for signature in (
 
 fixture = r'''
 import Foundation
+import SwiftUI
+
+@MainActor final class FlowFixture {
+    var step = 0
+    var emailSubmitted = false
+    var showEmailPrompt = false
+    var isPresentingInviteGift = false
+    var scenePhase = ScenePhase.active
+    var reduceMotion = false
+    var completions = 0
+    var submittedAtCompletion = false
+    func onFinished() { completions += 1; submittedAtCompletion = emailSubmitted }
+    func finishModel() { finishModelSetup() }
+    func finishEmail() { finishEmailSetup() }
+    func back() { goBack() }
+    func next() { advance() }
+    var shouldPrompt: Bool { shouldScheduleEmailPrompt }
+    func waitForPrompt() async { await presentEmailPromptAfterDelay() }
+__FLOW_METHODS__
+}
 
 @MainActor enum CodexAuth { static var knowledgeBaseOnly = true }
 
@@ -97,6 +128,7 @@ import Foundation
 }
 
 @MainActor final class OnboardingFixture {
+    var canContinue = true
     let codex = SetupFixture()
     let claude = SetupFixture()
     let sentient = HostedFixture()
@@ -132,6 +164,51 @@ __METHODS__
     }
 
     @MainActor static func main() async {
+        let navigation = FlowFixture()
+        navigation.next()
+        check(navigation.step == 1 && navigation.completions == 0, "Intro must lead to model setup")
+        navigation.finishModel()
+        check(navigation.step == 1 && navigation.completions == 0 && !navigation.emailSubmitted,
+              "Model setup bypassed required email entry")
+        let delay = Task { await navigation.waitForPrompt() }
+        try! await Task.sleep(for: .milliseconds(100))
+        check(!navigation.showEmailPrompt, "Email modal appeared before its delay")
+        await delay.value
+        check(navigation.showEmailPrompt && navigation.step == 1, "Email modal did not appear over model setup")
+        navigation.finishEmail()
+        check(navigation.emailSubmitted && !navigation.showEmailPrompt && navigation.completions == 0,
+              "Saving email must reveal model setup without entering Home")
+        navigation.finishModel()
+        check(navigation.completions == 1 && navigation.submittedAtCompletion,
+              "Completed email and model setup must open Home")
+        navigation.back()
+        check(navigation.step == 0, "Model Back must return to the intro")
+        let cancelled = FlowFixture()
+        cancelled.step = 1
+        let pending = Task { await cancelled.waitForPrompt() }
+        try! await Task.sleep(for: .milliseconds(100))
+        pending.cancel(); await pending.value
+        check(!cancelled.showEmailPrompt, "Cancelled timer displayed the email modal")
+        cancelled.scenePhase = .inactive
+        check(!cancelled.shouldPrompt, "Inactive app must not start the modal timer")
+        cancelled.scenePhase = .active; cancelled.isPresentingInviteGift = true
+        check(!cancelled.shouldPrompt, "Email modal must not cover an active invite gift")
+        cancelled.isPresentingInviteGift = false; cancelled.step = 0
+        check(!cancelled.shouldPrompt, "Intro must not start the email modal timer")
+        let alreadySubmitted = FlowFixture()
+        alreadySubmitted.emailSubmitted = true
+        alreadySubmitted.step = 1
+        alreadySubmitted.finishModel()
+        check(alreadySubmitted.completions == 1 && alreadySubmitted.step == 1,
+              "An already submitted address must not be requested again")
+        check(!alreadySubmitted.shouldPrompt, "Saved email scheduled another prompt")
+
+        let awaitingEmail = OnboardingFixture()
+        awaitingEmail.canContinue = false
+        awaitingEmail.tapContinue()
+        check(awaitingEmail.advances == 0 && awaitingEmail.continueTask == nil,
+              "Ready provider bypassed the email requirement during the two-second delay")
+
         let initial = OnboardingFixture()
         check(initial.ready, "Default ChatGPT login was not ready")
         initial.tapContinue(); initial.tapContinue()
@@ -367,7 +444,7 @@ __METHODS__
         print("PASS: \(checks) onboarding selection, cancellation, retry, and connector routing checks")
     }
 }
-'''.replace("__METHODS__", methods)
+'''.replace("__METHODS__", methods).replace("__FLOW_METHODS__", flow_methods)
 
 with tempfile.TemporaryDirectory(prefix="sentient-onboarding-provider-tests-") as directory:
     directory = Path(directory)

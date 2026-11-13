@@ -1,7 +1,8 @@
 # Onboarding (Views/Onboarding/)
 
-First launch has two steps: the existing film/Sidekick/Double Tap lessons, then choose and connect a
-frontier model. Continue opens Home immediately. Sidekick asks for its essential computer-use access
+First launch has two steps: the existing film/Sidekick/Magic Reply lessons, then choose and connect a
+frontier model. The model screen requires the feedback email popup before Continue opens Home.
+Sidekick asks for its essential computer-use access
 on first use; personal sources, FDA, analysis, overnight wake, login items, voice and notifications
 are not prerequisites for Home.
 
@@ -15,8 +16,9 @@ successful non-demo Sidekick task, the setup invitation gains emphasis when Home
 | File | Job |
 |---|---|
 | `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, and the DEBUG "SKIP TO HOME" handle. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
-| `OnboardingFilmView.swift` · `OnboardingDoubleTapView.swift` | Step 0: the website film, native Sidekick interaction, then the native Double Tap lesson. |
+| `OnboardingFilmView.swift` · `OnboardingMagicReplyView.swift` | Step 0: the website film, native Sidekick interaction, then the native Magic Reply lesson. |
 | `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; engine preparation and login, the `codex --help` confirmation poll (skipped until a codex install exists), the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
+| `OnboardingEmailPrompt.swift` | Required email popup over the model screen, with validation, durable local enqueue and the optional company welcome. |
 | `PersonalSetupView.swift` | Optional independent window; Home and Sidekick retain their lifetime while sources are connected. |
 | `OnboardingPermissionsView.swift` | `OvernightSetupRequirements`: wake and login controls shown only after choosing overnight analysis. |
 | `OnboardingReadyView.swift` | Resumable source picker with three usable selections required before first analysis. No mandatory email prompt. |
@@ -35,8 +37,6 @@ existing lifetime receipts. Installed apps can still use `record_late_invite_use
 lifetime access while preserving the `lateUse`/email response they verify. Their baked-in courtesy
 animation text changes only when the app is updated; refreshed Settings shows lifetime access.
 Legacy receipt decoding is retained for saved Keychain snapshots and installed-app compatibility.
-These behaviors require the corresponding server migrations; publishing their source does not
-deploy them. Upgrade announcements additionally require `20261025020000_invite_upgrade_announcements.sql`.
 
 `OnboardingWindowLayout` fits the 1100 × 820 design canvas into the display's usable area,
 including the Dock and title-bar allowance. Smaller displays get roughly 80% scale, with a
@@ -48,52 +48,31 @@ canvas scale, so it still points at physical screen coordinates.
 The canvas must not clip its safe-area bounds: the film header and GitHub mark deliberately
 render into the transparent title bar. The native window supplies the outer clipping boundary.
 
-**0 · The film (`OnboardingFilmView`).** `https://sentient-os.ai/onboarding?end=0.42&notch=real|key&invitation=native&story=restaurant-v2` in
-a webview that is a movie, not a page (hit-testing off, off-host navigation blocked, fades in only after
-the page reports ready). The page's autopilot scrolls the film and posts "parked" at each rest, which
-blooms the native Continue: leg 1 (the night film → the morning home), leg 2 (the Sidekick scene: it
-rides to the native invitation, **Click your notch** on a lone notched display or **Press right Command**
-(the actual configured key) otherwise, then WAITS for the user's real answer: the coordinator's armed one-shot demo takes a bezel
-click or a hotkey press and performs the restaurant story on the user's own notch while the film rides on),
-The restaurant story shows one message from James, with no earlier chat or floating memory card. It begins with “can you book that restaurant for the weekend?” and the
-native prompt “finish this for me”. The notch shows Starting computer use for 0.5 seconds, then Remembering… with Weekend plan.
-Only afterward does the browser open. The film books a fictional Juniper table,
-and replies “done!” in a sample Messages window. All contacts, reservations and pages are fictional;
-no real provider, vault, booking or send is involved. `OnboardingRestaurantStory` pins the version,
-command, duration and allowed narration beats. The main-frame, same-host `autopilot` handler accepts
-only that version's known beats while this step owns a running demo. The webpage drives the native
-Remembering bloom and status from its actual progress. Duplicate/backward/late events are inert;
-leaving the film cancels the demo, and a stalled film cannot announce success. Older installed apps
-without a restaurant version keep the recipe; v1 clients retain Maya and their original timing.
-V2 narration follows the unsprung, linear film clock, independently of the camera’s spring.
+**0 · The film and native lessons.** `OnboardingFilmView` embeds the allowlisted website film
+and coordinates native demonstrations through `CommandCoordinator`. On a supported built-in
+notch, the invitation offers physical touch; disabled or unavailable sensing falls back to the
+configured keyboard shortcut. The film can warm eligible sensors before a lesson accepts input.
+Warmup is owner-scoped, follows foreground/display/lock state, and cannot dispatch an action.
+Entering a lesson fences old sensor events so a touch during the intro cannot answer it.
 
-The final Sidekick park is `0.999`, followed by the native Double Tap lesson. The current native
-sequence does not visit the website's Under-the-hood exhibit, FAQ or footer. The film is passive;
-native controls handle progression.
-`OnboardingSidekickInvitation` keeps the Messages request fully visible with one prominent native CTA at the
-very top: Click your notch, or Press right Command with a compact keycap. Its straight vertical arrow
-is a separate transparent, click-through `NSPanel`. The measured CTA aligns to the hardware's
-centerline, with 12 pt between its top edge and the arrow's tail and 10 pt below the notch at the tip.
-The arrow resizes when the app moves; the native film reserves a clear header above Messages. It cannot become key, hides when onboarding loses focus, and is removed as Sidekick opens
-or the step exits. Display changes and disabled notch clicks switch to the keyboard instruction.
-The arrow draws once and respects Reduce Motion. The website hides its older text/chevron only when
-the new `invitation=native` parameter accompanies the embedded notch cut; older apps keep their cues.
-Watchdogs bound every wait (12 s to load, 40 s to park); offline or a failed load falls back to a quiet
-branded slide, so onboarding is never blocked on the network. The parked beats are addresses into the
-film's scroll timeline and must be re-derived if the website re-paces the film. `dev.film.url` (DEBUG)
-points the step at a local dev server.
+The native action sequence highlights the real quick-action controls and performs inert Take Over
+and Magic Reply demonstrations. `OnboardingActionCue` owns the lesson stage; the film's owner,
+generation and current phase fence delayed callbacks. The reply demonstration uses fictional email
+content through `OnboardingMagicReplyDemo` and `OnboardingMagicReplyEmail`. Its keyboard alternative
+uses `OnboardingDoubleTapKeyboard` and the actual shared shortcut. These lessons never read a real
+knowledge base, call a task provider, book anything, or send a message. Leaving the film cancels
+owned demonstration work and releases warmup. The website film has bounded loading/park waits
+and an offline fallback. Native controls own progression, and the model step remains next.
 
-The website's onboarding wrapper uses `OnboardingPlayback`, `MotionConfig reducedMotion="never"`
-and `useFilmReducedMotion` so Reduce Motion does not collapse this timed movie or bypass its parks.
-The override belongs to `/onboarding`; it does not change the Mac's setting or all website routes.
-`Autopilot` clamps nonpositive film geometry so a bounded film destination cannot become a jump to
-the page footer. This behavior is implemented in the website and takes effect for installed apps
-when that website build is deployed; changing app documentation does not publish it.
+`OnboardingRestaurantStory` supplies the allowlisted restaurant-film protocol for supported
+clients. Display layout and the notch pointer use the native window's measured coordinates;
+unsupported layouts keep the keyboard route. Changes to the embedded webpage require the team's
+separate website deployment; publishing this app source does not deploy that page.
 
 The model step shares `ModelChoiceBar`, `ModelSelectionHeading`, and `ModelSelectionPanel`
 with Settings: animated white capsule selections, a centered title, and the permission window's
-soft edge lighting. It only configures the main AI; the Main AI / Double Tap switch and all
-Double Tap model controls remain exclusive to Settings. Provider activation and login ownership
+soft edge lighting. It only configures the main AI; the Main AI / Magic Reply switch and all
+Magic Reply model controls remain exclusive to Settings. Provider activation and login ownership
 are unchanged by the presentation.
 
 **1 · Choose your frontier model.** The shared `FrontierEnginePicker` in a single centered row over
@@ -112,6 +91,19 @@ keeps the current engine and stays on this step. Sign-in and installation retry 
 needed, and Settings keeps its explicit Use Claude action. Other choices require the visible tab to
 match the active engine: ChatGPT logged in, or the selected custom endpoint that passed Test & Select.
 
+**Feedback email.** After two seconds on the active model screen, `OnboardingView` blurs and disables
+the background and presents `OnboardingEmailPrompt`. Leaving the screen cancels the timer; an
+inactive app or an active invitation gift defers it. Continue cannot bypass email entry during the
+delay. Saving validates and durably queues the address through `MailAccountCloud.onboarding`;
+background retries send it to `onboarding_contact_emails`. After the optional company welcome,
+the popup closes and the user resumes model connection. The disclosure reads: “Your email is only
+saved for the founders to reach out for feedback. We never spam you.”
+
+The existing `onboarding.emailSubmitted` flag suppresses repeat prompts across relaunches.
+Completed users keep Home access; Factory Reset re-arms the prompt. Provider selection tests cover
+the delay, cancellation, modal completion and Continue gate; personal-setup tests cover relaunch
+and migration. The contact-retention fixture verifies durable enqueue and offline retries.
+
 **Plan access.** Free/Go users can enter Home and try Sidekick. The picker describes limited usage
 without another plan screen. A provider-reported usage limit or plan denial on a known Free/Go
 ChatGPT task offers Upgrade to Plus, Change AI, Try again and Stop in recovery. Generic network,
@@ -120,13 +112,14 @@ permission, connector or model errors do not become a billing prompt. Migration 
 
 ## Optional personal setup
 
-The panel, Analysis, Double Tap lesson and menu bar open the same `personal-setup` window. Source
+The panel, Analysis and menu bar open the same `personal-setup` window. Source
 selections persist immediately. Closing it returns to Home without starting work. Three selected,
 usable sources are required; a disconnected connector or unavailable local database does not count.
-Hosted Done verifies native connection metadata without a model call or content read. Proof belongs
-to the current account. Claude's shared login is checked this process before cached proof can count;
-an older account's check cannot certify a newer login. A later Stop reading or reconnect in another
-window invalidates pending confirmation for that source, so late results cannot restore an opt-out.
+The user's explicit connector choice is authoritative. Done accepts that choice without a
+content probe or cached-health gate. A failed read records that attempt's outcome without silently
+unselecting the source. Account ownership, explicit opt-outs, read-only permissions and durable
+saves remain enforced. Completed structured summaries do not require a particular native receipt,
+query sequence or prose format. A later successful retry resolves earlier attempt errors.
 Fresh Desktop/Downloads/Documents toggles are off. Migration preserves established users' old
 implicit defaults and every explicit saved choice, including false.
 
@@ -153,11 +146,12 @@ personal-context features prematurely. Sidekick stays available throughout.
 
 Gmail and Outlook Mail retain the disclosed email-only feedback-list behavior. Explicit Done in
 their connection sheet records that consent; collection waits for a later authorized mailbox run.
-Missing connections/addresses remain pending. There is no forced manual email form in the new flow.
+Missing connections/addresses remain pending. This connector list is separate from the required
+email popup on the onboarding model screen; personal source setup does not repeat that popup.
 
 ## Durable state and migration
 
-- `hasCompletedOnboarding` now admits Home after the model step. It does not consent to sources.
+- `hasCompletedOnboarding` admits Home after email submission and model setup. It does not consent to sources.
 - `onboarding.personalSetupCompleted` records completed background setup and the explicit Start analysis action.
 - `scheduler.firstCycleCompletedAt` retains the shipped successful-analysis milestone.
 - `onboarding.firstSuccessfulSidekickTask` excludes demos, cancelled work and proactive-card runs.
@@ -178,12 +172,12 @@ preserves the user's chosen conversation view.
 
 The model step explains the split: your on-device model understands local sources; your selected AI
 organizes the resulting knowledge and powers assistance. Apple Mail and Apple Calendar work without
-a ChatGPT or Claude subscription. Hosted connectors, Double Tap and optional sharing have distinct
+a ChatGPT or Claude subscription. Hosted connectors, Magic Reply and optional sharing have distinct
 settings rather than one blanket “everything stays local” promise.
 
-The native Double Tap lesson explains its unsent draft and low-latency covered route. One-time
+The native Magic Reply lesson explains its unsent draft and covered GPT-6.1 Sol route. One-time
 writing-style setup reads only opted-in chats and enabled connected mail. Missing samples never block
-Double Tap or completion of useful initial analysis. Home retries absent samples once per eligible
+Magic Reply or completion of useful initial analysis. Home retries absent samples once per eligible
 selection; an existing user-authored file is never replaced. The frontier step links to the full
 policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `PrivacyCopy`.
 
@@ -205,7 +199,7 @@ policy and diagnostic controls through `OnboardingTelemetryConsent` and shared `
 
 ## Wrong-side Command correction
 
-Both the Sidekick invitation and the waiting phases of the native Double Tap lesson use
+Both the Sidekick invitation and the waiting phases of the native Magic Reply lesson use
 `OnboardingShortcutHint`. A standalone left-Command tap, while the configured shortcut is
 right Command, sweeps the Sentient spectrum across only “right” for one second. Repeated wrong
 taps coalesce into one sweep. Reduce Motion uses a still color highlight for the same duration.
@@ -213,12 +207,12 @@ On a notch-equipped Mac, a mistaken keyboard tap switches the invitation to the 
 
 The monitor is local to the owning key window and exists only while its instruction can accept
 input. It returns every NSEvent unchanged. It never reads typed characters, adds a global key
-listener, requests permission, launches Sidekick, or counts a wrong tap toward a Double Tap reply.
+listener, requests permission, launches Sidekick, or counts a wrong tap toward a Magic Reply reply.
 Intervening keyboard/mouse input, recording shortcuts, focus loss, custom bindings and teardown
 cancel or suppress the correction. The gesture uses the existing `ShortcutTap` validator.
-The Double Tap phase, rather than its animated opacity, is the authoritative input boundary.
+The Magic Reply phase, rather than its animated opacity, is the authoritative input boundary.
 
 Checks: `Scripts/test_onboarding_shortcut_hint.swift` covers gesture and pulse lifecycle logic;
 `Scripts/test_sidekick_polish.py --invitation` exercises local NSEvents and captures the white
-Sidekick button and both real Double Tap samples. It also verifies normal clicks still finish
+Sidekick button and both real Magic Reply samples. It also verifies normal clicks still finish
 the lesson and that hint listeners detach when their instruction leaves.

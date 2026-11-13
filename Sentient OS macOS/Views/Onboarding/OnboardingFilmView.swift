@@ -6,7 +6,7 @@
 //  WKWebView. The page drives itself (its Autopilot scrolls the film) and parks at the
 //  morning-home rest (?end=0.42 in film progress); at each park it posts "parked" to the
 //  `autopilot` message handler and the native Continue button blooms in. The night film leads
-//  into Sidekick, then a native Double Tap lesson before the frontier-model picker.
+//  into Sidekick, then a native Magic Reply lesson before the frontier-model picker.
 //  The webview is a movie, not a page: scrolling is blocked and only marked demo
 //  controls receive clicks, navigation off our host is blocked, and the view
 //  fades in black-on-black only after the page loads (no flash).
@@ -35,12 +35,13 @@ struct OnboardingFilmView: View {
     #endif
 
     /// For the notch demo: the film step arms the coordinator's one-shot scripted Sidekick
-    /// performance while the film is parked on the invitation (click the notch / press right ⌘).
+    /// performance while the film is parked on the physical-tap invitation.
     @Environment(AppState.self) private var appState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var awake = DisplayAwake()
     @State private var isVisible = false
+    @State private var sensorWarmupOwner = UUID()
 
     private var inviting: Bool { phase == .awaitingNotch && appState.commandCoordinator.phase == .hidden }
 
@@ -48,20 +49,19 @@ struct OnboardingFilmView: View {
     /// rendering → leg 1 (night → the morning park; Continue up) → on Continue, leg 2
     /// (the turn, "One more thing. Meet Sidekick.", the dive, the whole Sidekick scene;
     /// same page instance, `continueTo` over evaluateJavaScript) → parked again → the native
-    /// Double Tap lesson → the final Continue advances onboarding. `unavailable` is the offline
+    /// Magic Reply lesson → the final Continue advances onboarding. `unavailable` is the offline
     /// fallback slide.
     /// The loading → playing fade keys on the page's "ready" message (posted
     /// post-hydration, as the entrance starts) — WKWebView's didFinish fires long before
     /// first paint, so fading on it pops content into an already-visible view; didFinish
     /// survives only as a grace-period fallback for a page that never posts.
     /// The Sidekick leg splits around the hardware beat on EVERY Mac: ride to the invitation
-    /// whisper (.ridingToInvitation — "Click the notch" on a lone notch display, "Press the
-    /// right ⌘ key" otherwise) → wait for the user's real answer (.awaitingNotch — the
-    /// coordinator's armed demo takes a bezel click or a hotkey press alike) → the demo fires
+    /// instruction (.ridingToInvitation) → wait for a finger tap or keyboard fallback
+    /// (.awaitingNotch) → the real Take Over button highlights and presses → the demo fires
     /// and the film rides on (.ridingSidekick).
     private enum Phase {
         case loading, playing, parked, ridingToInvitation, awaitingNotch,
-             ridingSidekick, sidekickDone, doubleTap, unavailable
+             ridingSidekick, sidekickDone, magicReply, unavailable
 
         var playsAutomatically: Bool {
             switch self {
@@ -75,6 +75,14 @@ struct OnboardingFilmView: View {
 
     private var shouldKeepDisplayAwake: Bool {
         isVisible && scenePhase == .active && (phase.playsAutomatically || replayingIntro)
+    }
+
+    private var shouldWarmPhysicalTap: Bool {
+        isVisible && scenePhase == .active && phase != .unavailable
+    }
+
+    private func updateSensorWarmup() {
+        PhysicalNotchTap.shared.setWarmup(shouldWarmPhysicalTap, owner: sensorWarmupOwner)
     }
 
     private func updateDisplayAwake() {
@@ -109,15 +117,9 @@ struct OnboardingFilmView: View {
     /// master p: 0.4773 + 0.44 × 0.5227. Every Mac rides here.
     private static let invitationEndP = 0.707
 
-    /// Which door the film's invitation names (the ?notch= query value). "real" = a lone
-    /// built-in notch display — "Click the notch", the bezel moment. "key" = everything else
-    /// (external display connected, iMac, clamshell, a notch-less MacBook) — "Press the
-    /// right ⌘ key": the press drops the overlay on the main display, a software notch when
-    /// there's no cutout (the hotkey path's shipped rendering). Either way the film hides its
-    /// DOM notch and the user's own notch performs the Sidekick show. During the beat BOTH
-    /// doors answer (the coordinator arms click and hotkey alike), so the variant only picks
-    /// the whisper — baked once at film load; a mid-film display change just means the
-    /// whisper names the other door, which still works.
+    /// The embedded film hides its DOM notch for either value. The live native
+    /// invitation chooses physical tapping from sensor readiness and window placement;
+    /// this query preserves compatibility with older film versions.
     private static var notchBeat: String {
         NotchWindowController.builtInNotchScreen() != nil && NSScreen.screens.count == 1
             ? "real" : "key"
@@ -165,16 +167,16 @@ struct OnboardingFilmView: View {
                                 },
                                 onFailed: { if phase == .loading { setPhase(.unavailable) } })
                         .ignoresSafeArea()
-                        .opacity(phase == .loading || phase == .doubleTap || replayingIntro ? 0 : 1)
+                        .opacity(phase == .loading || phase == .magicReply || replayingIntro ? 0 : 1)
                         .accessibilityHidden(true)
                         .allowsHitTesting(phase == .awaitingNotch || phase == .ridingSidekick || phase == .sidekickDone)
                 }
 
                 // Keep the page mounted and hidden during the native lesson so a stale
                 // Sidekick frame cannot flash through the transition to the next step.
-                if phase == .doubleTap {
-                    OnboardingDoubleTapView(coordinator: appState.commandCoordinator,
-                                            onContinue: finishDoubleTap)
+                if phase == .magicReply {
+                    OnboardingMagicReplyView(coordinator: appState.commandCoordinator,
+                                            onContinue: finishMagicReply)
                         .transition(.opacity)
                 }
 
@@ -210,8 +212,8 @@ struct OnboardingFilmView: View {
                     .transition(.opacity)
                 }
 
-                // Keep the Messages request visible. One native CTA sits above the film while a
-                // separate, click-through arrow points outside the window at the real notch.
+                // The physical lesson shows an enlarged sensor/camera illustration. A real
+                // tap dismisses it back into the film; the keyboard fallback keeps Messages visible.
                 if inviting {
                     OnboardingSidekickInvitation(onOpen: { appState.commandCoordinator.openNotchFromHome() })
                         .transition(.opacity)
@@ -245,12 +247,18 @@ struct OnboardingFilmView: View {
     var body: some View {
         stage
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: inviting)
-        .onAppear { isVisible = true; updateDisplayAwake() }
+        .onAppear {
+            isVisible = true
+            updateDisplayAwake()
+            updateSensorWarmup()
+        }
         .onChange(of: shouldKeepDisplayAwake) { _, _ in updateDisplayAwake() }
+        .onChange(of: shouldWarmPhysicalTap) { _, _ in updateSensorWarmup() }
         // The film step leaving (Continue, back) must never strand an armed demo — the
         // notch goes back to its real behavior the moment onboarding moves on.
         .onDisappear {
             isVisible = false
+            updateSensorWarmup()
             awake.end()
             replayingIntro = false
             appState.commandCoordinator.disarmOnboardingNotchDemo()
@@ -307,19 +315,8 @@ struct OnboardingFilmView: View {
                 setPhase(.sidekickDone)
             }
         }
-        // The notch invitation was the one wait without a watchdog — the corner SKIP
-        // used to be its manual exit (removed 2026-07-17). If the invitation is never
-        // answered, the film rides on by itself, exactly as answering it would.
-        .task(id: phase == .awaitingNotch) {
-            guard phase == .awaitingNotch else { return }
-            try? await Task.sleep(for: .seconds(60))
-            guard !Task.isCancelled else { return }
-            if phase == .awaitingNotch {
-                appState.commandCoordinator.disarmOnboardingNotchDemo()
-                setPhase(.ridingSidekick)
-                driver.continueTo(Self.sidekickEndP, delay: 0, seconds: Self.sidekickRideSeconds)
-            }
-        }
+        // This is an explicit user lesson, not a stalled movie. Stay parked until a
+        // tap or keyboard fallback answers it; never silently skip the Take Over press.
         .task(id: phase == .ridingToInvitation) {
             guard phase == .ridingToInvitation else { return }
             try? await Task.sleep(for: .seconds(30))
@@ -339,7 +336,7 @@ struct OnboardingFilmView: View {
         case .loading, .playing:    setPhase(.parked)
         case .ridingToInvitation:   armNotchBeat()
         case .ridingSidekick:
-            // A missed narration event cannot leave a demo running over Double Tap.
+            // A missed narration event cannot leave a demo running over Magic Reply.
             if appState.commandCoordinator.run.isDemo && appState.commandCoordinator.run.isRunning { appState.commandCoordinator.run.stop() }
             setPhase(.sidekickDone)
         default: break
@@ -347,7 +344,7 @@ struct OnboardingFilmView: View {
     }
 
     /// The parked Continue: the first park rides on to the invitation beat. The Sidekick park's
-    /// Continue opens the native Double Tap lesson, which owns its own completion gate.
+    /// Continue opens the native Magic Reply lesson, which owns its own completion gate.
     private func advanceFromPark() {
         guard !replayingIntro else { return }
         downloadProgressRevealed = true
@@ -356,7 +353,7 @@ struct OnboardingFilmView: View {
             setPhase(.ridingToInvitation)
             driver.continueTo(Self.invitationEndP)
         case .sidekickDone:
-            setPhase(.doubleTap)
+            setPhase(.magicReply)
         default:
             exitStep()
         }
@@ -369,8 +366,8 @@ struct OnboardingFilmView: View {
         }
     }
 
-    private func finishDoubleTap() {
-        guard phase == .doubleTap else { return }
+    private func finishMagicReply() {
+        guard phase == .magicReply else { return }
         exitStep()
     }
 
@@ -383,13 +380,13 @@ struct OnboardingFilmView: View {
     }
 
     /// Parked on the invitation: arm the coordinator's one-shot demo. The user's answer — a
-    /// bezel click or a hotkey press — opens the real type field, the task types itself, and
-    /// the moment the demo fires, the film rides on — the webview's windows play the restaurant
+    /// physical tap or keyboard fallback — opens the real notch and demonstrates Take Over.
+    /// Once the button releases, the film rides on — the webview's windows play the restaurant
     /// run while the real notch narrates. Disarmed on step-exit via onDisappear.
     private func armNotchBeat() {
         driver.hideLogo()
         setPhase(.awaitingNotch)
-        appState.commandCoordinator.armOnboardingNotchDemo { [self] in
+        appState.commandCoordinator.armOnboardingNotchDemo(in: driver.webView?.window) { [self] in
             driver.continueTo(Self.sidekickEndP, delay: 0, seconds: Self.sidekickRideSeconds)
             setPhase(.ridingSidekick)
         }
@@ -439,7 +436,7 @@ struct OnboardingFilmView: View {
                 .display(30)
             OnboardingNextButton(title: "Continue", action: {
                 downloadProgressRevealed = true
-                setPhase(.doubleTap)
+                setPhase(.magicReply)
             })
             Spacer()
             OnboardingTrustFooter()

@@ -58,16 +58,18 @@ enum ShortcutKey: String, CaseIterable {
     }
 
     /// Caps Lock's latched state does not turn a single key into a combination.
+    var modifierFlag: NSEvent.ModifierFlags {
+        switch self {
+        case .rightCommand, .leftCommand: return .command
+        case .rightOption, .leftOption: return .option
+        case .rightControl, .leftControl: return .control
+        }
+    }
+
     func isAlone(in flags: NSEvent.ModifierFlags) -> Bool {
         let modifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
         let allDeviceBits: UInt64 = 0x207F // Command, Option, Control and Shift, on both sides.
-        let generic: NSEvent.ModifierFlags
-        switch self {
-        case .rightCommand, .leftCommand: generic = .command
-        case .rightOption, .leftOption: generic = .option
-        default: generic = .control
-        }
         return UInt64(flags.rawValue) & allDeviceBits == deviceBit
-            && flags.intersection(modifiers) == generic && !flags.contains(.function)
+            && flags.intersection(modifiers) == modifierFlag && !flags.contains(.function)
     }
 }

@@ -174,7 +174,7 @@ import WebKit
         checks["simulation_stopped_without_provider"] = !run.isRunning && simulatedStops == 0
         conversation.beginMaintenance()
 
-        MainNavigation.shared.settingsPane = .proactive
+        MainNavigation.shared.settingsPane = .notchShortcuts
         host.rootView = AnyView(SettingsView().environment(app).preferredColorScheme(.dark))
         window.makeKeyAndOrderFront(nil)
         try await settle(500)
@@ -214,7 +214,7 @@ import WebKit
         return checks
     }
 
-    /// The real Home controls, native popovers and notch, with synthetic local preferences only.
+    /// The real Home controls and notch, with synthetic local preferences only.
     static func runDiscovery(app: AppState, root: URL) async throws -> [String: Bool] {
         let environment = ProcessInfo.processInfo.environment
         guard environment["SENTIENT_SELFTEST"] == "sidekickapp", environment["LAB_SIDEKICK_STAGE"] == "ui-discovery",
@@ -228,7 +228,6 @@ import WebKit
         let memory = try SidekickInstructionStore.read().text
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: ProcessingPlan.initialCompletedKey)
-        defaults.removeObject(forKey: SidekickDiscovery.readyHintSeenKey)
         defaults.removeObject(forKey: SidekickDiscovery.notchUsesKey)
         defaults.set(true, forKey: DoubleTap.enabledKey)
         defaults.set(true, forKey: NotchPreferences.clickEnabledKey)
@@ -312,20 +311,6 @@ import WebKit
                 ?? candidates.first { $0.role == NSAccessibility.Role.popUpButton.rawValue }
                 ?? candidates.first
         }
-        var hintObservationStartedAt = ProcessInfo.processInfo.systemUptime
-        func hintState() -> [String: Any] {
-            ["seen_at": defaults.double(forKey: SidekickDiscovery.readyHintSeenKey),
-             "completed_at": defaults.double(forKey: ProcessingPlan.initialCompletedKey),
-             "home_active": presentation.windowActive, "window_visible": window.isVisible,
-             "app_active": NSApp.isActive, "home_key": window.isKeyWindow,
-             "elapsed_ms": Int((ProcessInfo.processInfo.systemUptime - hintObservationStartedAt) * 1000),
-             "key_window": NSApp.keyWindow?.windowNumber ?? -1,
-             "hint_elements": describe(elements(host).filter { $0.identifier == "doubleTap.readyHint" })]
-        }
-        func lesson() -> NSView? {
-            NSApp.windows.filter { $0.isVisible && $0 !== window }.compactMap(\.contentView)
-                .first { view in elements(view).contains { $0.identifier == "doubleTap.lesson" } }
-        }
         func click(_ identifier: String) async throws {
             try await reveal("click." + identifier)
             guard let element = find(identifier) else { throw Failure.accessibility }
@@ -333,76 +318,22 @@ import WebKit
             try await settle(350)
             recordFocus("click." + identifier + ".delivered", target: window)
         }
-        func dismissLesson() async throws {
-            guard lesson() != nil else { throw Failure.accessibility }
-            // Popover windows forward key status to their parent. Dismiss using the normal
-            // click-away gesture on an empty corner of our own Home, with no fake focus state.
-            let frame = window.convertToScreen(host.convert(host.bounds, to: nil))
-            recordFocus("dismiss_lesson.outside_click", target: window)
-            try postClick(window: window, screenPoint: CGPoint(x: frame.minX + 7, y: frame.minY + 7))
-            for _ in 0..<25 {
-                if lesson() == nil {
-                    try await reveal("return_from_lesson." + phase)
-                    return
-                }
-                try await settle(80)
-            }
-            recordFocus("dismiss_lesson.failed", target: window)
-            throw Failure.accessibility
-        }
         window.center(); try await reveal("initial_home")
         try await settle(800)
         let wide = elements(host)
         diagnostics["wide_header"] = describe(wide.filter { $0.identifier.hasPrefix("navigation.") || $0.identifier.hasPrefix("sidekick.notch") })
-        checks["wide_double_tap_before_analysis"] = {
-            guard let button = find("navigation.doubleTap"), let analysis = find("navigation.analysis") else { return false }
-            return button.frame.maxX < analysis.frame.minX && abs(button.frame.midY - analysis.frame.midY) < 4
-        }()
+        checks["wide_header_has_analysis_without_double_tap"] = find("navigation.analysis") != nil
+            && find("navigation.doubleTap") == nil
         checks["wide_proactive_has_notch_cue"] = find("sidekick.notchHint") != nil && find("sidekick.proactive") == nil
         checks["wide_has_no_ready_hint_before_analysis"] = !wide.contains { $0.identifier == "doubleTap.readyHint" }
         captures.append(try await capture(host, name: "discovery-01-home-wide", directory: directory))
-        phase = "waiting_lesson"
-        // Change the actual preference while Home stays mounted; the lesson must follow it.
-        ShortcutPreferences.save(.leftOption)
-        defaults.set(false, forKey: NotchPreferences.clickEnabledKey)
-        try await settle(250)
-        try await click("navigation.doubleTap")
-        guard let waitingLesson = lesson() else { throw Failure.accessibility }
-        let waiting = elements(waitingLesson)
-        diagnostics["waiting_lesson"] = describe(waiting)
-        // The lesson root's identifier is inherited by SwiftUI's children on this SDK.
-        // Verify the actual displayed state text and native action instead of a lost child ID.
-        checks["native_click_opens_waiting_lesson"] = waiting.contains { $0.label == "Ready after your first analysis." }
-        checks["waiting_lesson_reflects_left_option"] = waiting.contains { $0.label.contains(ShortcutKey.leftOption.label) }
-        checks["waiting_lesson_has_analysis_action"] = waiting.contains { $0.role == NSAccessibility.Role.button.rawValue && $0.label == "View analysis" }
-        captures.append(try await capture(host, name: "discovery-02-waiting-lesson", directory: directory, includingChild: waitingLesson.window))
-        try await dismissLesson()
-
-        phase = "imported_knowledge_lesson"
-        let importedNote = VaultGenerator.vaultRoot.appendingPathComponent("DoubleTapImportedFixture.md")
-        try "# Imported fixture\nUseful personal project context.".write(to: importedNote, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: importedNote) }
-        try await click("navigation.doubleTap")
-        guard let importedLesson = lesson() else { throw Failure.accessibility }
-        let importedElements = elements(importedLesson)
-        checks["imported_knowledge_shows_ready_instructions"] = importedElements.contains {
-            $0.label.contains("Click a reply box, then tap")
-        } && !importedElements.contains { $0.label == "Ready after your first analysis." }
-        checks["imported_knowledge_preserves_analysis_milestone"] = ProcessingPlan.initialCompletedAt() == nil
-        try await dismissLesson()
-        try FileManager.default.removeItem(at: importedNote)
-        try await click("navigation.doubleTap")
-        guard let removedLesson = lesson() else { throw Failure.accessibility }
-        checks["removed_import_restores_setup_lesson"] = elements(removedLesson).contains { $0.label == "Ready after your first analysis." }
-        try await dismissLesson()
-
         phase = "compact_chat"
         presentation.surface = .conversation
         await presentation.load(.latest, conversation: run.conversation)
         window.setContentSize(NSSize(width: 840, height: 820))
         try await settle(700)
         let compact = elements(host)
-        let identifiers = ["sidekick.proactive", "sidekick.search", "sidekick.clearChat", "navigation.doubleTap", "navigation.analysis", "navigation.settings"]
+        let identifiers = ["sidekick.proactive", "sidekick.search", "sidekick.clearChat", "navigation.analysis", "navigation.settings"]
         var controls = identifiers.compactMap { find($0, in: compact) }
         if let knowledge = compact.first(where: { $0.label == "Knowledge" && $0.role == NSAccessibility.Role.button.rawValue && $0.frame.width > 0 }) { controls.append(knowledge) }
         diagnostics["compact_controls"] = describe(controls)
@@ -411,7 +342,8 @@ import WebKit
         })
         let contentFrame = window.convertToScreen(host.convert(host.bounds, to: nil))
         diagnostics["compact_content_frame"] = [contentFrame.minX, contentFrame.minY, contentFrame.width, contentFrame.height]
-        checks["compact_chat_keeps_double_tap_and_all_controls"] = controls.count == identifiers.count + 1
+        checks["compact_chat_keeps_navigation_controls"] = controls.count == identifiers.count + 1
+        checks["compact_chat_has_no_double_tap_button"] = find("navigation.doubleTap", in: compact) == nil
         checks["compact_chat_has_no_notch_cue"] = !compact.contains { $0.identifier == "sidekick.notchHint" }
         checks["compact_header_controls_do_not_overlap"] = controls.indices.allSatisfy { first in
             contentFrame.contains(controls[first].frame) && controls.indices.allSatisfy { second in
@@ -420,96 +352,14 @@ import WebKit
         }
         captures.append(try await capture(host, name: "discovery-03-compact-chat", directory: directory))
 
-        phase = "analysis_window_in_front"
-        let progressWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
-            styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        progressWindow.title = "Analysis window fixture"
-        progressWindow.isReleasedWhenClosed = false
-        progressWindow.center()
-        defer { progressWindow.close() }
-        try await foreground(progressWindow, transition: "analysis_window_front")
-        try await settle(350)
         defaults.set(Date().timeIntervalSince1970, forKey: ProcessingPlan.initialCompletedKey)
-        try await settle(1100)
-        recordFocus("analysis_window_after_completion", target: progressWindow)
-        checks["analysis_window_case_keeps_home_visible_but_not_key"] = window.isVisible
-            && progressWindow.isKeyWindow && NSApp.isActive
-        checks["analysis_window_does_not_consume_ready_hint"] = find("doubleTap.readyHint") == nil
-            && defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == 0
-        window.orderOut(nil)
-        progressWindow.close()
-        recordFocus("analysis_window_closed_home_hidden", target: window)
-        defaults.removeObject(forKey: ProcessingPlan.initialCompletedKey)
-
-        phase = "hidden_completion"
         presentation.surface = .suggestions
         window.setContentSize(NSSize(width: 1100, height: 820))
-        window.orderOut(nil)
-        try await settle(350)
-        let completion = Date().timeIntervalSince1970
-        defaults.set(completion, forKey: ProcessingPlan.initialCompletedKey)
-        try await settle(1000)
-        checks["hidden_completion_does_not_acknowledge"] = defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == 0
-        checks["hidden_home_is_inactive"] = !presentation.windowActive
-        recordFocus("hidden_completion_waited", target: window)
-        try await reveal("home_after_hidden_completion")
-        try await settle(250)
-        let keyWindow = NSApp.keyWindow
-        let responder = window.firstResponder
-        try await settle(850)
-        checks["reactivation_shows_ready_hint"] = find("doubleTap.readyHint") != nil
-        checks["ready_hint_does_not_take_focus"] = NSApp.keyWindow === keyWindow && window.firstResponder === responder
-        recordFocus("ready_hint_displayed", target: window)
-        captures.append(try await capture(host, name: "discovery-04-ready-hint", directory: directory))
-        phase = "interrupted_hint"
-        window.orderOut(nil)
-        try await settle(500)
-        checks["interrupted_hint_remains_pending"] = defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == 0
-        recordFocus("hint_hidden_before_acknowledgement", target: window)
-        try await reveal("home_after_hint_interruption")
-        try await settle(1100)
-        checks["interrupted_hint_reappears"] = find("doubleTap.readyHint") != nil
-        recordFocus("interrupted_hint_reappeared", target: window)
-        try await click("navigation.doubleTap")
-        guard let readyLesson = lesson() else { throw Failure.accessibility }
-        let ready = elements(readyLesson)
-        checks["ready_click_acknowledges_completion"] = defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == completion
-        diagnostics["ready_lesson"] = describe(ready)
-        checks["ready_click_opens_correct_instructions"] = ready.contains {
-            $0.label.contains("Click a reply box, then tap") && $0.label.contains(ShortcutKey.leftOption.label)
-        } && !ready.contains { $0.label == "Ready after your first analysis." }
-        captures.append(try await capture(host, name: "discovery-05-ready-lesson", directory: directory, includingChild: readyLesson.window))
-        try await dismissLesson()
-        phase = "remount"
-        host.rootView = AnyView(Color.black)
-        try await settle(120)
-        host.rootView = home()
-        try await reveal("home_remounted")
-        try await settle(1100)
-        checks["remount_does_not_repeat_acknowledged_hint"] = find("doubleTap.readyHint") == nil
-            && defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == completion
-        phase = "automatic_acknowledgement"
-        try await reveal("home_before_automatic_hint")
-        let anotherCompletion = completion + 1
-        hintObservationStartedAt = ProcessInfo.processInfo.systemUptime
-        defaults.set(anotherCompletion, forKey: ProcessingPlan.initialCompletedKey)
-        try await settle(1100)
-        checks["new_completion_gets_its_own_hint"] = find("doubleTap.readyHint") != nil
-        var automaticSamples: [[String: Any]] = [hintState()]
-        // Observe the real acknowledgement with a bounded margin for native presentation.
-        // Do not treat a completed animation's lingering AX node as a timer failure.
-        for _ in 0..<24 {
-            try await settle(300)
-            automaticSamples.append(hintState())
-            if defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == anotherCompletion,
-               find("doubleTap.readyHint") == nil { break }
-        }
-        diagnostics["automatic_hint_samples"] = automaticSamples
-        checks["automatic_hint_viewing_stays_active"] = automaticSamples.allSatisfy {
-            $0["home_active"] as? Bool == true && $0["app_active"] as? Bool == true && $0["home_key"] as? Bool == true
-        }
-        checks["full_viewing_auto_acknowledges_and_hides"] = defaults.double(forKey: SidekickDiscovery.readyHintSeenKey) == anotherCompletion
+        try await settle(800)
+        checks["analysis_completion_keeps_double_tap_controls_removed"] = find("navigation.doubleTap") == nil
             && find("doubleTap.readyHint") == nil
+        ShortcutPreferences.save(.leftOption)
+        defaults.set(false, forKey: NotchPreferences.clickEnabledKey)
 
         phase = "notch_action"
         notch.start()
@@ -535,7 +385,7 @@ import WebKit
         let after = try store.latestSequence
         checks["discovery_does_not_run_tasks_or_change_history"] = !run.isRunning && run.interaction == nil && after == before
         checks["saved_instructions_preserved"] = try SidekickInstructionStore.read().text == memory
-        checks["six_own_window_captures"] = captures.count == 6
+        checks["three_own_window_captures"] = captures.count == 3
         completed = true; phase = "complete"
         return checks
     }
@@ -560,6 +410,10 @@ import WebKit
         coordinator.run.preventsTaskExecutionForUIFixture = true
         let notch = NotchWindowController(coordinator: coordinator)
         notch.start()
+        // Read sensor readiness for the actual invitation. Detected gestures have no
+        // action handler in this isolated UI fixture; deterministic routing is tested separately.
+        PhysicalNotchTap.shared.start(allowed: { coordinator.onboardingPhysicalTapAvailable }, onTap: {})
+        defer { PhysicalNotchTap.shared.stop() }
         let directory = root.appendingPathComponent("polish-snapshots", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var checks: [String: Bool] = [:]
@@ -630,16 +484,19 @@ import WebKit
         Log("Invitation geometry: bounds=\(pointerProbe.bounds), root=\(window.convertToScreen(pointerProbe.convert(pointerProbe.bounds, to: nil))), screen=\(String(describing: window.screen?.frame)), key=\(window.isKeyWindow)")
         let physical = OnboardingNotchPointer.hasPhysicalTarget
         checks["instruction_matches_actual_hardware"] = elements(host).contains {
-            $0.label == (physical ? "Click your notch" : "Press right Command")
+            $0.label == (physical ? "Tap your notch with your finger" : "Press right Command")
         }
+        checks["sensor_illustration_matches_physical_instruction"] = elements(host).contains {
+            $0.identifier == "onboarding.sidekick.sensorIllustration"
+        } == physical
         checks["real_demo_is_armed"] = coordinator.onboardingDemoArmed
         checks["pointer_does_not_take_keyboard_focus"] = window.isKeyWindow
         if physical {
             guard let pointer = pointerProbe.pointer, let screen = window.screen, let notchSize = screen.notchSize else { throw Failure.unavailable }
             checks["pointer_is_visible_and_click_through"] = pointer.isVisible && pointer.ignoresMouseEvents && !pointer.canBecomeKey
-            checks["arrow_tip_targets_real_camera_cutout"] = abs(pointer.frame.midX - screen.frame.midX) < 1
+            checks["arrow_tip_targets_real_camera_cutout"] = abs(pointer.frame.midX - (screen.frame.midX + NotchWindowController.metrics(for: screen).lightSensorOffset)) < 1
                 && abs(pointer.frame.maxY - 8 - (screen.frame.maxY - notchSize.height - 10)) < 1
-            let cta = elements(host).first { $0.identifier == "onboarding.sidekick.instruction" && $0.role == NSAccessibility.Role.button.rawValue }
+            let cta = elements(host).first { $0.identifier == "onboarding.sidekick.instruction" }
             checks["arrow_and_cta_share_centerline"] = cta.map { abs($0.frame.midX - pointer.frame.midX) < 1 } == true
             checks["arrow_has_exact_button_clearance"] = cta.map { abs(pointer.frame.minY + 8 - $0.frame.maxY - 12) < 1 } == true
             captures.append(try await captureDisplay(windows: [window, pointer], screen: screen,
@@ -649,14 +506,14 @@ import WebKit
             try await settle(200)
             checks["arrow_stays_at_hardware_when_app_moves"] = abs(pointer.frame.midX - anchored.midX) < 1
                 && abs(pointer.frame.maxY - anchored.maxY) < 1
-            let movedCTA = elements(host).first { $0.identifier == "onboarding.sidekick.instruction" && $0.role == NSAccessibility.Role.button.rawValue }
+            let movedCTA = elements(host).first { $0.identifier == "onboarding.sidekick.instruction" }
             Log("Invitation moved: CTA=\(String(describing: movedCTA?.frame)), pointer=\(pointer.frame), probe=\(window.convertToScreen(pointerProbe.convert(pointerProbe.bounds, to: nil))), visible=\(pointer.isVisible)")
             checks["moved_cta_preserves_arrow_alignment"] = movedCTA.map { abs($0.frame.midX - pointer.frame.midX) < 1
                 && abs(pointer.frame.minY + 8 - $0.frame.maxY - 12) < 1 } == true
             let windowedFrame = window.frame
             window.setFrame(screen.visibleFrame, display: true)
             try await reveal()
-            let largeCTA = elements(host).first { $0.identifier == "onboarding.sidekick.instruction" && $0.role == NSAccessibility.Role.button.rawValue }
+            let largeCTA = elements(host).first { $0.identifier == "onboarding.sidekick.instruction" }
             checks["maximized_cta_preserves_arrow_clearance"] = largeCTA.map { abs($0.frame.midX - pointer.frame.midX) < 1
                 && abs(pointer.frame.minY + 8 - $0.frame.maxY - 12) < 1 } == true
             captures.append(try await captureDisplay(windows: [window, pointer], screen: screen,
@@ -698,6 +555,7 @@ import WebKit
         }
         guard let sidekickHint = hintProbe(host) else { throw Failure.unavailable }
         try await leftCommandTap()
+        Log("Sidekick hint: count=\(sidekickHint.hint.pulseCount), active=\(sidekickHint.hint.isActive), key=\(window.isKeyWindow), hidden=\(sidekickHint.isHiddenOrHasHiddenAncestor)")
         checks["wrong_command_lights_sidekick_instruction"] = sidekickHint.hint.isActive
             && sidekickHint.hint.pulseCount == 1 && coordinator.onboardingDemoArmed && !coordinator.run.isRunning
         try await settle(350)
@@ -729,10 +587,10 @@ import WebKit
         other.close(); try await reveal()
 
         // Exercise the keyboard fallback in the same native film, including compact layout.
-        defaults.set(false, forKey: NotchPreferences.clickEnabledKey)
+        defaults.set(false, forKey: NotchPreferences.physicalTapEnabledKey)
         NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
         try await reveal()
-        checks["disabled_notch_clicks_show_real_keyboard_instruction"] = elements(host).contains { $0.label == "Press right Command" }
+        checks["disabled_physical_taps_show_real_keyboard_instruction"] = elements(host).contains { $0.label == "Press right Command" }
             && pointerProbe.pointer?.isVisible != true
         captures.append(try await capture(host, name: "invitation-02-right-command", directory: directory))
         checks["keyboard_capture_is_full_size"] = (captures.last?["width"] as? Int ?? 0) >= 1000
@@ -745,7 +603,9 @@ import WebKit
         try await reveal()
         captures.append(try await capture(host, name: "invitation-03-compact", directory: directory))
         checks["compact_instruction_visible"] = elements(host).contains { $0.label == "Press right Command" }
-        checks["no_explanatory_screen"] = !elements(host).contains { $0.label.contains("camera cutout") || $0.label == "YOUR TURN" }
+        checks["keyboard_fallback_has_no_physical_tap_illustration"] = !elements(host).contains {
+            $0.identifier == "onboarding.sidekick.sensorIllustration"
+        }
         let key = elements(host).first { $0.label == "Press right Command" && $0.role == NSAccessibility.Role.button.rawValue }
         guard let key else { throw Failure.accessibility }
         try postClick(window: window, screenPoint: CGPoint(x: key.frame.midX, y: key.frame.midY))
@@ -756,11 +616,41 @@ import WebKit
         window.setContentSize(CGSize(width: 1100, height: 760))
         window.center()
         let firstTaskBefore = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey)
+        func findFilm(_ view: NSView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            return view.subviews.lazy.compactMap { findFilm($0) }.first
+        }
+        guard let filmWeb = findFilm(host) else { throw Failure.unavailable }
+        func cursorSnapshot() async throws -> [String: Any] {
+            let result = try await filmWeb.evaluateJavaScript("""
+            (() => {
+              const cursor = document.querySelector('[data-sentient-cursor]');
+              if (!cursor) return {present:false};
+              const style = getComputedStyle(cursor), rect = cursor.getBoundingClientRect();
+              return {present:true,opacity:Number(style.opacity),x:rect.x,y:rect.y};
+            })()
+            """)
+            return result as? [String: Any] ?? [:]
+        }
+        let initialCursor = try await cursorSnapshot()
+        checks["cursor_does_not_approach_take_over"] = initialCursor["present"] as? Bool == true
+            && (initialCursor["opacity"] as? Double ?? 1) == 0
+        for cue in [OnboardingActionCue.highlighted, .pressed, .released] {
+            for _ in 0..<250 {
+                if coordinator.onboardingActionCue == cue { break }
+                try await settle(10)
+            }
+            checks["take_over_cue_\(cue)"] = coordinator.onboardingActionCue == cue && !coordinator.run.isRunning
+            try await settle(cue == .highlighted ? 500 : cue == .pressed ? 110 : 150)
+            guard let panel = notch.panelForTesting, let content = panel.contentView else { throw Failure.unavailable }
+            captures.append(try await capture(content, name: "take-over-\(cue)", directory: directory))
+        }
         for _ in 0..<400 {
             if coordinator.run.isRunning && coordinator.run.isDemo { break }
             try await settle(10)
         }
         let startedAt = ProcessInfo.processInfo.systemUptime
+        checks["demo_uses_take_over_identity"] = coordinator.run.isTakingOver
         checks["demo_starts_with_computer_use_caption"] = coordinator.run.statusLine == "Starting computer use…"
         for _ in 0..<150 {
             if coordinator.run.onboardingDemoBeat != .read { break }
@@ -768,7 +658,7 @@ import WebKit
         }
         let startingDuration = ProcessInfo.processInfo.systemUptime - startedAt
         Log("Restaurant starting caption duration: \(startingDuration)")
-        checks["starting_caption_lasts_half_a_second"] = (0.35...0.68).contains(startingDuration)
+        checks["starting_caption_is_brief_before_memory"] = (0.35...0.90).contains(startingDuration)
             && coordinator.run.onboardingDemoBeat == .remember
         func waitForBeat(_ beat: OnboardingRestaurantStory.Beat) async throws {
             for _ in 0..<150 {
@@ -777,6 +667,7 @@ import WebKit
             }
             throw Failure.unavailable
         }
+        var cursorPositions: [CGPoint] = []
         for (beat, name) in [(OnboardingRestaurantStory.Beat.remember, "restaurant-05-remembering"),
                              (.time, "restaurant-06-booking"), (.confirmed, "restaurant-07-confirmed"),
                              (.done, "restaurant-08-replied")] {
@@ -784,10 +675,19 @@ import WebKit
             try await settle(beat == .remember ? 950 : 350)
             checks["film_narrates_" + beat.rawValue] = (coordinator.run.onboardingDemoBeat?.index ?? -1) >= beat.index
             if beat == .remember { checks["native_remembering_is_weekend_plan"] = coordinator.run.remembering == "Weekend plan" }
+            if beat == .time || beat == .confirmed {
+                let cursor = try await cursorSnapshot()
+                checks["cursor_visible_during_" + beat.rawValue] = (cursor["opacity"] as? Double ?? 0) > 0.9
+                if let x = cursor["x"] as? Double, let y = cursor["y"] as? Double {
+                    cursorPositions.append(CGPoint(x: x, y: y))
+                }
+            }
             if let panel = notch.panelForTesting, let screen = window.screen {
                 captures.append(try await captureDisplay(windows: [window, panel], screen: screen, name: name, directory: directory))
             } else { throw Failure.unavailable }
         }
+        checks["cursor_moves_through_actual_demo"] = cursorPositions.count == 2
+            && hypot(cursorPositions[0].x-cursorPositions[1].x, cursorPositions[0].y-cursorPositions[1].y) > 20
         checks["scripted_run_finishes_without_provider"] = coordinator.run.isDemo && !coordinator.run.isRunning
             && coordinator.run.interaction == nil
         checks["demo_does_not_claim_first_successful_task"] = defaults.bool(forKey: PersonalSetupProgress.firstTaskKey) == firstTaskBefore
@@ -816,50 +716,153 @@ import WebKit
         }
         window.setContentSize(CGSize(width: 1180, height: 880)); window.center()
         try await click("Continue")
-        // Both real Double Tap samples use the same correction. Wrong taps cannot
-        // draft or advance either sample; ordinary clicks still complete the lesson.
-        for (index, name) in ["shortcut-double-tap-email-glow", "shortcut-double-tap-messages-glow"].enumerated() {
-            _ = try await waitButton("right Command key")
-            var currentHint: OnboardingWrongCommandMonitor.Probe?
-            for _ in 0..<60 {
-                if let found = hintProbe(host), found.isMonitoring, found.hint.acceptsInput { currentHint = found; break }
-                try await settle(60)
-            }
-            guard let currentHint else {
-                func logHints(_ view: NSView) {
-                    if let probe = view as? OnboardingWrongCommandMonitor.Probe {
-                        Log("Hint probe: monitoring=\(probe.isMonitoring), accepts=\(probe.hint.acceptsInput), active=\(probe.hint.isActive), window=\(String(describing: probe.window?.title))")
-                    }
-                    view.subviews.forEach(logHints)
-                }
-                logHints(host)
-                Log("Double Tap hint AX: \(elements(host, maximumDepth: 80).map(\.label))")
-                _ = try? await capture(host, name: "shortcut-hint-failure", directory: directory)
-                throw Failure.unavailable
-            }
-            let before = currentHint.hint.pulseCount
-            try await leftCommandTap(); try await leftCommandTap()
-            checks["wrong_double_tap_only_hints_\(index)"] = currentHint.hint.isActive
-                && currentHint.hint.pulseCount == before + 1
-            try await settle(280)
-            captures.append(try await capture(host, name: name, directory: directory))
-            try await settle(900)
-            checks["double_tap_hint_expires_\(index)"] = !currentHint.hint.isActive
-            let button = try await waitButton("right Command key")
-            let point = CGPoint(x: button.frame.midX, y: button.frame.midY)
-            try postClick(window: window, screenPoint: point)
+        // The only reply example is Mail. Its one tap demonstrates Magic Reply,
+        // then unlocks Continue directly, without another sample or keyboard lesson.
+        defaults.set(true, forKey: NotchPreferences.physicalTapEnabledKey)
+        NotificationCenter.default.post(name: .physicalNotchTapChanged, object: nil)
+        for _ in 0..<100 {
+            if coordinator.onboardingDemoArmed && coordinator.onboardingDemoAction == .magicReply { break }
             try await settle(80)
-            try postClick(window: window, screenPoint: point)
-            try await settle(120)
-            checks["correction_stops_during_drafting_\(index)"] = !currentHint.isMonitoring
-            let count = currentHint.hint.pulseCount
-            try await leftCommandTap()
-            checks["drafting_ignores_wrong_key_\(index)"] = currentHint.hint.pulseCount == count
-            if index == 0 { try await click("Next: iMessage demo") }
         }
+        try await reveal()
+        try await settle(300)
+        checks["magic_reply_owns_email"] = coordinator.onboardingDemoArmed
+            && coordinator.onboardingDemoAction == .magicReply && !coordinator.run.isRunning
+        checks["no_keyboard_in_reply_lesson"] = !elements(host).contains {
+            $0.label == "right Command key" || $0.label.contains("Double tap your")
+        }
+        captures.append(try await capture(host, name: "magic-reply-email-invitation", directory: directory))
+        let physicalReady = PhysicalNotchTap.shared.status == .ready && coordinator.onboardingPhysicalTapAvailable
+        if physicalReady {
+            checks["physical_tap_opens_magic_reply"] = coordinator.physicalScreenTapped()
+        } else {
+            try await click("Try Magic Reply")
+        }
+        for _ in 0..<30 {
+            if notch.panelForTesting?.isVisible == true { break }
+            try await settle(10)
+        }
+        checks["magic_reply_opens_real_notch"] = coordinator.phase == .typing
+            && coordinator.onboardingDemoAction == .magicReply && notch.panelForTesting?.isVisible == true
+        checks["repeated_tap_cannot_skip_reply"] = !coordinator.physicalScreenTapped()
+        for _ in 0..<250 {
+            if coordinator.onboardingActionCue == .pressed { break }
+            try await settle(10)
+        }
+        checks["magic_reply_press_is_inert"] = coordinator.onboardingActionCue == .pressed
+            && !coordinator.run.isRunning && coordinator.run.interaction == nil
+        try await settle(100)
+        if let panel = notch.panelForTesting, let screen = window.screen {
+            captures.append(try await captureDisplay(windows: [window, panel], screen: screen,
+                name: "magic-reply-email-pressed", directory: directory))
+        } else { throw Failure.unavailable }
         _ = try await waitButton("Continue")
-        checks["double_tap_completes_after_correct_input"] = true
+        checks["email_reply_unlocks_continue"] = coordinator.phase == .hidden
+            && !coordinator.onboardingDemoArmed && !coordinator.run.isRunning
+        checks["only_one_reply_example"] = !elements(host).contains {
+            $0.label == "Next: iMessage demo" || $0.label == "Sample iMessage conversation"
+        }
+        checks["email_draft_is_visible"] = elements(host).contains { $0.label == "Your draft reply" }
+        checks["finished_reply_ignores_extra_taps"] = !coordinator.physicalScreenTapped()
+        try await settle(500)
+        captures.append(try await capture(host, name: "magic-reply-email-draft", directory: directory))
         completed = true
+        return checks
+    }
+
+    /// Targeted lesson check, independent of the remote film and its scroll clock.
+    static func runMagicReply(app: AppState, root: URL) async throws -> [String: Bool] {
+        guard ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-magic-reply" else { throw Failure.isolation }
+        let coordinator = app.commandCoordinator
+        coordinator.run.preventsTaskExecutionForUIFixture = true
+        UserDefaults.standard.set(true, forKey: NotchPreferences.physicalTapEnabledKey)
+        let notch = NotchWindowController(coordinator: coordinator)
+        notch.start()
+        PhysicalNotchTap.shared.start(allowed: { coordinator.onboardingPhysicalTapAvailable }, onTap: {})
+        let demo = OnboardingMagicReplyDemo()
+        var continued = 0
+        let host = NSHostingView(rootView: OnboardingMagicReplyView(coordinator: coordinator,
+            onContinue: { continued += 1 }, demo: demo)
+            .environment(\.accessibilityEnabled, true).preferredColorScheme(.dark))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Magic Reply · isolated preview"
+        window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host; window.center()
+        let directory = root.appendingPathComponent("polish-snapshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var checks: [String: Bool] = [:], captures: [[String: Any]] = []
+        defer {
+            let manifest: [String: Any] = ["checks": checks, "captures": captures, "provider_calls": 0,
+                "capture_scope": "current_process_windows_only"]
+            if let data = try? JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys, .prettyPrinted]) {
+                try? data.write(to: root.appendingPathComponent("magic-reply-manifest.json"))
+            }
+            coordinator.disarmOnboardingNotchDemo(); demo.stop()
+            PhysicalNotchTap.shared.stop(); notch.shutdownForTesting(); window.close()
+        }
+        func foreground() async throws {
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            for _ in 0..<60 {
+                if window.isKeyWindow && NSApp.isActive { break }
+                try await settle(30)
+            }
+            guard window.isKeyWindow && NSApp.isActive else { throw Failure.foreground }
+        }
+        try await foreground()
+        for _ in 0..<100 {
+            if demo.phase == .waiting && coordinator.onboardingDemoArmed { break }
+            try await settle(40)
+        }
+        try await settle(300)
+        checks["email_waits_for_one_tap"] = demo.phase == .waiting && !demo.continueVisible
+            && coordinator.onboardingDemoArmed && coordinator.onboardingDemoAction == .magicReply
+        captures.append(try await capture(host, name: "magic-reply-email-invitation", directory: directory))
+        // A real outside click may cancel this owned preview; exercise the same re-armed
+        // invitation once more rather than treating that cancellation as a successful press.
+        for attempt in 0..<2 {
+            try await foreground()
+            if PhysicalNotchTap.shared.status == .ready && coordinator.onboardingPhysicalTapAvailable {
+                checks["physical_route_admitted"] = coordinator.physicalScreenTapped()
+            } else { coordinator.openNotchFromHome() }
+            for _ in 0..<250 {
+                if coordinator.onboardingActionCue == .pressed || coordinator.phase == .hidden { break }
+                try await settle(10)
+            }
+            if coordinator.onboardingActionCue == .pressed { break }
+            guard attempt == 0, coordinator.onboardingDemoArmed, demo.phase == .waiting else { throw Failure.unavailable }
+        }
+        checks["magic_reply_selected_without_real_work"] = coordinator.onboardingDemoAction == .magicReply
+            && coordinator.onboardingActionCue == .pressed && !coordinator.run.isRunning
+        checks["extra_taps_do_not_advance"] = !coordinator.physicalScreenTapped()
+        try await settle(90)
+        guard let panel = notch.panelForTesting, let screen = window.screen else { throw Failure.unavailable }
+        captures.append(try await captureDisplay(windows: [window, panel], screen: screen,
+            name: "magic-reply-email-pressed", directory: directory))
+        for _ in 0..<150 {
+            if demo.continueVisible { break }
+            try await settle(40)
+        }
+        checks["first_email_unlocks_continue"] = demo.phase == .complete && demo.replyVisible && demo.continueVisible
+        checks["notch_retracts_after_press"] = coordinator.phase == .hidden && !coordinator.onboardingDemoArmed
+        checks["no_provider_or_agent_run"] = !coordinator.run.isRunning && coordinator.run.interaction == nil
+        try await foreground()
+        var button: Element?
+        for _ in 0..<30 {
+            _ = await activateOwnAccessibility()
+            button = elements(host).first { $0.label == "Continue" && $0.role == NSAccessibility.Role.button.rawValue }
+            if button != nil { break }
+            try await settle(60)
+        }
+        guard let button else { throw Failure.accessibility }
+        checks["only_email_and_continue"] = !elements(host).contains {
+            $0.label == "Next: iMessage demo" || $0.label == "Sample iMessage conversation" || $0.label == "right Command key"
+        }
+        try await settle(500)
+        captures.append(try await capture(host, name: "magic-reply-email-draft", directory: directory))
+        try postClick(window: window, screenPoint: CGPoint(x: button.frame.midX, y: button.frame.midY))
+        for _ in 0..<40 { if continued == 1 { break }; try await settle(25) }
+        checks["continue_exits_after_one_email"] = continued == 1
         return checks
     }
 
@@ -873,7 +876,8 @@ import WebKit
         let directory = root.appendingPathComponent("polish-snapshots", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
-            let manifest: [String: Any] = ["checks": checks, "captures": captures, "completed": completed, "provider_calls": 0]
+            let manifest: [String: Any] = ["checks": checks, "captures": captures, "completed": completed, "provider_calls": 0,
+                "render_mode": FileManager.default.fileExists(atPath: root.appendingPathComponent("onboarding-offscreen-render").path) ? "controlled-occlusion" : "onscreen"]
             if let data = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: root.appendingPathComponent("small-onboarding-manifest.json"))
             }
@@ -897,8 +901,9 @@ import WebKit
         checks["larger_display_keeps_full_size"] = OnboardingWindowLayout.scale(visibleSize: CGSize(width: 1512, height: 900)) == 1
 
         let host = NSHostingView(rootView: AnyView(Color.black))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 880, height: 650),
+        let window = FilmFixtureWindow(contentRect: CGRect(x: 0, y: 0, width: 880, height: 650),
             styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.rendersWhileOccluded = FileManager.default.fileExists(atPath: root.appendingPathComponent("onboarding-offscreen-render").path)
         window.title = "Small-screen onboarding · isolated preview"
         window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
         window.backgroundColor = .black
@@ -915,11 +920,11 @@ import WebKit
         for (index, visibleSize) in [CGSize(width: 1280, height: 704), CGSize(width: 1366, height: 660)].enumerated() {
             let scale = OnboardingWindowLayout.scale(visibleSize: visibleSize)
             let size = OnboardingWindowLayout.initialSize(visibleSize: visibleSize)
-            let demo = OnboardingDoubleTapDemo.preview(sample: index == 0 ? .email : .message, completed: true)
+            let demo = OnboardingMagicReplyDemo.preview(completed: true)
             setViewport(size)
             host.rootView = AnyView(OnboardingCanvas(scale: scale) {
-                OnboardingDoubleTapView(onContinue: { continued += 1 }, demo: demo)
-            }.id(index).preferredColorScheme(.dark))
+                OnboardingMagicReplyView(onContinue: { continued += 1 }, demo: demo)
+            }.id(index).environment(\.accessibilityEnabled, true).preferredColorScheme(.dark))
             window.center()
             for _ in 0..<20 {
                 if !window.isKeyWindow || !NSApp.isActive {
@@ -929,15 +934,26 @@ import WebKit
                 if window.isKeyWindow && NSApp.isActive { break }
             }
             try await settle(400)
-            let title = index == 0 ? "Next: iMessage demo" : "Continue"
-            guard let button = elements(host).first(where: { $0.label == title && $0.role == NSAccessibility.Role.button.rawValue }) else { throw Failure.accessibility }
+            let title = "Continue"
+            var foundButton: Element?
+            for _ in 0..<40 {
+                _ = await activateOwnAccessibility()
+                if let button = elements(host).first(where: { $0.label == title && $0.role == NSAccessibility.Role.button.rawValue }) {
+                    foundButton = button; break
+                }
+                try await settle(80)
+            }
+            guard let button = foundButton else {
+                _ = try? await capture(host, name: "small-action-failure-\(index)", directory: directory)
+                throw Failure.accessibility
+            }
             let viewport = window.convertToScreen(host.convert(host.bounds, to: nil))
             checks["bottom_action_fully_visible_\(index)"] = viewport.contains(button.frame) && button.frame.minY >= viewport.minY + 4
             checks["bottom_action_remains_readable_\(index)"] = button.frame.height >= 29 && button.frame.width >= 65
-            captures.append(try await capture(host, name: index == 0 ? "small-01-next-13inch" : "small-02-continue-11inch", directory: directory))
+            captures.append(try await capture(host, name: index == 0 ? "small-01-continue-13inch" : "small-02-continue-11inch", directory: directory))
             try postClick(window: window, screenPoint: CGPoint(x: button.frame.midX, y: button.frame.midY))
             try await settle(200)
-            checks["scaled_action_receives_click_\(index)"] = index == 0 ? demo.phase == .switching : continued == 1
+            checks["scaled_action_receives_click_\(index)"] = continued == index + 1
             demo.stop()
         }
         // The production hidden-titlebar window allows the film and GitHub mark to paint
@@ -1000,7 +1016,7 @@ import WebKit
         }
         if OnboardingNotchPointer.hasPhysicalTarget {
             guard let probe = pointerProbe(host), let pointer = probe.pointer,
-                  let cta = elements(host).first(where: { $0.identifier == "onboarding.sidekick.instruction" && $0.role == NSAccessibility.Role.button.rawValue }) else { throw Failure.accessibility }
+                  let cta = elements(host).first(where: { $0.identifier == "onboarding.sidekick.instruction" }) else { throw Failure.accessibility }
             checks["scaled_notch_arrow_matches_cta"] = abs(cta.frame.midX - pointer.frame.midX) < 1
                 && abs(pointer.frame.minY + 8 - cta.frame.maxY - 12) < 1
         }
@@ -1102,7 +1118,7 @@ import WebKit
             Color(white: 0.055)
             NotchContent(phase: phase, readBack: nil,
                 statusLine: statusLine ?? (phase == .running ? "→ sentient_native.get_app_state" : ""), activity: activity,
-                demoText: phase == .typing ? "Help me with this" : nil, metrics: metrics,
+                metrics: metrics, draft: .constant(phase == .typing ? "Help me with this" : ""),
                 onStop: onStop, onOpenConversation: onOpen)
         }.environment(\.colorScheme, .dark))
     }

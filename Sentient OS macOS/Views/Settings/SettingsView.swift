@@ -14,14 +14,15 @@ import AppKit
 struct SettingsView: View {
     /// The sections, in sidebar order.
     enum Pane: CaseIterable, Identifiable {
-        case frontierModel, sources, proactive, doubleTap, overnight, shareKnowledge, system, health
+        case notchShortcuts, frontierModel, sources, proactive, doubleTap, overnight, shareKnowledge, system, health
 
         var id: Self { self }
         var title: String {
             switch self {
+            case .notchShortcuts: return "Notch & Shortcuts"
             case .sources:   return "Knowledge Sources"
             case .frontierModel: return "AI Models & Accounts"
-            case .doubleTap: return "Double Tap"
+            case .doubleTap: return "Magic Reply"
             case .proactive: return "Sidekick"
             case .overnight: return "Overnight & Suggestions"
             case .shareKnowledge: return "Knowledge Sharing"
@@ -29,11 +30,12 @@ struct SettingsView: View {
             case .health:    return "Permissions & Help"
             }
         }
-        var icon: String {
+        var icon: String? {
             switch self {
+            case .notchShortcuts: return nil
             case .sources:   return "tray.full"
             case .frontierModel: return "cpu"
-            case .doubleTap: return "hand.tap"
+            case .doubleTap: return "touchid"
             case .proactive: return "sparkles"
             case .overnight: return "moon.stars"
             case .shareKnowledge: return "antenna.radiowaves.left.and.right"
@@ -48,7 +50,7 @@ struct SettingsView: View {
         var id: Self { self }
         var panes: [Pane] {
             switch self {
-            case .app: [.frontierModel]
+            case .app: [.notchShortcuts, .frontierModel]
             case .personalization: [.sources, .proactive, .doubleTap, .overnight, .shareKnowledge]
             case .privacy: [.system, .health]
             }
@@ -181,6 +183,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Group {
                 switch selection {
+                case .notchShortcuts: NotchShortcutsPane()
                 case .sources:   SourcesPane()
                 case .frontierModel: FrontierModelPane()
                 case .doubleTap: DoubleTapPane()
@@ -224,8 +227,21 @@ private struct SidebarRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: pane.icon)
-                    .font(.system(size: 14))
+                Group {
+                    if let symbol = pane.icon {
+                        Image(systemName: symbol)
+                            .font(.system(size: 14))
+                    } else {
+                        ZStack(alignment: .top) {
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                                .strokeBorder(lineWidth: 1.1)
+                            UnevenRoundedRectangle(bottomLeadingRadius: 1.3, bottomTrailingRadius: 1.3)
+                                .frame(width: 8, height: 4)
+                                .offset(y: 0.5)
+                        }
+                        .frame(width: 20, height: 14)
+                    }
+                }
                     .foregroundStyle(selected ? .white : SettingsStyle.secondary)
                     .frame(width: 20)
                     .accessibilityHidden(true)
