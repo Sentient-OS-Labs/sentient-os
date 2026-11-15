@@ -155,6 +155,9 @@ without a conflicting Command-Comma binding. Input methods without Unicode layou
 underlying ASCII-capable layout. Unmappable punctuation or a custom layout that puts both actions
 on the same key remains unavailable instead of dispatching an unrelated action.
 
+The chords can be switched off in Notch & Shortcuts (`ShortcutPreferences.quickActionShortcutsEnabled`).
+Off unregisters both Carbon hotkeys, so `⌘,` and `⌘.` reach the frontmost app again.
+
 `QuickActionHotkeys.swift` registers only those two chords with `RegisterEventHotKey`. It does not
 install a keyboard event tap or global key-down monitor and adds no Input Monitoring permission.
 Registrations are exclusive, follow layout changes, suspend during shortcut recording and inactive
