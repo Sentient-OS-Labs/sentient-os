@@ -5,7 +5,8 @@
 //  Data layer for the Knowledge reader. Scans the on-disk markdown vault
 //  (~/Sentient OS - Knowledge Base/) into a browsable tree, indexes every note title so
 //  [[wikilinks]] can be resolved to files, and reads a note for display (strips the leading
-//  YAML frontmatter block and promotes the first `# H1` to the title). Pure value types + one
+//  YAML frontmatter block and promotes the first `# H1` to the title). Search indexes those
+//  displayed titles and bodies alongside filenames. Pure value types + one
 //  synchronous loader — the view (KnowledgeView) owns all UI state.
 //
 //  Key types: VaultNode (a folder or a note) · KnowledgeVault (.load() / .resolve() /
@@ -38,10 +39,11 @@ struct KnowledgeVault {
     let allNotes: [VaultNode]        // every note, flattened, alphabetical (includes README)
     let titleIndex: [String: URL]    // lowercased filename stem → note URL
     let readme: URL?                 // the root README, shown pinned as "Overview"
+    private let searchText: [URL: String] // displayed title + body, cached for this snapshot
 
     /// Scan `VaultGenerator.vaultRoot` into a tree. Returns nil if the vault folder doesn't exist
-    /// yet (no knowledge base has been built). Cheap — only enumerates directory entries; note
-    /// bodies are read lazily on selection via `read(_:)`.
+    /// yet (no knowledge base has been built). Read each note once for the search snapshot so
+    /// queries never do filesystem work. Reload after a save/create/delete to refresh the index.
     static func load() -> KnowledgeVault? {
         let root = VaultGenerator.vaultRoot
         let fm = FileManager.default
@@ -50,6 +52,7 @@ struct KnowledgeVault {
 
         var index: [String: URL] = [:]
         var flat: [VaultNode] = []
+        var searchText: [URL: String] = [:]
 
         func scan(_ dir: URL) -> [VaultNode] {
             let items = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey],
@@ -74,6 +77,8 @@ struct KnowledgeVault {
                     let node = VaultNode(url: url, name: stem, isFolder: false, children: [])
                     notes.append(node)
                     flat.append(node)
+                    let note = read(url)
+                    searchText[url] = "\(note.title)\n\(note.markdown)"
                 }
             }
             folders.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -86,7 +91,19 @@ struct KnowledgeVault {
         top.removeAll { !$0.isFolder && $0.name.caseInsensitiveCompare("README") == .orderedSame }
         flat.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
-        return KnowledgeVault(root: root, nodes: top, allNotes: flat, titleIndex: index, readme: readme)
+        return KnowledgeVault(root: root, nodes: top, allNotes: flat, titleIndex: index,
+                              readme: readme, searchText: searchText)
+    }
+
+    /// Match filenames and displayed content in the existing alphabetical order, once per note.
+    /// Frontmatter and excluded support files never enter the searchable snapshot.
+    func search(_ query: String) -> [VaultNode] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        return allNotes.filter { node in
+            node.name.localizedCaseInsensitiveContains(query)
+                || searchText[node.url]?.localizedCaseInsensitiveContains(query) == true
+        }
     }
 
     /// Resolve a `[[wikilink]]` target (a note title / filename stem) to a note URL, if one exists.
