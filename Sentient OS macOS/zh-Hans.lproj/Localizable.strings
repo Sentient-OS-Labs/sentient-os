@@ -1,0 +1,359 @@
+/* Sentient OS - Simplified Chinese Localization */
+/* 简体中文汉化 · 316 strings · 2026-08-03 */
+
+/* ===== App Name & Branding ===== */
+"Sentient OS" = "Sentient OS";
+"Sentient OS · idle" = "Sentient OS · 待机";
+"An AI that knows your life, and acts on it." = "一个懂你生活、替你办事的 AI。";
+"On-device intelligence that understands your entire life to proactively help you. Open-source & free." = "本地设备上的智能助手，理解你的全部生活，主动帮助你。开源且免费。";
+"Private by design. Your files never leave this Mac." = "隐私优先。你的文件永不离开这台 Mac。";
+"Private by design." = "隐私优先设计。";
+
+/* ===== Menu Bar ===== */
+"Open Sentient OS" = "打开 Sentient OS";
+"Check for Updates…" = "检查更新…";
+"Check for Updates Now" = "立即检查更新";
+"Version \(UpdateController.currentVersionString)" = "版本 \(UpdateController.currentVersionString)";
+"Quit Sentient OS" = "退出 Sentient OS";
+"Quit Sentient" = "退出 Sentient";
+"Settings" = "设置";
+"Sentient is on version \(UpdateController.currentVersionString)." = "Sentient 已更新到版本 \(UpdateController.currentVersionString)。";
+"You're up to date." = "已是最新版本。";
+"Checking for updates…" = "正在检查更新…";
+"Couldn't check for updates." = "无法检查更新。";
+"Update Now" = "立即更新";
+"Restart app" = "重启应用";
+"Relaunch Sentient" = "重新启动 Sentient";
+
+/* ===== Onboarding ===== */
+"Sentient is ready to understand your life.\nConnect as much as you can; everything stays on this Mac." = "Sentient 已准备好了解你的生活。\n尽可能多地连接数据源；所有数据留在本机。";
+"Sentient needs a few permissions to read your life on this Mac." = "Sentient 需要几个权限来读取你在这台 Mac 上的数据。";
+"Acting on your Mac needs these grants, once. You will not be asked again." = "控制你的 Mac 需要这些权限，只需授权一次，不再重复询问。";
+"Set up in 2 minutes" = "两分钟快速设置";
+"Grant Full Disk Access…" = "授予完全磁盘访问权限…";
+"Full Disk Access needed" = "需要完全磁盘访问权限";
+"Full Disk Access granted" = "完全磁盘访问权限已授予";
+"GRANTED" = "已授权";
+"NEEDED" = "需要授权";
+"PERMISSIONS" = "权限";
+"Sources: " = "数据来源：";
+"Your Sentient needs at least four sources to truly know you." = "Sentient 需要至少四个数据来源才能真正了解你。";
+"Choose folder…" = "选择文件夹…";
+"Choose chats & groups" = "选择聊天和群组";
+
+/* ===== Knowledge Base ===== */
+"Knowledge" = "知识库";
+"Your life, from above." = "你的生活，一览无余。";
+"Your sky is still forming." = "你的星空正在生成。";
+"Once Sentient has read your life, every note becomes a star." = "当 Sentient 读完你的生活，每条笔记都会变成一颗星星。";
+"Analyze Now" = "立即分析";
+"Analyzing" = "正在分析";
+"Analysis complete" = "分析完成";
+"Start Analysis" = "开始分析";
+"Pause Analysis" = "暂停分析";
+"Resume Analysis" = "继续分析";
+"Stop Analysis" = "停止分析";
+"Paused. It picks up exactly where it stopped." = "已暂停。恢复时会从断点继续。";
+"Pausing keeps your progress." = "暂停会保留你的进度。";
+"It will resume when you continue." = "恢复后会继续执行。";
+"SUMMARIES · \(notes.count)" = "摘要 · \(notes.count)";
+"JUST PROCESSED" = "刚刚处理完成";
+"DROPPED · \(dropped.count)" = "已丢弃 · \(dropped.count)";
+"\(progress.survivors) kept · \(progress.junk) junk · \(progress.failed) failed" = "\(progress.survivors) 保留 · \(progress.junk) 垃圾 · \(progress.failed) 失败";
+"FIRST RUN · ABOUT 15 MINUTES" = "首次运行 · 大约 15 分钟";
+"STILL WORKING · ANOTHER 15 MINUTES OR SO" = "仍在运行 · 大约还需要 15 分钟";
+"This initial analysis can take a few hours. We recommend you run this overnight." = "首次分析可能需要几个小时，建议晚上充电时运行。";
+
+/* ===== Overnight Processing ===== */
+"Overnight Processing" = "夜间处理";
+"Overnight Processing…" = "夜间处理中…";
+"Runs while your Mac rests." = "在你 Mac 休眠时自动运行。";
+"Your Sentient works the night shift." = "你的 Sentient 在夜班工作。";
+"To stay helpful, your Sentient runs its on-device intelligence every night at 3 AM, and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive." = "为了持续帮助你，Sentient 每晚 3 点运行本地智能模型。这需要 Sentient 保持运行。它经过深度优化，其他时间不会占用内存和 CPU。\n\n建议保持此选项开启。";
+"Keep It On" = "保持开启";
+"Arm" = "开启";
+"14h (real)" = "14小时（真实）";
+
+/* ===== Sidekick / Notch ===== */
+"What can I take over for you?" = "有什么我可以帮你做的？";
+"Tell me what you want me to " = "告诉我你想要我 ";
+"DO" = "执行";
+"I'm here to help." = "我在这里帮助你。";
+"Remembering" = "正在回忆";
+"Working…" = "工作中…";
+"Starting…" = "启动中…";
+"Stopping…" = "停止中…";
+"Stop" = "停止";
+"Holding… %.2fs" = "等待中… %.2f秒";
+"Hold right ⌘" = "按住右侧 ⌘ 键";
+"LISTENING" = "正在聆听";
+"THINKING" = "正在思考";
+"PROMPT" = "输入指令";
+"STOP" = "停止";
+"Copy" = "复制";
+"Copied" = "已复制";
+"Copied ✓" = "已复制 ✓";
+
+/* ===== Codex / Computer Use ===== */
+"CODEX SETUP" = "CODEX 设置";
+"Give Sentient its hands and eyes." = "给 Sentient 手和眼睛。";
+"Three steps to let Sentient act for you with Codex computer use. This window just triggers the shared setup engine; onboarding calls the exact same code." = "三步让 Sentient 用 Codex 帮你操作电脑。此窗口仅触发共享设置引擎；初始化流程调用完全相同的代码。";
+"Install Codex CLI" = "安装 Codex CLI";
+"Update Codex CLI" = "更新 Codex CLI";
+"Log in to Codex" = "登录 Codex";
+"Log in again" = "重新登录";
+"DONE" = "完成";
+"PENDING" = "待处理";
+"Codex is all good." = "Codex 一切就绪。";
+"Setting up Codex computer use in the background." = "正在后台设置 Codex 计算机使用。";
+"Finish signing in in your browser. This screen notices on its own." = "在浏览器中完成登录。此页面会自动检测。";
+"Sentient couldn't finish installing Codex automatically." = "Sentient 无法自动完成 Codex 安装。";
+"Open the Codex install guide" = "打开 Codex 安装指南";
+"Grant computer-use control" = "授予计算机控制权限";
+"Grant screen recording…" = "授予屏幕录制权限…";
+"Grant microphone…" = "授予麦克风权限…";
+"A browser window opened. Finish signing in there; I'll retry on my own." = "已打开浏览器窗口，在那里完成登录；我会自动重试。";
+"Codex isn't available in a few countries." = "Codex 在部分国家不可用。";
+
+/* ===== Cloud / MCP ===== */
+"Offer your knowledge base to your AIs" = "将知识库开放给你的 AI";
+"Offer your knowledge base to ChatGPT, Claude, and every AI you use. Private, over MCP, in two simple steps." = "将知识库开放给 ChatGPT、Claude 以及你使用的所有 AI。通过 MCP 私密连接，仅需两步。";
+"Offer your knowledge base to your ChatGPT or Claude." = "将知识库开放给你的 ChatGPT 或 Claude。";
+"Connect your AIs." = "连接你的 AI。";
+"Connect your AIs?" = "连接你的 AI？";
+"Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful." = "你的 ChatGPT 和 Claude（包括手机App）都能读取 Sentient 知识库，让它们变得更有帮助。";
+"ChatGPT and Claude read it over MCP. No account, just a private link that only you hold." = "ChatGPT 和 Claude 通过 MCP 读取。不需要账号，只有一个只有你持有的私密链接。";
+"Yes, use the cloud MCP" = "是，使用云端 MCP";
+"Stop & Delete Cloud Copy" = "停止并删除云端副本";
+"The cloud copy is deleted immediately and your AIs lose access. Your knowledge base stays safe on this Mac, and turning sharing back on restores the same link." = "云端副本立即删除，你的 AI 失去访问权限。知识库安全保留在本机。重新开启共享会恢复相同的链接。";
+"MCP SYNC" = "MCP 同步";
+"MCP TOGGLE" = "MCP 开关";
+"MCP mirror — syncs after each KB update" = "MCP 镜像 — 每次知识库更新后同步";
+"Continue with just the knowledge base" = "仅使用知识库继续";
+"Not now" = "暂时不用";
+
+/* ===== ChatGPT Integration ===== */
+"We noticed you're not on ChatGPT Plus." = "我们注意到你还没有 ChatGPT Plus。";
+"You can still build your private knowledge base from this Mac and offer it to your AIs." = "你仍然可以在本机建立私密知识库并提供给你的 AI。";
+"Right now, Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute." = "目前，Sentient 使用你的 ChatGPT 订阅中的 Codex 前沿模型处理少量计算。";
+"Sentient will unlock the full experience and take your word for it.\n\nNote that the ChatGPT Go plan does not offer enough Codex use to unlock the full experience." = "Sentient 将解锁完整体验。\n\n注意：ChatGPT Go 计划不提供足够的 Codex 使用额度以解锁完整体验。";
+"Get ChatGPT Plus" = "获取 ChatGPT Plus";
+"I've upgraded to ChatGPT Plus" = "我已升级到 ChatGPT Plus";
+"I've upgraded" = "已升级";
+"Yes, I'm on Plus!" = "是的，我是 Plus 用户！";
+"Upgrade on ChatGPT" = "在 ChatGPT 上升级";
+"Upgraded? Reset rebuilds your knowledge with Gmail, Calendar, and the full engine." = "已升级？重置后将用 Gmail、日历和完整引擎重建你的知识库。";
+"You're on Plus. Time to go live." = "你是 Plus 用户，可以开始体验了。";
+"Use ChatGPT" = "使用 ChatGPT";
+"Log in with ChatGPT" = "用 ChatGPT 登录";
+
+/* ===== Sources ===== */
+"SOURCES" = "数据来源";
+"Gmail" = "Gmail";
+"Calendar" = "日历";
+"Apple Notes" = "Apple 备忘录";
+"WhatsApp · iMessage · Apple Notes read protected databases. Grant Full Disk Access, then restart." = "WhatsApp · iMessage · Apple 备忘录读取受保护的数据库。请先授予完全磁盘访问权限，然后重启。";
+"Couldn't read \(sourceName)" = "无法读取 \(sourceName)";
+"Choose your frontier model" = "选择你的前沿模型";
+
+/* ===== Settings / Preferences ===== */
+"Configure" = "配置";
+"Configure Telemetry" = "配置遥测";
+"We don't collect your private info, ever." = "我们从不收集你的私人信息。";
+"We never collect your personal info." = "我们绝不收集你的个人信息。";
+"Even with this off, Sentient still sends a handful of extremely anonymized usage-count pings: how many people use Sentient, and how often core features fire (Sidekick, proactive cards, overnight runs, home opens). Counts only, through a privacy-first, open-source tool, so a two-person team can see our work is being used. Never your content, never anything personal." = "即使关闭此选项，Sentient 仍会发送极少量完全匿名的使用计数：多少人使用 Sentient，核心功能（Sidekick、主动卡片、夜间运行、主页打开）的使用频率。仅计数，通过隐私优先的开源工具发送。永不涉及你的内容或个人信息。";
+
+/* ===== Proactive Cards ===== */
+"PROACTIVE CARDS" = "主动卡片";
+"ACTION ITEMS · \(items.count)" = "待办事项 · \(items.count)";
+"No action items yet — run \"proactive system\"." = "暂无待办事项 — 运行\"主动系统\"。";
+"REAL CARDS" = "真实卡片";
+
+/* ===== Uninstall / Reset ===== */
+"Reset & Rebuild" = "重置并重建";
+"Reset Sentient and it rebuilds your knowledge with Gmail and Calendar,\nthen keeps it alive: proactive mornings, Sidekick, learning night after night." = "重置 Sentient 后，它会用 Gmail 和日历重建你的知识库，\n然后持续更新：主动早晨问候、Sidekick、每晚学习。";
+"Reset Sentient…" = "重置 Sentient…";
+"Reset" = "重置";
+"Taking Sentient apart, gently." = "正在温柔地拆除 Sentient。";
+"Sentient is gone from this Mac." = "Sentient 已从这台 Mac 上移除。";
+"Everything." = "全部数据。";
+"Your knowledge base and everything Sentient understood is deleted from this Mac, and the cloud copy is removed. This can't be undone; Sentient takes you back through setup, beginning with the initial processing." = "你的知识库和 Sentient 理解的所有内容将从本机删除，云端副本也被移除。此操作不可撤销；Sentient 会带你重新设置，从初始处理开始。";
+"Uninstall Sentient…" = "卸载 Sentient…";
+"Erase Everything" = "清除所有数据";
+"Erasing…" = "清除中…";
+
+/* ===== Common UI ===== */
+"Done" = "完成";
+"Cancel" = "取消";
+"Save" = "保存";
+"Delete" = "删除";
+"Clear" = "清除";
+"Clear All" = "全部清除";
+"Back" = "返回";
+"Continue" = "继续";
+"Create" = "创建";
+"Discard" = "放弃";
+"Refresh" = "刷新";
+"Retry" = "重试";
+"Try Again" = "再试一次";
+"Wait" = "等待";
+"Understood" = "明白了";
+"OK" = "好的";
+"Not now" = "暂时不用";
+
+/* ===== Navigation ===== */
+"Overview" = "总览";
+"STATUS" = "状态";
+"EVENT LOG" = "事件日志";
+"DEV TOOLS" = "开发工具";
+"HOTKEY LAB" = "热键实验室";
+"JESAI'S DEMO" = "JESAI 演示";
+"LAUNCH DEMO" = "启动演示";
+"Demo bar baseline" = "演示条基线";
+
+/* ===== Updates ===== */
+"Checking your Sentient…" = "正在检查你的 Sentient…";
+
+/* ===== Export / Import ===== */
+"Export Summaries" = "导出摘要";
+"Export" = "导出";
+"Import Summaries" = "导入摘要";
+"Import" = "导入";
+"Save to Desktop" = "保存到桌面";
+"Saved to your Desktop" = "已保存到桌面";
+"Saved" = "已保存";
+"Saving…" = "保存中…";
+
+/* ===== Misc ===== */
+"Editable" = "可编辑";
+"Edit this note" = "编辑此笔记";
+"Save your changes to this note, or discard them?" = "保存对此笔记的更改，还是放弃？";
+"Move to Trash" = "移动到废纸篓";
+"Reveal in Finder" = "在访达中显示";
+"Email the founders" = "给开发者发邮件";
+"Privacy Policy" = "隐私政策";
+"Sentient OS on GitHub" = "Sentient OS 在 GitHub";
+"Read More" = "了解更多";
+"Back to the Night Sky" = "返回星空";
+"SKIP TO HOME" = "跳转到主页";
+"Everything." = "全部。";
+"Close" = "关闭";
+
+/* ===== Permissions ===== */
+"Grant permissions to continue" = "授权权限以继续";
+"Open System Settings" = "打开系统设置";
+"Open Accessibility Settings" = "打开辅助功能设置";
+"Open Automation Settings" = "打开自动化设置";
+"Open Login Items" = "打开登录项";
+"Open Microphone Settings" = "打开麦克风设置";
+"Open Screen Recording Settings" = "打开屏幕录制设置";
+"This part needs your password." = "此操作需要你的密码。";
+
+/* ===== Footer / Legal ===== */
+"We never collect your personal info." = "我们绝不收集你的个人信息。";
+"Your gift will be cleared from the home screen soon." = "你的礼物将很快从主屏幕清除。";
+"This is a preview of Sentient." = "这是 Sentient 的预览版。";
+"Leave Sentient open and don't shut the lid of your Mac." = "保持 Sentient 打开，不要合上 Mac 盖子。";
+"Sentient built your knowledge base right here on this Mac. Want to offer it to ChatGPT, Claude, and every AI you use?" = "Sentient 在这台 Mac 上建立了你的知识库。想把它提供给 ChatGPT、Claude 和你所有 AI 吗？";
+"Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:" = "你的知识库已建成，私密且完全属于你。\n持续运行的 Sentient 使用你的 ChatGPT Plus：";
+"Save your changes to this note, or discard them?" = "保存或放弃对此笔记的修改？";
+"New note or folder in \(name)" = "在 \(name) 中新建笔记或文件夹";
+"New note or folder" = "新建笔记或文件夹";
+"No matches" = "无匹配结果";
+"No active chats in the last \(ChatWindowing.lookbackDays) days" = "最近 \(ChatWindowing.lookbackDays) 天没有活跃聊天";
+"Paused · \(reason)" = "已暂停 · \(reason)";
+"Processing \(done) / \(total)" = "处理中 \(done) / \(total)";
+"Error · \(message)" = "错误 · \(message)";
+"\(shownDone) of \(shownTotal)" = "\(shownDone) / \(shownTotal)";
+"\(name) · \(count)" = "\(name) · \(count)";
+"\(Int(fraction * 100))%" = "\(Int(fraction * 100))%";
+"\(percent)%" = "\(percent)%";
+"\(prompt.count) chars" = "\(prompt.count) 字符";
+"\(index + 1)" = "\(index + 1)";
+"\(n)" = "\(n)";
+"\(number)." = "\(number).";
+"of" = "/";
+"off" = "关闭";
+"ON" = "开";
+"OFF" = "关";
+"10s" = "10秒";
+"60s" = "60秒";
+
+/* ===== Cloud Connect ===== */
+"Stop reading Gmail" = "停止读取 Gmail";
+"Stop reading Google Calendar" = "停止读取 Google 日历";
+"Sentient never sees your password" = "Sentient 看不到你的密码";
+
+/* ===== First Run ===== */
+"Sentient's on-device model is what reads your life privately, right on this Mac.\nOne-time download; your analysis starts the moment it lands." = "Sentient 的本地模型在这台 Mac 上私密读取你的数据。\n一次性下载；下载完成即刻开始分析。";
+"Downloading your AI" = "正在下载你的 AI";
+"Loading on-device model" = "正在加载本地模型";
+"Sentient's on-device model does about 90% of the thinking. The last 10%, the reasoning behind proactive intelligence, runs on a frontier model of your choice." = "Sentient 本地模型完成约 90% 的思考。最后 10% 的主动智能推理运行在你选择的前沿模型上。";
+
+/* ===== Stats ===== */
+"Stats" = "统计";
+"Test & Select" = "测试并选择";
+"Re-check" = "重新检查";
+"Run check now" = "立即运行检查";
+"Show unsaved numbers (\(unsavedCount))" = "显示未保存数字 (\(unsavedCount))";
+"Before you go." = "再见之前。";
+
+/* ===== Footer Messages ===== */
+"Sentient is ready to understand your life.\nConnect as much as you can; everything stays on this Mac." = "Sentient 准备好了解你了。\n尽可能多地连接来源；一切都留在这台 Mac 上。";
+"Your Sentient needs at least four sources to truly know you." = "Sentient 需要至少四个数据来源才能真正了解你。";
+"\(sentient_os) " = "\(sentient_os) ";
+"feedback@sentient-os.ai copied" = "feedback@sentient-os.ai 已复制";
+"Copy the instructions" = "复制说明";
+"Linked it on the page? Press Done and I'll check." = "已在页面上链接？按完成，我来检查。";
+"Then ask it: \"What do you know about me?\"" = "然后问它："你了解我什么？"";
+"Saved locally on this Mac" = "本地保存在此 Mac 上";
+"Right ⌘ arrives as a modifier (flagsChanged) event, which NSEvent monitors deliver to anyone — only real keystrokes (keyDown/keyUp) are permission-gated. A CGEventTap would hear the same thing but trips the Input Monitoring dialog the moment it's created — that's why this lab (and Sidekick) use monitors, never taps." = "右侧 ⌘ 作为修饰键（flagsChanged）事件到达，NSEvent 监视器可将其传递给任何进程——只有真实按键（keyDown/keyUp）才受权限管控。";
+"Helper approval · launch-at-login · 14h auto-enable · manual arm" = "助手审批 · 登录启动 · 14小时自动启用 · 手动开启";
+"Install / register daemon" = "安装/注册守护进程";
+"Root helper" = "Root 助手";
+"Restart monitors" = "重启监视器";
+"Zero permission" = "零权限";
+"Zero permission\n(flagsChanged doesn't need permission)" = "零权限\n（flagsChanged 不需要权限）";
+"\(fixed) (\(part.accuracy * 100, format: .number.precision(.fractionLength(0)))%)" = "\(fixed)（准确率 \(part.accuracy * 100, format: .number.precision(.fractionLength(0)))%）";
+"\(proactive) " = "\(proactive) ";
+"\(stop) " = "\(stop) ";
+
+/* Utility / Format strings (usually not localized, but included for completeness) */
+"-- Your Sentient" = "-- 你的 Sentient";
+"An AI that knows your life, and acts on it." = "了解你生活、替你办事的 AI。";
+"On-device intelligence that understands your entire life to proactively help you. Open-source & free." = "本地设备上理解你全部生活的智能助手，主动帮助你。开源免费。";
+"Private by design. Your files never leave this Mac." = "天生隐私。你的文件永不离开本机。";
+"Set up in 2 minutes" = "两分钟完成设置";
+"Your life, from above." = "俯瞰你的生活。";
+"Once Sentient has read your life, every note becomes a star." = "当 Sentient 读完你的生活，每条笔记都变成星星。";
+"Sentient is on version \(UpdateController.currentVersionString)." = "Sentient 版本 \(UpdateController.currentVersionString)。";
+"You're up to date." = "已是最新。";
+"Checking for updates…" = "检查更新中…";
+"Couldn't check for updates." = "无法检查更新。";
+"A browser window opened. Finish signing in there; I'll retry on my own." = "浏览器已打开，在那里完成登录，我会自动重试。";
+"Finish signing in in your browser. This screen notices on its own." = "在浏览器中完成登录，本页会自动检测。";
+"Three steps to let Sentient act for you with Codex computer use. This window just triggers the shared setup engine; onboarding calls the exact same code." = "三步让 Sentient 通过 Codex 替你操作电脑。本窗口仅触发共享设置引擎；初始化流程调用相同代码。";
+"Connect your AIs?" = "连接你的 AI？";
+"Connect your AIs." = "连接你的 AI。";
+"Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful." = "你的 ChatGPT 和 Claude（含手机版）都能读取 Sentient 知识库，让它们变得更有帮助。";
+"Sentient built your knowledge base right here on this Mac. Want to offer it to ChatGPT, Claude, and every AI you use?" = "Sentient 通过这台 Mac 建立了你的知识库。想开放给 ChatGPT、Claude 和所有 AI 吗？";
+"Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:" = "知识库已建成，私密且属于你。\n持续运行的 Sentient 使用你的 ChatGPT Plus：";
+"We noticed you're not on ChatGPT Plus." = "你尚未订阅 ChatGPT Plus。";
+"Sentient will unlock the full experience and take your word for it.\n\nNote that the ChatGPT Go plan does not offer enough Codex use to unlock the full experience." = "Sentient 将解锁完整体验。\n\n注意：ChatGPT Go 计划不提供足够的 Codex 额度。";
+"Sentient's on-device model does about 90% of the thinking. The last 10%, the reasoning behind proactive intelligence, runs on a frontier model of your choice." = "Sentient 本地模型处理约 90% 的思考。最后 10% 的主动智能推理运行在自选前沿模型上。";
+"Runs while your Mac rests." = "在你的 Mac 休眠时运行。";
+"Understood" = "明白了";
+"Continue" = "继续";
+"Done" = "完成";
+"Cancel" = "取消";
+"Save" = "保存";
+"Delete" = "删除";
+"Clear" = "清除";
+"Back" = "返回";
+"Refresh" = "刷新";
+"Retry" = "重试";
+"Try Again" = "再试一次";
+"Settings" = "设置";
+"Import" = "导入";
+"Export" = "导出";
+"Close" = "关闭";
