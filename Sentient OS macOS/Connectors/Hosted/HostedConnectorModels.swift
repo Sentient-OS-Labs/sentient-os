@@ -54,9 +54,12 @@ nonisolated enum HostedConnectorStore {
         let applied = saving.withLock { _ in
             if let previous = UserDefaults.standard.data(forKey: key),
                let snapshot = try? JSONDecoder().decode(Snapshot.self, from: previous), snapshot.revision >= revision { return false }
-            UserDefaults.standard.set(data, forKey: key); return true
+            return true
         }
-        if applied { NotificationCenter.default.post(name: changed, object: nil) }
+        if applied {
+            UserDefaults.standard.set(data, forKey: key)
+            NotificationCenter.default.post(name: changed, object: nil)
+        }
     }
 }
 
