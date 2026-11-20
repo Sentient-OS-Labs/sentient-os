@@ -380,8 +380,12 @@ enum NotionSource {
             || !(object["unknown_block_ids"] as? [String] ?? []).isEmpty
         let title = object["title"] as? String ?? candidate.title
         guard title.utf8.count <= 4_000 else { throw DirectMCPError.invalidResponse }
-        guard let content = section("content", in: text) else { throw DirectMCPError.invalidResponse }
-        let properties = section("properties", in: text) ?? ""
+        // Notion omits <content> when a page has properties but no body blocks.
+        let body = section("content", in: text)
+        let propertyText = section("properties", in: text)
+        guard body != nil || propertyText != nil else { throw DirectMCPError.invalidResponse }
+        let content = body ?? ""
+        let properties = propertyText ?? ""
         guard content.utf8.count + properties.utf8.count <= pageByteCap else { throw DirectMCPError.tooLarge }
         return Page(id: candidate.id, title: title, url: stableURL(candidate.id), editedAt: timestamp,
                     partial: partial, properties: properties, content: content)
