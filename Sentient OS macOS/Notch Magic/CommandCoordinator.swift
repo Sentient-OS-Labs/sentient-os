@@ -131,7 +131,7 @@ final class CommandCoordinator {
 
     func refreshQuickActionShortcuts() {
         let enabled = quickActionsAvailable && !ShortcutPreferences.isRecording
-        quickActionHotkeys.setEnabled(enabled)
+        quickActionHotkeys.setEnabled(enabled && ShortcutPreferences.quickActionShortcutsEnabled())
         if !enabled { cancelQuickActionPreparation() }
         PhysicalNotchTap.shared.refresh()
     }
