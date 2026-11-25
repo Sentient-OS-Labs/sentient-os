@@ -8,6 +8,11 @@ import Foundation
 @MainActor
 enum ShortcutPreferences {
     static let storageKey = "sidekick.hotkey"
+    static let quickActionShortcutsKey = "sidekick.quickActionShortcuts"
+    /// The global ⌘, and ⌘. chords. Off hands both back to whichever app is in front.
+    static func quickActionShortcutsEnabled(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: quickActionShortcutsKey) as? Bool ?? true
+    }
     private(set) static var isRecording = false
     static var current: ShortcutKey { key(in: .standard) }
 

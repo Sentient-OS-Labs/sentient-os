@@ -104,7 +104,9 @@ Double Tap's Change model action opens the Double Tap section. Reset clears that
 
 **Notch & Shortcuts.** The first App section owns the shared keyboard shortcut, notch clicking,
 compact mode, physical taps, second-tap action, and tap sensitivity. Existing preference keys
-and live notification handlers follow the controls to this page.
+and live notification handlers follow the controls to this page. A switch under the shared key
+(`sidekick.quickActionShortcuts`, default on) turns the global `⌘,` and `⌘.` chords off; the
+Summarize and Polish buttons keep working.
 
 **Magic Reply.** The keyboard illustration links to Notch & Shortcuts for customization. Writing
 instructions and examples follow it. Change model opens AI Models & Accounts → Magic Reply. Its independent

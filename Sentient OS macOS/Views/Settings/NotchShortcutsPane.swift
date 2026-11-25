@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct NotchShortcutsPane: View {
+    @AppStorage(ShortcutPreferences.quickActionShortcutsKey) private var quickActionShortcuts = true
     @AppStorage(NotchPreferences.clickEnabledKey) private var notchClickEnabled = true
     @AppStorage(NotchPreferences.externalBarEnabledKey) private var externalBarEnabled = true
     @AppStorage(NotchPreferences.compactModeKey) private var compactNotchMode = false
@@ -68,7 +69,14 @@ struct NotchShortcutsPane: View {
                     }
                 }
                 SettingsGroup(label: "Keyboard shortcut", inset: 0) {
-                    ShortcutSetting()
+                    VStack(spacing: 0) {
+                        ShortcutSetting()
+                        SettingsHairline(opacity: 0.10)
+                        SettingToggleLine(title: "Summarize and Polish shortcuts (⌘, and ⌘.)",
+                            sub: "Turn off to give ⌘, back to other apps’ Settings. The Summarize and Polish buttons still work.",
+                            isOn: $quickActionShortcuts)
+                            .accessibilityIdentifier("settings.quickActionShortcuts")
+                    }
                 }
                 SettingsGroup(label: "Notch controls", inset: 0) {
                     VStack(spacing: 0) {
@@ -89,6 +97,9 @@ struct NotchShortcutsPane: View {
                     }
                 }
             }
+        }
+        .onChange(of: quickActionShortcuts) { _, _ in
+            NotificationCenter.default.post(name: .shortcutsChanged, object: nil)
         }
         .onChange(of: notchClickEnabled) { _, _ in
             NotificationCenter.default.post(name: .notchInteractionChanged, object: nil)
