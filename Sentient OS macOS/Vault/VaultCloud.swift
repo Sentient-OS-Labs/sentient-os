@@ -20,7 +20,7 @@ import Foundation
 /// A Sendable, store-agnostic description of one summary handed to a Codex call. Decouples the
 /// cloud prompts from any particular store. Built from a CycleNoteItem (the iterative system).
 /// Codable for CorpusSlicer's staging snapshot (multi-slice resume determinism).
-struct CloudNote: Sendable, Codable {
+nonisolated struct CloudNote: Sendable, Codable {
     let kind: SourceKind
     let sourceID: String       // "file:<abs path>" / "notes:<uuid>" — VaultGenerator.locSrc keys on it
     let folder: String
@@ -31,6 +31,11 @@ struct CloudNote: Sendable, Codable {
     init(kind: SourceKind, sourceID: String, folder: String, title: String?, text: String, itemDate: Date?) {
         self.kind = kind; self.sourceID = sourceID; self.folder = folder
         self.title = title; self.text = text; self.itemDate = itemDate
+    }
+
+    var vaultInput: VaultInput {
+        VaultInput(sourceID: sourceID, kind: kind.rawValue, folder: folder,
+                   title: title, text: text, itemDate: itemDate)
     }
 
     /// From an iterative cycle note.
@@ -52,7 +57,7 @@ actor VaultCloud {
     // only wasteful, never corrupting.
     private var createResume: VaultGenerator.ResumeToken?
     private var updateResume: VaultGenerator.ResumeToken?
-    private(set) var lastConsumedSourceIDs: Set<String> = []
+    private(set) var lastConsumedInputIDs: Set<String> = []
     private static let createResumeKey = "vault.create.resume"
     private static let updateResumeKey = "vault.update.resume"
 
@@ -96,35 +101,30 @@ actor VaultCloud {
         setUpdateResume(nil)
     }
 
-    private static func mailHashes(_ notes: [CloudNote]) -> [String: String] {
-        Dictionary(notes.filter { $0.kind == .appleMail }.map {
-            ($0.sourceID, AppleMailSource.digest([$0.text, $0.title ?? "", String($0.itemDate?.timeIntervalSince1970 ?? 0)].joined(separator: "\u{0}")))
-        }, uniquingKeysWith: { first, _ in first })
+    /// Retain each different accepted version, while avoiding repeated identical prompt entries.
+    private static func distinctInputs(_ notes: [CloudNote]) throws -> [CloudNote] {
+        var seen = Set<String>()
+        return try notes.filter { seen.insert(try $0.vaultInput.identity()).inserted }
     }
 
-    private static func acceptedHashes(_ notes: [CloudNote]) -> [String: String] {
-        Dictionary(notes.map {
-            ($0.sourceID, AppleMailSource.digest([$0.kind.rawValue, $0.text, $0.title ?? "", String($0.itemDate?.timeIntervalSince1970 ?? 0)].joined(separator: "\u{0}")))
-        }, uniquingKeysWith: { first, _ in first })
-    }
-
-    /// A previously accepted input can disappear after account opt-out or Mail reclassification.
-    /// Restart that staged merge without touching the live vault or resuming its old cloud session.
+    /// The staged corpus is the writer's input, not the current queue. Reading it also upgrades
+    /// old resume tokens safely: their source-only hashes cannot prove which versions were used.
     private func validatedResume(_ token: VaultGenerator.ResumeToken?, notes: [CloudNote]) -> VaultGenerator.ResumeToken? {
-        // An interrupted slice may be only partly written despite sliceIndex already pointing
-        // at its successor. Drop the whole handle on a runtime change, not only its session ID.
-        guard let token = token?.matchingRuntime(ModelBackend.current) else { return nil }
-        let previous = token.acceptedInputHashes ?? token.mailInputHashes ?? [:]
-        let current = token.acceptedInputHashes == nil ? Self.mailHashes(notes) : Self.acceptedHashes(notes)
+        guard var token = token?.matchingRuntime(ModelBackend.current) else { return nil }
+        let staging = URL(fileURLWithPath: token.stagingPath).standardizedFileURL
+        guard staging.deletingLastPathComponent() == VaultGenerator.stagingParent.standardizedFileURL,
+              staging.lastPathComponent.hasPrefix(VaultGenerator.stagingPrefix),
+              staging != VaultGenerator.vaultRoot.standardizedFileURL else { return nil }
         let vaultUnchanged = token.vaultFingerprint.map { $0 == VaultGenerator.vaultFingerprint(VaultGenerator.vaultRoot) } ?? true
-        guard vaultUnchanged, previous.allSatisfy({ current[$0.key] == $0.value }) else {
-            let staging = URL(fileURLWithPath: token.stagingPath).standardizedFileURL
-            if staging.deletingLastPathComponent() == VaultGenerator.stagingParent.standardizedFileURL,
-               staging.lastPathComponent.hasPrefix(VaultGenerator.stagingPrefix) {
-                try? FileManager.default.removeItem(at: staging)
-            }
+        guard let corpus = CorpusSlicer.loadCorpus(from: staging),
+              let stagedInputs = try? VaultInput.identities(corpus.map(\.vaultInput)), !stagedInputs.isEmpty,
+              let currentInputs = try? VaultInput.identities(notes.map(\.vaultInput)),
+              token.inputIdentities == nil || token.inputIdentities == stagedInputs,
+              stagedInputs.isSubset(of: currentInputs), vaultUnchanged else {
+            try? FileManager.default.removeItem(at: staging)
             return nil
         }
+        token.inputIdentities = stagedInputs
         return token
     }
 
@@ -175,27 +175,23 @@ actor VaultCloud {
                               onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
                               onLine: (@Sendable (String) -> Void)?) async throws -> VaultGenerator.Result {
         try restartInitialCloudStageIfNeeded()
-        let notes = await AppleMailEvidence.validatedCloud(notes)
+        let notes = try Self.distinctInputs(await AppleMailEvidence.validatedCloud(notes))
         setCreateResume(validatedResume(createResume, notes: notes))
-        lastConsumedSourceIDs = []
+        lastConsumedInputIDs = []
         guard !notes.isEmpty else { throw CloudError.empty }
-        let inputIDs = createResume?.inputSourceIDs ?? notes.map(\.sourceID)
-        let mailInputs = createResume?.mailInputHashes ?? Self.mailHashes(notes)
-        let acceptedInputs = createResume?.acceptedInputHashes ?? Self.acceptedHashes(notes)
+        let inputIDs = try createResume?.inputIdentities ?? VaultInput.identities(notes.map(\.vaultInput))
         do {
             let result = try await VaultGenerator().generate(notes: notes, resume: createResume, onProgress: onProgress, onLine: onLine)
             setCreateResume(nil)
-            lastConsumedSourceIDs = Set(inputIDs)
+            lastConsumedInputIDs = inputIDs
             await markDirty()
             return result
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
-            var token = resume; token.inputSourceIDs = inputIDs; token.mailInputHashes = mailInputs
-            token.acceptedInputHashes = acceptedInputs
+            var token = resume; token.inputIdentities = inputIDs
             setCreateResume(token)
             throw CloudError.usageLimit(message)
         } catch let VaultGenerator.VaultError.interrupted(resume) {
-            var token = resume; token.inputSourceIDs = inputIDs; token.mailInputHashes = mailInputs
-            token.acceptedInputHashes = acceptedInputs
+            var token = resume; token.inputIdentities = inputIDs
             setCreateResume(token)
             throw VaultGenerator.VaultError.interrupted(resume: token)
         }
@@ -225,13 +221,11 @@ actor VaultCloud {
                               onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
                               onLine: (@Sendable (String) -> Void)?) async throws -> Int {
         try restartInitialCloudStageIfNeeded()
-        let notes = await AppleMailEvidence.validatedCloud(notes)
+        let notes = try Self.distinctInputs(await AppleMailEvidence.validatedCloud(notes))
         setUpdateResume(validatedResume(updateResume, notes: notes))
-        lastConsumedSourceIDs = []
+        lastConsumedInputIDs = []
         guard !notes.isEmpty else { return 0 }
-        let inputIDs = updateResume?.inputSourceIDs ?? notes.map(\.sourceID)
-        let mailInputs = updateResume?.mailInputHashes ?? Self.mailHashes(notes)
-        let acceptedInputs = updateResume?.acceptedInputHashes ?? Self.acceptedHashes(notes)
+        let inputIDs = try updateResume?.inputIdentities ?? VaultInput.identities(notes.map(\.vaultInput))
         let fm = FileManager.default
         let vault = VaultGenerator.vaultRoot
         guard fm.fileExists(atPath: vault.path) else { throw CloudError.noVault }
@@ -383,7 +377,7 @@ actor VaultCloud {
             }
             try VaultGenerator.swapStagingIntoVault(staging, expectedFingerprint: baseline)
             setUpdateResume(nil)
-            lastConsumedSourceIDs = Set(inputIDs)
+            lastConsumedInputIDs = inputIDs
             await markDirty()
             Log("VaultCloud.update: ✅ \(notes.count) notes merged")
             return notes.count
@@ -391,14 +385,12 @@ actor VaultCloud {
             // Staging is kept; the live vault was never touched. Carry the seed baseline forward so a
             // resume's swap still detects a concurrent editor edit. Durable resume continues next run.
             var t = resume; t.vaultFingerprint = baseline
-            t.inputSourceIDs = inputIDs; t.mailInputHashes = mailInputs
-            t.acceptedInputHashes = acceptedInputs
+            t.inputIdentities = inputIDs
             setUpdateResume(t)
             throw CloudError.usageLimit(message)
         } catch let VaultGenerator.VaultError.interrupted(resume) {
             var token = resume; token.vaultFingerprint = baseline
-            token.inputSourceIDs = inputIDs; token.mailInputHashes = mailInputs
-            token.acceptedInputHashes = acceptedInputs
+            token.inputIdentities = inputIDs
             setUpdateResume(token)
             throw VaultGenerator.VaultError.interrupted(resume: token)
         } catch {

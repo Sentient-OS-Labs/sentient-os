@@ -58,15 +58,20 @@ production = 'actor VaultGenerator {\n' + '\n'.join(declaration(generator, name)
 actor VaultCloud {
     private var createResume: VaultGenerator.ResumeToken?
     private var updateResume: VaultGenerator.ResumeToken?
-    private(set) var lastConsumedSourceIDs: Set<String> = []
+    private(set) var lastConsumedInputIDs: Set<String> = []
     private static let createResumeKey = "vault.create.resume"
     private static let updateResumeKey = "vault.update.resume"
     static func updatePrompt(skeleton: String, notes: [CloudNote]) -> String { "UPDATE " + notes.map(\.sourceID).joined(separator: ",") }
     static func skeleton(of: URL) -> String { "" }
     private func markDirty() async { fatalError("Fixture never publishes") }
+    func checkedResume(_ token: VaultGenerator.ResumeToken, notes: [CloudNote]) -> VaultGenerator.ResumeToken? {
+        validatedResume(token, notes: notes)
+    }
+    static func checkedDistinctInputs(_ notes: [CloudNote]) throws -> [CloudNote] { try distinctInputs(notes) }
+
 ''' + '\n'.join(declaration(cloud, name) for name in [
     'init()', 'private static func loadResume(', 'private func setCreateResume(',
-    'private func setUpdateResume(', 'private static func mailHashes(', 'private static func acceptedHashes(',
+    'private func setUpdateResume(', 'private static func distinctInputs(',
     'private func validatedResume(', 'private static func persistResume(', 'private func restartInitialCloudStageIfNeeded(',
     'enum CloudError:', 'func create(', 'private func createPinned(',
     'func update(', 'private func updatePinned(',
@@ -112,6 +117,8 @@ enum SourceKind: String, Codable, Sendable { case file, appleMail }
 struct CloudNote: Codable, Sendable {
     var kind = SourceKind.file
     let sourceID: String
+    var folder = "Fixture"
+    var vaultInput: VaultInput { .init(sourceID: sourceID, kind: kind.rawValue, folder: folder, title: title, text: text, itemDate: itemDate) }
     var text = "retained summary"
     var title: String? = nil
     var itemDate: Date? = nil
@@ -243,7 +250,7 @@ func ErrorLabel(_ error: Error) -> String { "fixture" }
                 if operation != "generate" {
                     let saved = try JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: defaults.data(forKey: key)!)
                     check(saved.sessionScope == VaultGenerator.ResumeToken.scope(for: .chatgpt), "\(operation) persists new runtime scope")
-                    if !matching { check(saved.inputSourceIDs == notes.map(\.sourceID), "\(operation) retains all current summaries") }
+                    if !matching { check(try saved.inputIdentities == VaultInput.identities(notes.map(\.vaultInput)), "\(operation) retains all current summaries") }
                 }
                 check(try String(contentsOf: knowledge, encoding: .utf8) == "User knowledge retained" && defaults.string(forKey: "sidekick.history") == "Saved task transcript", "\(operation) preserves live knowledge and task history")
             }
@@ -300,6 +307,53 @@ func ErrorLabel(_ error: Error) -> String { "fixture" }
         ClaudeAuth.cachedAccountIdentity = "claude-account-b"
         check(ConnectorRegistry.readOrigin(slug: "gmail", backend: .claude) != claudeOrigin, "Claude account changes invalidate source and writing-style origins")
         check(ConnectorRegistry.readOrigin(slug: "direct-fixture", backend: .chatgpt) == "direct:fixture-direct:3", "direct connector origin preserved")
+
+        // Exact staged input versions control resume and its eventual cleanup receipt.
+        defaults.reset()
+        let original = CloudNote(sourceID: "shared-file", text: "Original accepted version")
+        let changed = CloudNote(sourceID: "shared-file", text: "Newer pending version")
+        let changedFolder = CloudNote(sourceID: "shared-file", folder: "Another root", text: original.text)
+        let oldID = try original.vaultInput.identity(), newID = try changed.vaultInput.identity()
+        check(try await VaultCloud.checkedDistinctInputs([original, original, changed]).count == 2,
+              "identical inputs collapse while different versions survive")
+        func stagedToken(_ corpus: [CloudNote]) throws -> VaultGenerator.ResumeToken {
+            let directory = try VaultGenerator.newStagingDir()
+            try CorpusSlicer.saveCorpus(corpus, in: directory)
+            var token = VaultGenerator.ResumeToken(sessionID: nil, stagingPath: directory.path, sliceIndex: 0)
+            token.sessionScope = VaultGenerator.ResumeToken.scope(for: .chatgpt)
+            token.vaultFingerprint = VaultGenerator.vaultFingerprint(vault)
+            return token
+        }
+        let legacyScoped = try stagedToken([original]) // no new-format receipt yet
+        let checked = await VaultCloud().checkedResume(legacyScoped, notes: [original, changed])
+        check(checked?.inputIdentities == [oldID], "legacy resume derives exact versions from the persisted corpus")
+        check(await VaultCloud().checkedResume(legacyScoped, notes: [changed, original])?.inputIdentities == [oldID],
+              "pending duplicate order cannot alter consumed versions")
+        let folderToken = try stagedToken([original])
+        check(await VaultCloud().checkedResume(folderToken, notes: [changedFolder]) == nil,
+              "folder trust metadata changes invalidate staged input")
+        check(!FileManager.default.fileExists(atPath: folderToken.stagingPath), "invalid staged work is retired without touching knowledge")
+        var forged = try stagedToken([original]); forged.inputIdentities = [newID]
+        check(await VaultCloud().checkedResume(forged, notes: [original, changed]) == nil,
+              "receipt must match the stored corpus, not merely some current input")
+        let missing = try stagedToken([original])
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: missing.stagingPath).appendingPathComponent("corpus.json"))
+        check(await VaultCloud().checkedResume(missing, notes: [original]) == nil,
+              "missing corpus cannot be resumed using source IDs alone")
+        let removed = try stagedToken([original])
+        check(await VaultCloud().checkedResume(removed, notes: [changed]) == nil,
+              "removed or superseded original input cannot remain admitted")
+        check(try String(contentsOf: knowledge, encoding: .utf8) == "User knowledge retained", "resume validation preserves live user knowledge")
+        // Exercise the real update entry point, not just validation: a new same-source version
+        // must not be added to the old writer's durable input receipt after a usage-limit retry.
+        let active = try stagedToken([original])
+        defaults.set(try JSONEncoder().encode(active), forKey: "vault.update.resume")
+        await FrontierRun.shared.reset()
+        do { _ = try await VaultCloud().update(notes: [original, changed]); preconditionFailure("Expected synthetic usage limit") }
+        catch VaultCloud.CloudError.usageLimit { }
+        let continued = try JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: defaults.data(forKey: "vault.update.resume")!)
+        check(continued.inputIdentities == [oldID] && continued.inputIdentities?.contains(newID) == false,
+              "actual resumed update persists only the staged input versions, leaving new queue content unconsumed")
         print("Checked \(checks) private runtime session/cache cases; failures=0")
     }
 }
@@ -310,6 +364,6 @@ with tempfile.TemporaryDirectory(prefix='sentient-private-session-') as director
     source = root / 'Fixture.swift'
     source.write_text(FIXTURE + '\n' + production)
     binary = root / 'checks'
-    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(source),
+    subprocess.run(['xcrun', 'swiftc', '-swift-version', '6', '-parse-as-library', str(source), str(APP / "Vault/VaultInput.swift"),
                     str(APP.parent / 'Scripts/Fixtures/HostedInferenceStub.swift'), str(APP / 'Ingestion/InitialAnalysisRecovery.swift'), '-o', str(binary)], check=True)
     subprocess.run([str(binary), str(root)], check=True, timeout=30)

@@ -5,7 +5,11 @@ this note says what each does and why.
 
 ## "Validate CUA contract and Debug logs"
 
-Every configuration runs `Scripts/check_cua_contract.py`. The pinned driver, inlined manual, and
+Every configuration first runs `Scripts/check_signing_config.py`, which rejects team, signing-style
+and certificate-selection settings in project/target build configurations, including SDK-qualified
+keys. Signing selection belongs in the shared or gitignored local xcconfig file.
+
+It then runs `Scripts/check_cua_contract.py`. The pinned driver, inlined manual, and
 captured MCP catalog must name the same version; the checksum must be present, and the tool lists
 must preserve four native MCP vision tools with CLI actions. The script can also compare a captured
 release `list-tools` output when upgrading the driver. It performs no download during a build.
@@ -38,9 +42,15 @@ verified-launch plist into `/Library/LaunchDaemons` (see the Scheduling doc).
 
 ## Signing
 
-The team lives ONLY in `Signing.xcconfig` (the committed default is the paid shipping team; a
-per-dev override goes in the gitignored `Signing.local.xcconfig`). Never pick a team in Xcode's Signing
-& Capabilities dropdown; that writes `DEVELOPMENT_TEAM` into the project file. Release builds are
-`dwarf-with-dsym`, Debug is `dwarf`. Deployment target macOS 15.4; Hardened Runtime on; App Sandbox
-off (Full Disk Access requires it); the one entitlement is `com.apple.security.device.audio-input`
-(the mic prompt does not appear without it under the Hardened Runtime).
+`Signing.xcconfig` supplies the shipping team, manual signing and the Apple Development identity
+class to both Debug and Release. An optional gitignored `Signing.local.xcconfig` selects a specific
+installed certificate or a contributor's own signing settings. Maintainers using the shipping
+identity should inherit the shared team rather than retain an old local team override. Private keys
+remain in Keychain. Missing identities require installing the matching certificate/private key,
+not changing the shared team.
+
+The project and target must not duplicate these settings; `check_signing_config.py` enforces that
+rule during builds. Developer ID signing is selected separately when exporting a Release archive.
+The macOS deployment target is 15.4. Hardened Runtime remains enabled and App Sandbox disabled. Entitlements live in the target's
+entitlements file. Release builds retain dSYMs; use isolated DerivedData for command-line verification
+so the GUI's build products keep their own signing state.

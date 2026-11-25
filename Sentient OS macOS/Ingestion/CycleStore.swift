@@ -135,6 +135,11 @@ struct CycleNoteItem: Codable, Sendable, Identifiable {
     let reminderFlagged: Bool
     let createdAt: Date
 
+    nonisolated var vaultInput: VaultInput {
+        VaultInput(sourceID: sourceID, kind: kind.rawValue, folder: folder,
+                   title: title, text: text, itemDate: itemDate)
+    }
+
     /// On-disk path for file artifacts (sourceID is "file:/abs/path"); nil for DB/chat sources.
     var filePath: String? { sourceID.hasPrefix("file:") ? String(sourceID.dropFirst(5)) : nil }
     var displayName: String {
@@ -249,6 +254,8 @@ actor CycleStore {
     /// Narrow fault seam for the real transaction test; never applies to non-MCP commits.
     private var failNextHostedCommit = false
     func failNextMCPCommitForTesting() { failNextHostedCommit = true }
+    private var failNextConsumedCleanup = false
+    func failNextConsumedCleanupForTesting() { failNextConsumedCleanup = true }
     #endif
 
     // MARK: Pointers (durable)
@@ -701,14 +708,31 @@ actor CycleStore {
         }
     }
 
-    /// Clear only the corpus actually consumed. Mail notes withheld after lost access or a
-    /// temporary body failure remain pending for a later validated cycle.
-    func wipeNotes(sourceIDs: Set<String>) {
+    /// Clear only exact accepted versions from the consumed corpus. A newer summary with the
+    /// same source ID, or Mail withheld after access changes, remains pending for another cycle.
+    @discardableResult
+    func wipeNotes(inputIDs: Set<String>) -> CommitOutcome {
+        guard !inputIDs.isEmpty else { return .saved }
         do {
             let notes = try modelContext.fetch(FetchDescriptor<CycleNote>())
-            for note in notes where sourceIDs.contains(note.sourceID) { modelContext.delete(note) }
+            for note in notes {
+                // Invalid unrelated rows are retained, never silently consumed by cleanup.
+                if let identity = try? item(from: note).vaultInput.identity(), inputIDs.contains(identity) {
+                    modelContext.delete(note)
+                }
+            }
+            #if DEBUG
+            if failNextConsumedCleanup {
+                failNextConsumedCleanup = false
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            #endif
             try modelContext.save()
-        } catch { modelContext.rollback(); report(error, op: "wipe_consumed") }
+            return .saved
+        } catch {
+            modelContext.rollback(); report(error, op: "wipe_consumed")
+            return DiskSpace.isDiskFull(error) ? .diskFull : .failed
+        }
     }
 
     /// Factory reset — delete EVERY pointer and EVERY note (the dev "Reset everything" button pairs

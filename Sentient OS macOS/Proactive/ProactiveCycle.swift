@@ -36,7 +36,7 @@ enum ProactiveCyclePhase: Sendable {
 
 /// A failed cycle step. `kind` is the verified, user-actionable reason (codex signed out ·
 /// offline · usage limit) when one could be established — nil means show `message` as-is.
-struct CycleFailure: Sendable, Equatable {
+nonisolated struct CycleFailure: Sendable, Equatable {
     /// Which stage of the tail failed — the night summary reports vault vs proactive separately.
     enum Stage: String, Sendable { case vault, deciding, preparing }
 
@@ -45,6 +45,8 @@ struct CycleFailure: Sendable, Equatable {
     let stage: Stage
     /// The closed-vocabulary reason (CodexFailureReason) — structure only, for diagnostics.
     let reason: CodexFailureReason
+    /// Set only after the current knowledge tree was verified following successful publication.
+    var knowledgePublished = false
 }
 
 actor ProactiveCycle {
@@ -125,12 +127,15 @@ actor ProactiveCycle {
             let mergeCheckpoint = ModelBackend.current == .sentient || InitialAnalysisRecovery.replayCloudStages
                 || FileManager.default.fileExists(atPath: VaultMergeCheckpoint().file.path)
                 ? VaultMergeCheckpoint() : nil
-            let mergeInputs = notes.map { VaultMergeCheckpoint.Input(sourceID: $0.sourceID, kind: $0.kind.rawValue,
-                folder: $0.folder, title: $0.title, text: $0.text, itemDate: $0.itemDate) }
-            let merged = mergeCheckpoint?.coveredSourceIDs(in: mergeInputs,
+            let mergeInputs = notes.map(\.vaultInput)
+            let inputIDs: [String]
+            do { inputIDs = try mergeInputs.map { try $0.identity() } }
+            catch { return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
+                                           scheduled: scheduled, progress: progress) }
+            let merged = mergeCheckpoint?.coveredInputIDs(in: mergeInputs,
                 vaultFingerprint: (try? VaultValidation.fingerprint(VaultGenerator.vaultRoot)) ?? "") ?? []
-            let mergeNotes = notes.filter { !merged.contains($0.sourceID) }
-            var consumedSourceIDs = merged
+            let mergeNotes = zip(notes, inputIDs).filter { !merged.contains($0.1) }.map(\.0)
+            var consumedInputIDs = merged
             if !notes.isEmpty {
                 // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
                 let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
@@ -151,33 +156,40 @@ actor ProactiveCycle {
                 // knowledge base, only landing the file does, so it is published once the swap has
                 // happened. A build failure returns below, which cancels the collection with it.
                 async let writingStyle = Self.collectWritingStyle()
+                var publicationVerified = false
                 do {
                     if !mergeNotes.isEmpty {
                         if exists { _ = try await VaultCloud.shared.update(notes: mergeNotes, onProgress: phase, onLine: onLine) }
                         else      { _ = try await VaultCloud.shared.create(notes: mergeNotes, onProgress: phase, onLine: onLine) }
-                        consumedSourceIDs.formUnion(await VaultCloud.shared.lastConsumedSourceIDs)
+                        consumedInputIDs.formUnion(await VaultCloud.shared.lastConsumedInputIDs)
                         Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
                                          parameters: ["newSummaries": "\(mergeNotes.count)"])
                     }
                     if let mergeCheckpoint {
-                        try mergeCheckpoint.recordSuccessfulMerge(inputs: mergeInputs, consumedSourceIDs: consumedSourceIDs,
-                            resultingVaultFingerprint: VaultValidation.fingerprint(VaultGenerator.vaultRoot))
+                        let fingerprint = try VaultValidation.fingerprint(VaultGenerator.vaultRoot)
+                        publicationVerified = true
+                        try mergeCheckpoint.recordSuccessfulMerge(inputs: mergeInputs, consumedInputIDs: consumedInputIDs,
+                            resultingVaultFingerprint: fingerprint)
                     }
                 } catch {
-                    Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
-                    // half-edited vault isn't dirty; summaries kept
+                    Analytics.signal(publicationVerified ? "KnowledgeBase.recoveryFailed" : "KnowledgeBase.failed",
+                                     parameters: ["phase": exists ? "update" : "build"])
                     return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
-                                           scheduled: scheduled, progress: progress)
+                                           scheduled: scheduled, progress: progress, knowledgePublished: publicationVerified)
                 }
                 guard !Task.isCancelled else { return nil }
                 await Self.publishWritingStyle(await writingStyle)
                 if let mergeCheckpoint {
+                    publicationVerified = false
                     do {
-                        try mergeCheckpoint.recordSuccessfulMerge(inputs: mergeInputs, consumedSourceIDs: consumedSourceIDs,
-                            resultingVaultFingerprint: VaultValidation.fingerprint(VaultGenerator.vaultRoot))
+                        let fingerprint = try VaultValidation.fingerprint(VaultGenerator.vaultRoot)
+                        publicationVerified = true
+                        try mergeCheckpoint.recordSuccessfulMerge(inputs: mergeInputs, consumedInputIDs: consumedInputIDs,
+                            resultingVaultFingerprint: fingerprint)
                     } catch {
+                        Analytics.signal("KnowledgeBase.recoveryFailed", parameters: ["phase": "writing_style"])
                         return await Self.fail("Knowledge recovery: \(Self.msg(error))", error: error, stage: .vault,
-                                               scheduled: scheduled, progress: progress)
+                                               scheduled: scheduled, progress: progress, knowledgePublished: publicationVerified)
                     }
                 }
                 guard !Task.isCancelled else { return nil }
@@ -252,12 +264,10 @@ actor ProactiveCycle {
 
             // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
             guard !Task.isCancelled else { return nil }
-            await CycleStore.shared.wipeNotes(sourceIDs: consumedSourceIDs)
-            // A failed database wipe retains summaries. Keep their merge checkpoint as well,
-            // so retrying cleanup cannot spend hosted inference on the same successful merge.
-            if !(await CycleStore.shared.notes()).contains(where: { consumedSourceIDs.contains($0.sourceID) }) {
-                try? mergeCheckpoint?.clear()
-            }
+            let cleanup = await CycleStore.shared.wipeNotes(inputIDs: consumedInputIDs)
+            // A failed cleanup retains its exact merge coverage. Do not infer success from a
+            // subsequent fetch that could itself fail and appear empty.
+            if cleanup == .saved { try? mergeCheckpoint?.clear() }
             if Diagnostics.current?.hasFailure == true {
                 Diagnostics.report(.cycleIncomplete, phase: .complete, reason: "completed_with_diagnostics", flags: [.partial: true])
             }
@@ -315,7 +325,8 @@ actor ProactiveCycle {
     /// The one shape every catch site shares: classify the failure, persist the caution on the
     /// unattended run, surface it to the live UI, and hand it back for the caller's return.
     private static func fail(_ message: String, error: Error, stage: CycleFailure.Stage, scheduled: Bool,
-                             progress: @Sendable (ProactiveCyclePhase) -> Void) async -> CycleFailure {
+                             progress: @Sendable (ProactiveCyclePhase) -> Void,
+                             knowledgePublished: Bool = false) async -> CycleFailure {
         // The app owner presents a pause. Cancellation must not create an overnight error banner.
         if Task.isCancelled || error is CancellationError {
             return CycleFailure(message: "Analysis paused", kind: nil, stage: stage, reason: .unknown)
@@ -325,7 +336,7 @@ actor ProactiveCycle {
             Diagnostics.report(stage == .vault ? .vaultFailed : .modelOutputInvalid, phase: phase, reason: "cycle_stage", error: error, terminal: true)
         }
         let failure = CycleFailure(message: message, kind: await OvernightCaution.classify(error),
-                                   stage: stage, reason: CodexFailureReason.classify(error))
+                                   stage: stage, reason: CodexFailureReason.classify(error), knowledgePublished: knowledgePublished)
         Log("proactive cycle: \(stage.rawValue) failed — \(failure.reason.rawValue)")   // reason enum only; the message embeds codex output
         if scheduled { OvernightCaution.record(failure.kind) }   // the morning-after banner
         progress(.failed(failure))

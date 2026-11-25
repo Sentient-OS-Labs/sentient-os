@@ -1,5 +1,6 @@
 // Owns one proofreading operation and its short-lived selection. Capture precedes notch focus;
 // only a complete result can reach guarded insertion. Cancellation fences every late callback.
+// Each run logs the stage it stopped at, by name only; selected text is never logged.
 // Doc: Documentation - Proofread.md
 import AppKit
 import Observation
@@ -110,6 +111,8 @@ import Observation
             var snapshot = prepared
             var activity = initialActivity
             let draft = preparedDraft
+            let source = draft != nil ? "own draft" : snapshot.map { $0.element == nil ? "application only" : "focused element" } ?? "none"
+            Log("proofread: start (bookmark: \(source), from notch field: \(restoringFocus))")
             if draft == nil, let bookmark = snapshot, bookmark.requiresCopy {
                 do {
                     snapshot = try await resolveSelection(bookmark, activity, restoringFocus)
@@ -118,11 +121,13 @@ import Observation
                 } catch {
                     guard runID == id, !Task.isCancelled else { return }
                     let failure = (error as? ProofreadSelection.Failure) ?? .unsupported
+                    Log("proofread: stopped at copy (\(failure))")
                     finish(failure.localizedDescription, id: id); return
                 }
             }
             guard let text = draft?.text ?? snapshot?.text else {
                 let failure = captureFailure
+                Log("proofread: stopped at capture (\(failure), interrupted: \(captureWasInterrupted))")
                 finish(failure.localizedDescription, id: id); return
             }
             // The running task now owns the captured selection until its result has settled.
@@ -132,18 +137,22 @@ import Observation
                 guard runID == id, !Task.isCancelled else { return }
                 guard !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       corrected.utf8.count <= ProofreadInference.maximumOutputBytes else { throw ProofreadInference.Failure.incomplete }
-                if corrected == text { finish("Looks good.", id: id); return }
+                if corrected == text { Log("proofread: no changes needed"); finish("Looks good.", id: id); return }
                 if let draft {
-                    finish(draft.replace(corrected) ? "" : "Your draft changed. Try Proofread again.", id: id)
+                    let replaced = draft.replace(corrected)
+                    Log("proofread: own draft \(replaced ? "replaced" : "changed before the correction arrived")")
+                    finish(replaced ? "" : "Your draft changed. Try Proofread again.", id: id)
                     return
                 }
                 guard let snapshot else { finish("Select some text to proofread.", id: id); return }
                 applying = true
                 if restoringFocus, !(await ProofreadSelection.restoreFocus(snapshot, activity: activity)) {
+                    Log("proofread: stopped before paste (input or focus changed during correction)")
                     finish("Selection changed. Select the text again.", id: id); return
                 }
                 let outcome = await apply(corrected, snapshot, activity)
                 guard runID == id, !Task.isCancelled else { return }
+                Log("proofread: paste \(outcome)")
                 switch outcome {
                 case .applied: finish("", id: id)
                 case .changed:
@@ -157,6 +166,8 @@ import Observation
                 }
             } catch {
                 guard runID == id, !Task.isCancelled else { return }
+                // Our own failure cases carry no payload, so their names are safe in every build.
+                Log("proofread: stopped at correction (\((error as? ProofreadInference.Failure).map { "\($0)" } ?? ErrorLabel(error)))")
                 let message = (error as? ProofreadInference.Failure)?.localizedDescription ?? "Couldn’t connect. Your text hasn’t been changed. Select it again to retry."
                 finish(message, id: id)
             }

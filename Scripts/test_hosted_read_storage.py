@@ -175,7 +175,7 @@ def main():
         fixture = root / "HostedReadStorageFixture.swift"
         fixture.write_text(collaborators + caller + FIXTURE)
         binary = root / "hosted-read-storage"
-        sources = [APP / "Ingestion/ItemKey.swift", APP / "Ingestion/CycleStore.swift",
+        sources = [APP / "Ingestion/ItemKey.swift", APP / "Ingestion/CycleStore.swift", APP / "Vault/VaultInput.swift",
                    APP / "Sources/HostedConnectorReadState.swift",
                    APP / "Sources/GmailReadState.swift", APP / "Sources/GmailConnect.swift",
                    APP / "Ingestion/InitialAnalysisRecovery.swift", fixture]

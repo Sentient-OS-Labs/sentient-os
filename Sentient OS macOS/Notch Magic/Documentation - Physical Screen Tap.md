@@ -48,7 +48,8 @@ and discarded. Manual sensitivity controls remain available independently of cal
 The sensor-location illustration and passive Opal marker guide touch near the built-in notch.
 The placement follows the measured hardware cutout geometry; it is not a verified sensor map for
 every MacBook model. The marker is hit-transparent and does not take focus. Active tasks, voice,
-completion and short notices suppress the idle touch cue. Dismissal can briefly retain the small
+completion and short notices suppress the idle touch cue. In the typing surface, entering text hides the
+cue and clearing the draft brings it back. Dismissal can briefly retain the small
 marker without delaying the next eligible tap.
 
 `PhysicalMissedTapDetector` recognizes a conservative sequence of motion impulses only to show a

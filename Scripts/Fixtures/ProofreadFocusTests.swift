@@ -29,10 +29,11 @@ class Panel:NSPanel { override var canBecomeKey:Bool { true } }
   NSRunningApplication(processIdentifier:pid)?.activate()
   try await Task.sleep(for:.milliseconds(400))
   let snap=try await ProofreadSelection.captureByCopy(pid:pid)
+  guard let field=snap.element else { fatalError("the native fixture editor must publish its focused element") }
   func state(_ label:String) async {
    let root=AXUIElementCreateApplication(pid); var f:CFTypeRef?;AXUIElementCopyAttributeValue(root,kAXFocusedUIElementAttribute as CFString,&f)
-   var r:CFTypeRef?;AXUIElementCopyAttributeValue(snap.element,kAXSelectedTextRangeAttribute as CFString,&r)
-   print(label,"front",NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,"same focused",f.map{CFEqual($0,snap.element)} ?? false,"range",r ?? "nil" as CFString,"valid",await Task.detached{ProofreadSelection.validate(snap)}.value);fflush(stdout)
+   var r:CFTypeRef?;AXUIElementCopyAttributeValue(field,kAXSelectedTextRangeAttribute as CFString,&r)
+   print(label,"front",NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,"same focused",f.map{CFEqual($0,field)} ?? false,"range",r ?? "nil" as CFString,"valid",await Task.detached{ProofreadSelection.validate(snap)}.value);fflush(stdout)
   }
   await state("captured")
   let p=Panel(contentRect:NSRect(x:500,y:800,width:500,height:80),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
@@ -42,7 +43,7 @@ class Panel:NSPanel { override var canBecomeKey:Bool { true } }
   try await Task.sleep(for:.milliseconds(300));await state("panel released")
   var collapsed=CFRange(location:29,length:0)
   let boxed=AXValueCreate(.cfRange,&collapsed)!
-  _ = AXUIElementSetAttributeValue(snap.element,kAXSelectedTextRangeAttribute as CFString,boxed)
+  _ = AXUIElementSetAttributeValue(field,kAXSelectedTextRangeAttribute as CFString,boxed)
   let activity=ShortcutActivity.current
   let restored = await ProofreadSelection.restoreFocus(snap,activity:activity)
   precondition(restored,"lost selection must restore after panel focus")

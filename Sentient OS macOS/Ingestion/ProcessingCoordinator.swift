@@ -527,7 +527,8 @@ final class ProcessingCoordinator {
         // A retry with no new work must not be needed to unlock knowledge already saved here.
         // Cancellation was handled above; failed publication and disk-full remain hard failures.
         let knowledgeReady = Self.knowledgeExists(in: VaultGenerator.vaultRoot)
-        if request.fullCycle && knowledgeReady && !result.progress.diskFull && result.failure?.stage != .vault {
+        if request.fullCycle && knowledgeReady && !result.progress.diskFull && result.failure?.kind != .diskFull
+            && (result.failure?.stage != .vault || result.failure?.knowledgePublished == true) {
             ProcessingPlan.completeInitial(defaults)
             initialComplete = true
         }

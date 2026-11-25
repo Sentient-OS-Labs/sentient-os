@@ -16,8 +16,9 @@ struct FilesConnector: Connector {
     let roots: [FileRoot]
 
     func buckets(since marks: [String: ItemKey]) throws -> [Bucket] {
-        roots.compactMap { root in
-            guard let source = root.source else { return nil }
+        var seen = Set<String>()
+        return roots.compactMap { root in
+            guard let source = root.source, seen.insert(source.cursorKey).inserted else { return nil }
             let items = source.eligibleFiles().map { c in
                 (key: ItemKey(date: c.itemDate, tiebreak: c.metadata["path"] ?? c.id), item: c)
             }

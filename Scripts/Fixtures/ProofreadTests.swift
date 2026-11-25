@@ -11,6 +11,8 @@ enum ScreenRelay {
 struct ShortcutActivity: Equatable { var keys=0; static var current=Self() }
 enum Permissions { static func hasAccessibility()->Bool{false} }
 final class DoubleTap {static let shared=DoubleTap();var isDrafting=false}
+func Log(_ items: Any...) {}
+func ErrorLabel(_ error: Error) -> String { "\(type(of: error))" }
 
 @main enum Tests {
     static var checks=0
@@ -36,6 +38,18 @@ final class DoubleTap {static let shared=DoubleTap();var isDrafting=false}
         }
         check(try ProofreadInference.decode("{\"corrected_text\":\"The sample\"}", original: "  teh sample  ")=="  The sample  ","boundary whitespace restored mechanically")
         reject("paragraph deletion refused") { _ = try ProofreadInference.decode("{\"corrected_text\":\"One two\"}", original: "One\n\nTwo") }
+        func answer(_ text:String)->String { String(data:try! JSONSerialization.data(withJSONObject:["corrected_text":text]),encoding:.utf8)! }
+        check(try ProofreadInference.decode(answer("Hello team,\n\nThe meeting is moved.\nThanks"), original: "Hello team,\r\n\r\nThe meeting are moved.\r\nThanks")=="Hello team,\r\n\r\nThe meeting is moved.\r\nThanks","CRLF line endings restored mechanically")
+        check(try ProofreadInference.decode(answer("Hi Sam,\n\nI will confirm.\n\nBest"), original: "Hi Sam,\n\nI will confirms.\n\n\nBest")=="Hi Sam,\n\nI will confirm.\n\n\nBest","extra blank line restored mechanically")
+        check(try ProofreadInference.decode(answer("One error.\n\nTwo."), original: " One eror.\n  \nTwo.\n")==" One error.\n  \nTwo.\n","whitespace-only line and boundary whitespace restored together")
+        check(try ProofreadInference.decode(answer("if x:\n    return y"), original: "if x:\n    retrun y")=="if x:\n    return y","indentation after a line break is unchanged")
+        check(try ProofreadInference.decode(answer("One\u{2028}Two is fine"), original: "One\u{2028}Two are fine")=="One\u{2028}Two is fine","unchanged line separators pass")
+        for (label, model, original) in [("merged lines","wrapped one wrapped two","wrapped one\nwrapped two"),("added paragraph","A.\n\nB.","A. B."),("dropped repeated paragraph","A.\n\nB.","A.\n\nB.\n\nA.")] {
+            do { _ = try ProofreadInference.decode(answer(model), original: original); fatalError(label) }
+            catch { check(error as? ProofreadInference.Failure == .rejected, label+" refused as a changed line structure") }
+        }
+        let unpublished=try ProofreadSelection.bookmark(pid:-999)
+        check(unpublished.element==nil && unpublished.requiresCopy && unpublished.pid == -999,"an app that publishes no focused element is still bookmarked for Copy")
         check(!ProofreadSelection.sameText("é", "e\u{301}"), "Unicode normalization cannot conceal shifted AX offsets")
         let source="A 👩🏽‍💻 café phrase"
         let range=(source as NSString).range(of:"👩🏽‍💻 café")
@@ -107,6 +121,13 @@ final class DoubleTap {static let shared=DoubleTap();var isDrafting=false}
         deferred.prepareSelection();await deferred.waitForSelection()
         _ = deferred.start(restoringFocus:true){_ in};await settle()
         check(copies==1 && deferredCorrections==1,"Copy happens only after explicit Proofread")
+        var bareCopies=0,bareInsertions=0,bareMessage="unset"
+        let bare=Proofread(capture:{try ProofreadSelection.bookmark(pid:-999)},resolveSelection:{bookmark,_,_ in
+            check(bookmark.element==nil,"application-only bookmark reaches the Copy stage");bareCopies+=1;return snapshot()
+        },correct:{_ in "the sample"},apply:{_,_,_ in bareInsertions+=1;return .applied})
+        bare.prepareSelection();await bare.waitForSelection()
+        _ = bare.start{bareMessage=$0};await settle()
+        check(bareCopies==1 && bareInsertions==1 && bareMessage.isEmpty,"an app without a focused element is proofread through Copy and Paste")
 
         var pending:CheckedContinuation<String,Error>?,captures=0,insertions=0,messages:[String]=[]
         let model=Proofread(capture:{captures+=1;return snapshot()},correct:{_ in try await withCheckedThrowingContinuation{pending=$0}},

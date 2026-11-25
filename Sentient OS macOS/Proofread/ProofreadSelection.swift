@@ -1,4 +1,5 @@
-// Normal Copy/Paste transport. AX only bookmarks the source editor and optional selection range.
+// Normal Copy/Paste transport. AX only bookmarks the source editor and selection range, and only
+// when the app publishes them; an app that does not is still proofread through Copy and Paste.
 // Clipboard formats are restored after each operation; a newer clipboard write wins.
 // Doc: Documentation - Proofread.md
 import AppKit
@@ -7,7 +8,8 @@ import AppKit
 nonisolated enum ProofreadSelection {
     final class Snapshot: @unchecked Sendable {
         let pid: pid_t
-        let element: AXUIElement
+        /// Absent when the app publishes no focused element. Copy and Paste need none.
+        let element: AXUIElement?
         let window: AXUIElement?
         let range: CFRange?
         let text: String
@@ -17,7 +19,7 @@ nonisolated enum ProofreadSelection {
         let canReplace: Bool
         let requiresCopy: Bool
         var captureActivity: ShortcutActivity?
-        init(pid: pid_t, element: AXUIElement, window: AXUIElement?, range: CFRange?, text: String, originalValue: String?, canReplace: Bool,
+        init(pid: pid_t, element: AXUIElement?, window: AXUIElement?, range: CFRange?, text: String, originalValue: String?, canReplace: Bool,
              verificationText: String? = nil, verificationRange: CFRange? = nil, requiresCopy: Bool = false) {
             self.pid = pid; self.element = element; self.window = window; self.range = range
             self.requiresCopy = requiresCopy
@@ -123,16 +125,17 @@ nonisolated enum ProofreadSelection {
     static func validate(_ snapshot: Snapshot) -> Bool {
         let app = AXUIElementCreateApplication(snapshot.pid)
         AXUIElementSetMessagingTimeout(app, 0.08)
-        guard let focused = element(app, kAXFocusedUIElementAttribute), CFEqual(focused, snapshot.element),
+        guard let field = snapshot.element,
+              let focused = element(app, kAXFocusedUIElementAttribute), CFEqual(focused, field),
               let original = snapshot.verificationText, let actual = verificationValue(snapshot),
               sameText(actual, original),
-              let current = range(snapshot.element), let saved = snapshot.range,
+              let current = range(field), let saved = snapshot.range,
               current.location == saved.location, current.length == saved.length else { return false }
-        guard value(snapshot.element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole,
-              value(snapshot.element, "AXProtectedContent") as? Bool != true else { return false }
-        guard supportsEditing(snapshot.element) else { return false }
+        guard value(field, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole,
+              value(field, "AXProtectedContent") as? Bool != true else { return false }
+        guard supportsEditing(field) else { return false }
         if let window = snapshot.window {
-            guard let current = element(snapshot.element, kAXWindowAttribute), CFEqual(current, window) else { return false }
+            guard let current = element(field, kAXWindowAttribute), CFEqual(current, window) else { return false }
         }
         return true
     }
@@ -142,7 +145,13 @@ nonisolated enum ProofreadSelection {
     static func bookmark(pid: pid_t) throws -> Snapshot {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.08)
-        guard let field = element(app, kAXFocusedUIElementAttribute) else { throw Failure.noSelection }
+        // Electron apps publish no focused element until an assistive client turns their
+        // accessibility tree on, and a busy app may not answer in time. Copy and Paste work
+        // in both cases, so the bookmark then names only the application.
+        guard let field = element(app, kAXFocusedUIElementAttribute) else {
+            return Snapshot(pid: pid, element: nil, window: nil, range: nil, text: "", originalValue: nil,
+                canReplace: true, requiresCopy: true)
+        }
         AXUIElementSetMessagingTimeout(field, 0.08)
         guard value(field, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole,
               value(field, "AXProtectedContent") as? Bool != true else { throw Failure.unsupported }
@@ -162,17 +171,29 @@ nonisolated enum ProofreadSelection {
         return result
     }
 
-    /// Restore only the original editor. Do not require AXValue/AXSelectedTextRange support:
-    /// Electron and browser chrome often omit them even though normal Copy/Paste works.
+    /// Restore only the original editor. Do not require a focused element, AXValue or
+    /// AXSelectedTextRange: Electron and browser chrome often omit them even though normal
+    /// Copy/Paste works, and the app keeps its own selection while our panel has the keyboard.
     @MainActor static func restoreFocus(_ snapshot: Snapshot, activity: ShortcutActivity) async -> Bool {
         guard !Task.isCancelled, activity == ShortcutActivity.current,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.pid else { return false }
-        await Task.detached {
-            _ = AXUIElementSetAttributeValue(snapshot.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-            if var saved = snapshot.range, let boxed = AXValueCreate(.cfRange, &saved) {
-                _ = AXUIElementSetAttributeValue(snapshot.element, kAXSelectedTextRangeAttribute as CFString, boxed)
+        if snapshot.pid != getpid() {
+            // Keys posted while one of our nonactivating panels still holds the keyboard would
+            // land in that panel. Wait for it to hand the keyboard back; never post into it.
+            var waited = 0
+            while NSApplication.shared.keyWindow != nil, waited < 25 {
+                try? await Task.sleep(for: .milliseconds(10)); waited += 1
             }
-        }.value
+            guard NSApplication.shared.keyWindow == nil else { return false }
+        }
+        if let field = snapshot.element {
+            await Task.detached {
+                _ = AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                if var saved = snapshot.range, let boxed = AXValueCreate(.cfRange, &saved) {
+                    _ = AXUIElementSetAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, boxed)
+                }
+            }.value
+        }
         try? await Task.sleep(for: .milliseconds(60))
         return !Task.isCancelled && activity == ShortcutActivity.current
             && NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.pid
@@ -279,10 +300,11 @@ nonisolated enum ProofreadSelection {
         return text
     }
     private static func verificationValue(_ snapshot: Snapshot, replacementLength: Int? = nil) -> String? {
-        if snapshot.originalValue != nil { return value(snapshot.element, kAXValueAttribute) as? String }
+        guard let field = snapshot.element else { return nil }
+        if snapshot.originalValue != nil { return value(field, kAXValueAttribute) as? String }
         guard var range = snapshot.verificationRange else { return nil }
         if let replacementLength, let selection = snapshot.range { range.length += replacementLength - selection.length }
-        return string(snapshot.element, in: range)
+        return string(field, in: range)
     }
 }
 
