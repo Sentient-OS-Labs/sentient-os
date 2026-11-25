@@ -305,6 +305,7 @@ struct NotchView: View {
                      inputReady: coordinator.notchInputReady,
                      focusRequest: coordinator.notchFocusRequest,
                      shortcutProblems: coordinator.quickActionHotkeys.problems,
+                     shortcutsRegistered: coordinator.quickActionHotkeys.registeredActions,
                      messageReplyFocused: coordinator.messageReplyFocused,
                      messageReplySelection: coordinator.run.conversation.replyReference?.messageID == coordinator.notchMessage?.event.id
                          ? coordinator.run.conversation.replyReference?.selectedText : nil,
@@ -381,6 +382,10 @@ struct NotchContent: View {
     var inputReady = true
     var focusRequest = 0
     var shortcutProblems: [QuickActionShortcut: QuickActionHotkeys.Problem] = [:]
+    var shortcutsRegistered: Set<QuickActionShortcut> = Set(QuickActionShortcut.allCases)
+    private func shortcutHint(_ action: QuickActionShortcut) -> String {
+        shortcutsRegistered.contains(action) ? " (\(action.label))" : ""
+    }
     var messageReplyFocused = false
     var messageReplySelection: String? = nil
     var draft: Binding<String> = .constant("")
@@ -1063,8 +1068,8 @@ struct NotchContent: View {
                     NotchQuickActionRow(inputReady: inputReady, actionsEnabled: !isVoice && !isTaskRunning,
                         animate: !reduceMotion && !lowPowerMode,
                         actionCue: actionCue, demoAction: demoAction,
-                        summarizeHelp: shortcutProblems[.summarize]?.explanation ?? "Summarize what you’re looking at (\(QuickActionShortcut.summarize.label))",
-                        proofreadHelp: shortcutProblems[.proofread]?.explanation ?? "Polish your selected text (\(QuickActionShortcut.proofread.label))",
+                        summarizeHelp: shortcutProblems[.summarize]?.explanation ?? ("Summarize what you’re looking at" + shortcutHint(.summarize)),
+                        proofreadHelp: shortcutProblems[.proofread]?.explanation ?? ("Polish your selected text" + shortcutHint(.proofread)),
                         onTakeOver: onTakeOver, onMagicReply: onMagicReply,
                         onSummarize: onSummarize, onProofread: onProofread)
                     .allowsHitTesting(!onboardingDemo)
