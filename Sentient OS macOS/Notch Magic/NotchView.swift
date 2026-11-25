@@ -425,7 +425,9 @@ struct NotchContent: View {
         // Use the actual phase: reply dictation borrows the expanded message layout.
         switch phase {
         case .hidden: return hovering
-        case .typing, .message, .recovery: return true
+        // Like the mic, the cue steps aside once the draft has text: the field is now a typed task.
+        case .typing: return draftText.isEmpty
+        case .message, .recovery: return true
         default: return false
         }
     }
@@ -603,6 +605,7 @@ struct NotchContent: View {
                     .accessibilityLabel("Tap the notch just above this arrow, left of the camera")
                     .accessibilityIdentifier("notch.physicalTapLocation")
                     .accessibilityHidden(!showsTapLocationGuide)
+                    .animation(.easeOut(duration: 0.15), value: draftText.isEmpty)
             }
         }
         .frame(width: size.width, height: size.height)

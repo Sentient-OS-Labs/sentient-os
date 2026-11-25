@@ -67,6 +67,24 @@ enum ConnectorReadPolicyTests {
         // Use an explicitly empty identity to exercise refusal without depending on that cache.
         install("")
         check(refuses(invocation(["google-drive"])), "empty catalog identity refuses the read")
+        // Research attaches every selected connector. It opts in to leaving out the ones that
+        // cannot be resolved; every other read keeps refusing.
+        check(refuses(invocation(["gmail", "google-drive"])), "a multi-connector read refuses an unresolved connector by default")
+        var tolerant = invocation(["gmail", "google-drive", "notion"]); tolerant.skipsUnresolvedReadConnectors = true
+        if let tolerantArgs = try? args(tolerant) {
+            let gmailEntry = DirectMCPRuntime.quoted(CodexCLI.Invocation.gmailCatalogID) + " = { enabled = true"
+            check(policy(tolerantArgs).contains(gmailEntry), "research keeps the connectors it can resolve")
+            check(policy(tolerantArgs).components(separatedBy: " = { enabled = true, destructive_enabled").count == 2,
+                  "research enables no app for a connector it left out")
+            check(policy(tolerantArgs).contains("_default = { enabled = false }"), "connectors left out of research stay disabled")
+        } else {
+            check(false, "research survives a connector without a read policy")
+        }
+        var onlyUnresolved = invocation(["google-drive"]); onlyUnresolved.skipsUnresolvedReadConnectors = true
+        check((try? args(onlyUnresolved)).map { policy($0) == "apps = { _default = { enabled = false } }" } ?? false,
+              "research with nothing resolvable runs with every app disabled")
+        var narrowed = onlyUnresolved; narrowed.mcpReadToolNames = ["get_profile"]
+        check(refuses(narrowed), "an explicit tool subset still refuses an unresolved connector")
         install("connector_bad.id")
         check(!refuses(invocation(["google-drive"])), "opaque catalog identity is accepted")
         install(driveID + "\n")

@@ -64,6 +64,9 @@ import ScreenCaptureKit
             running.isTaskRunning = true
             checks["tap_guide_active_task_" + name] = !running.showsTapLocationGuide
         }
+        let typed = NotchContent(phase: .typing, readBack: nil, statusLine: "",
+            metrics: .preview, draft: .constant("Reply to Sam"))
+        checks["tap_guide_typed_draft"] = !typed.showsTapLocationGuide
         let composerDictation = DictationPresentation()
         composerDictation.reset(context: .composer)
         for phase in [NotchPhase.listening, .transcribing] {

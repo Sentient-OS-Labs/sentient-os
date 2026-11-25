@@ -176,6 +176,12 @@ nonisolated enum Diagnostics {
         if reflected.displayStyle == .enum, let label = reflected.children.first?.label {
             fields["error_case"] = String(label.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }.prefix(64))
         }
+        if let failure = error as? VaultInput.Failure {
+            fields["error_type"] = "VaultInputFailure"; fields["error_case"] = failure.rawValue
+        }
+        if let failure = error as? VaultMergeCheckpoint.Failure {
+            fields["error_type"] = "VaultMergeCheckpointFailure"; fields["error_case"] = failure.rawValue
+        }
         // Payload-free native errors otherwise expose only an unstable numeric enum index.
         if let native = error as? OpenAIComputerUse.RuntimeError { fields["error_case"] = String(describing: native) }
         if let native = error as? DirectMCPError { fields["error_case"] = native.diagnosticCode }

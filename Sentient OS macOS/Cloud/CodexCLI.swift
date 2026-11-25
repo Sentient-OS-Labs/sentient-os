@@ -192,6 +192,10 @@ actor CodexCLI {
                                                // Codex: hermetic, only the named apps enabled,
                                                // only their separately curated reads enabled.
                                                // Missing identity or read policy refuses the run.
+        /// Research attaches every selected connector at once. With this set, a connector that
+        /// has no Codex read policy is left out of the run (its app stays disabled) instead of
+        /// refusing the whole run. Single-connector reads keep the default and still refuse.
+        var skipsUnresolvedReadConnectors = false
         var mcpAttachServer: String? = nil     // wall ONE server in with ZERO allow rules — the
                                                // classifier's inventory read (the run calls no
                                                // tools; listing your own tools needs no approval).
@@ -1121,7 +1125,8 @@ actor CodexCLI {
                 }
             }
             if connectorRead {
-                args += ["-c", try connectorReadPolicy(slugs: hostedReads, subset: inv.mcpReadToolNames)]
+                args += ["-c", try connectorReadPolicy(slugs: hostedReads, subset: inv.mcpReadToolNames,
+                                                       skipsUnresolved: inv.skipsUnresolvedReadConnectors)]
             }
             if inv.includesOutlookMail || inv.calendarPolicy != nil {
                 args += HostedToolPolicy.codexArguments([OutlookToolPolicy.rule(backend: .chatgpt,
@@ -1153,15 +1158,21 @@ actor CodexCLI {
     /// The selected apps expose their live tools. Codex's `writes` permission mode permits
     /// read-only operations, including renamed/new reads, while withholding write approval.
     /// Explicit subsets remain available for source-specific operations and diagnostics.
-    private static func connectorReadPolicy(slugs: [String], subset: [String]? = nil) throws -> String {
+    /// `skipsUnresolved` leaves out a connector with no verified policy instead of refusing the
+    /// run. `_default` keeps every app that is not listed disabled, so a skipped connector is
+    /// unreachable for that run. An explicit tool subset always refuses.
+    private static func connectorReadPolicy(slugs: [String], subset: [String]? = nil,
+                                            skipsUnresolved: Bool = false) throws -> String {
         var entries = ["_default = { enabled = false }"]
         var toolsByID: [String: Set<String>] = [:]
         var allTools = Set<String>()
+        var skipped: [String] = []
         for slug in Set(slugs).sorted() {
             guard let pack = ConnectorRegistry.pack(forSlug: slug), !pack.capturedProvisional,
                   let reads = pack.codexReadTools, !reads.isEmpty,
                   let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
                   ConnectorRegistry.isValidCodexCatalogID(id) else {
+                if skipsUnresolved, subset == nil { skipped.append(ConnectorRegistry.telemetrySlug(slug)); continue }
                 throw CLIError.notAvailable(.notWorking("connector \(slug) has no verified Codex read policy"))
             }
             if let selected = subset ?? (Microsoft365Connector.contains(slug) ? reads : nil) {
@@ -1180,6 +1191,11 @@ actor CodexCLI {
             entries.append("\(DirectMCPRuntime.quoted(id)) = { enabled = true, destructive_enabled = false, "
                 + "default_tools_enabled = \(allTools.contains(id)), "
                 + "default_tools_approval_mode = \"writes\", tools = { \(tools) } }")
+        }
+        if !skipped.isEmpty {
+            Log("codex read policy: \(skipped.count) connector(s) left out of this run (no verified read policy)")
+            CrashReporting.diagnosticBreadcrumb("connector.read_policy_skipped",
+                                                data: ["connectors": skipped.sorted().joined(separator: ";")])
         }
         return "apps = { \(entries.joined(separator: ", ")) }"
     }

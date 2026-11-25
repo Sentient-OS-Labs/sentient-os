@@ -179,10 +179,17 @@ actor ProactiveResearch {
         // filter is load-bearing: the Claude builder throws per slug with no read allow-list, and
         // one stale toggle must never fail-close the whole overnight research run. Direct
         // accounts establish their live read policy in FrontierRun before tools are attached.
+        // On ChatGPT a service that only has a direct reader (Notion, Granola) is known to be
+        // unreadable here without its direct connection. A hosted app whose identity is still
+        // unknown is decided later, after live discovery, by `skipsUnresolvedReadConnectors`.
         let kbEnabled = ConnectorRegistry.kbEnabledConnectors().map(\.slug).filter { !unavailableConnectors.contains($0) }
         let kbReads = kbEnabled.filter { slug in
-            ModelBackend.current != .claude || DirectMCPStore.connection(slug) != nil
-                || !ConnectorRegistry.readToolNames(slug: slug).isEmpty
+            if DirectMCPStore.connection(slug) != nil { return true }
+            switch ModelBackend.current {
+            case .claude: return !ConnectorRegistry.readToolNames(slug: slug).isEmpty
+            case .chatgpt: return !ConnectorRegistry.requiresDirectKnowledgeConnection(slug)
+            case .custom, .sentient: return true
+            }
         }
         if kbReads.count != kbEnabled.count {
             Log("ProactiveResearch: \(kbEnabled.count - kbReads.count) KB connector(s) excluded from the read attachment (no read allow-list yet)")
@@ -244,6 +251,7 @@ actor ProactiveResearch {
         inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)
         inv.includeUserConfig = true        // the recipes need the connector fetch (walled to the listed servers on Claude)
         inv.bypassApprovals = false         // unattended: only curated connector reads may execute
+        inv.skipsUnresolvedReadConnectors = true   // one unreadable connector must not cost the whole run
         let scopedReads = calendarContextScoped || mailReader != nil
         let chipReads: [String] = !ModelBackend.current.hasSubscriptionConnectors ? [] : scopedReads
             ? [UserDefaults.standard.bool(forKey: "dbg.gmail.connected") ? "gmail" : nil,

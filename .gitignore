@@ -32,7 +32,7 @@ build/
 __pycache__/
 *.pyc
 
-# Per-developer signing override (see Signing.xcconfig) — each dev's own DEVELOPMENT_TEAM.
+# Machine-specific certificate selection or contributor signing settings (see Signing.xcconfig).
 Signing.local.xcconfig
 
 # Local agent instructions

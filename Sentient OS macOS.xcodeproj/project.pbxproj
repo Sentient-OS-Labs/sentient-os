@@ -195,7 +195,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Pin, manual and tool-catalog consistency is required in EVERY configuration.\n/usr/bin/python3 \"${SRCROOT}/Scripts/check_cua_contract.py\" \"${SRCROOT}\" || exit 1\n\n# Debug-only: fail the build if a Log() literal or a diagnostics tag/extra carries a word Sentry's\n# server-side scrubber redacts wholesale (token/auth/session/...). Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  \"${SRCROOT}/Scripts/lint_log_words.sh\" \"${SRCROOT}\"\nfi\n";
+			shellScript = "# Signing selection must come from xcconfig, not target-level overrides.\n/usr/bin/python3 \"${SRCROOT}/Scripts/check_signing_config.py\" \"${SRCROOT}\" || exit 1\n\n# Pin, manual and tool-catalog consistency is required in EVERY configuration.\n/usr/bin/python3 \"${SRCROOT}/Scripts/check_cua_contract.py\" \"${SRCROOT}\" || exit 1\n\n# Debug-only: fail the build if a Log() literal or a diagnostics tag/extra carries a word Sentry's\n# server-side scrubber redacts wholesale (token/auth/session/...). Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  \"${SRCROOT}/Scripts/lint_log_words.sh\" \"${SRCROOT}\"\nfi\n";
 		};
 		5AE5710001000000000000B1 /* Upload dSYMs to Sentry */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -357,10 +357,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Sentient OS macOS.entitlements";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 29;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -376,7 +374,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				MARKETING_VERSION = 3.1;
+				MARKETING_VERSION = 3.2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
 				PRODUCT_NAME = "Sentient OS";
 				REGISTER_APP_GROUPS = YES;
@@ -395,10 +393,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "Sentient OS macOS.entitlements";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 29;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -414,7 +410,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				MARKETING_VERSION = 3.1;
+				MARKETING_VERSION = 3.2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
 				PRODUCT_NAME = "Sentient OS";
 				REGISTER_APP_GROUPS = YES;

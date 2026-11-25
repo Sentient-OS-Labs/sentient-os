@@ -13,6 +13,7 @@ APP = ROOT / "Sentient OS macOS"
 
 FIXTURE = r'''
 import Foundation
+import CryptoKit
 import Darwin
 
 @main @MainActor struct Tests {
@@ -178,32 +179,33 @@ import Darwin
         // restarts. Only exact consumed source inputs are covered; new arrivals remain pending.
         let largeInputs=(0..<10_001).map {input("large:\($0)")}
         let largeCheckpoint=VaultMergeCheckpoint(file:root.appendingPathComponent("large-checkpoint.json"))
-        try largeCheckpoint.recordSuccessfulMerge(inputs:largeInputs,consumedSourceIDs:Set(largeInputs.map(\.sourceID)),resultingVaultFingerprint:valid.fingerprint)
-        check(largeCheckpoint.coveredSourceIDs(in:largeInputs,vaultFingerprint:valid.fingerprint).count == largeInputs.count,
+        try largeCheckpoint.recordSuccessfulMerge(inputs:largeInputs,consumedInputIDs:try VaultInput.identities(largeInputs),resultingVaultFingerprint:valid.fingerprint)
+        check(largeCheckpoint.coveredInputIDs(in:largeInputs,vaultFingerprint:valid.fingerprint).count == largeInputs.count,
               "Large completed initial stage did not survive restart")
         check(try Data(contentsOf:largeCheckpoint.file).count < 1024,"Large-stage checkpoint should remain bounded")
-        check(largeCheckpoint.coveredSourceIDs(in:Array(largeInputs.dropLast()),vaultFingerprint:valid.fingerprint).isEmpty,
+        check(largeCheckpoint.coveredInputIDs(in:Array(largeInputs.dropLast()),vaultFingerprint:valid.fingerprint).isEmpty,
               "Changed large-stage input set reused stale completion")
         var editedLarge=largeInputs;editedLarge[0]=input("large:0",text:"Changed content")
-        check(largeCheckpoint.coveredSourceIDs(in:editedLarge,vaultFingerprint:valid.fingerprint).isEmpty,
+        check(largeCheckpoint.coveredInputIDs(in:editedLarge,vaultFingerprint:valid.fingerprint).isEmpty,
               "Changed large-stage content reused stale completion")
         let checkpointURL = root.appendingPathComponent("checkpoint.json")
         let checkpoint = VaultMergeCheckpoint(file: checkpointURL)
         let a = input(), b = input("mail:second", kind: "mail", text: "Another summary")
         let accepted = [a, b]
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Missing checkpoint skipped work")
-        try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedSourceIDs: [a.sourceID], resultingVaultFingerprint: valid.fingerprint)
+        let aID = try a.identity(), bID = try b.identity()
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Missing checkpoint skipped work")
+        try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: [aID], resultingVaultFingerprint: valid.fingerprint)
         let reloaded = VaultMergeCheckpoint(file: checkpointURL)
-        check(reloaded.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint) == [a.sourceID], "Restart lost completed merge or skipped new arrival")
-        check(reloaded.coveredSourceIDs(in: [b, a], vaultFingerprint: valid.fingerprint) == [a.sourceID], "Reordering changed input identity")
-        check(reloaded.coveredSourceIDs(in: accepted, vaultFingerprint: editedFingerprint).isEmpty, "Changed vault reused checkpoint")
-        check(reloaded.coveredSourceIDs(in: [b], vaultFingerprint: valid.fingerprint).isEmpty, "Removed source was treated as pending coverage")
+        check(reloaded.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint) == [aID], "Restart lost completed merge or skipped new arrival")
+        check(reloaded.coveredInputIDs(in: [b, a], vaultFingerprint: valid.fingerprint) == [aID], "Reordering changed input identity")
+        check(reloaded.coveredInputIDs(in: accepted, vaultFingerprint: editedFingerprint).isEmpty, "Changed vault reused checkpoint")
+        check(reloaded.coveredInputIDs(in: [b], vaultFingerprint: valid.fingerprint).isEmpty, "Removed source was treated as pending coverage")
         for changed in [input(kind: "mail"), input(folder: "Other trust boundary"), input(title: "Other"),
                         input(text: "Edited summary"), input(date: Date(timeIntervalSince1970: 1234.25)),
                         input(title: nil), input(date: nil)] {
-            check(reloaded.coveredSourceIDs(in: [changed], vaultFingerprint: valid.fingerprint).isEmpty, "Changed accepted input was skipped")
+            check(reloaded.coveredInputIDs(in: [changed], vaultFingerprint: valid.fingerprint).isEmpty, "Changed accepted input was skipped")
         }
-        check(reloaded.coveredSourceIDs(in: [a, input(text: "Conflicting duplicate")], vaultFingerprint: valid.fingerprint).isEmpty, "Conflicting duplicate input was accepted")
+        check(reloaded.coveredInputIDs(in: [a, input(text: "Conflicting duplicate")], vaultFingerprint: valid.fingerprint) == [aID], "A new variant invalidated or inherited old coverage")
         let saved = try Data(contentsOf: checkpointURL)
         let savedText = String(decoding: saved, as: UTF8.self)
         for privateString in [a.sourceID, a.folder, a.title!, a.text] {
@@ -211,48 +213,106 @@ import Darwin
         }
         let permissions = (try fm.attributesOfItem(atPath: checkpointURL.path))[.posixPermissions] as! Int
         check(permissions & 0o777 == 0o600, "Recovery file is not private")
-        try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedSourceIDs: [], resultingVaultFingerprint: valid.fingerprint)
+        try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: [], resultingVaultFingerprint: valid.fingerprint)
         check(try Data(contentsOf: checkpointURL) == saved, "Empty merge erased checkpoint")
         do {
-            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedSourceIDs: ["unknown"], resultingVaultFingerprint: valid.fingerprint)
+            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: ["unknown"], resultingVaultFingerprint: valid.fingerprint)
             preconditionFailure("Unknown source was committed")
         } catch VaultMergeCheckpoint.Failure.invalidInput { checks += 1 }
         do {
-            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedSourceIDs: [a.sourceID], resultingVaultFingerprint: "partial")
+            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: [aID], resultingVaultFingerprint: "partial")
             preconditionFailure("Invalid vault fingerprint was committed")
         } catch VaultMergeCheckpoint.Failure.invalidFingerprint { checks += 1 }
         check(try Data(contentsOf: checkpointURL) == saved, "Failed save destroyed old checkpoint")
         // Simulated retry: a is covered; only b gets merged, then both are bound to the new result.
         var merged = Set<String>()
-        let covered = checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint)
-        for note in accepted where !covered.contains(note.sourceID) { merged.insert(note.sourceID) }
-        check(merged == [b.sourceID], "Retry repeated successful input merge")
-        try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedSourceIDs: covered.union(merged), resultingVaultFingerprint: editedFingerprint)
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: editedFingerprint) == [a.sourceID, b.sourceID], "Later merge lost earlier coverage")
+        let covered = checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint)
+        for note in accepted { let id = try note.identity(); if !covered.contains(id) { merged.insert(id) } }
+        check(merged == [bID], "Retry repeated successful input merge")
+        try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: covered.union(merged), resultingVaultFingerprint: editedFingerprint)
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: editedFingerprint) == [aID, bID], "Later merge lost earlier coverage")
         try checkpoint.clear()
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: editedFingerprint).isEmpty, "Successful cleanup did not clear coverage")
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: editedFingerprint).isEmpty, "Successful cleanup did not clear coverage")
         try checkpoint.clear(); checks += 1
         try Data("{truncated".utf8).write(to: checkpointURL)
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Corrupt checkpoint skipped work")
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Corrupt checkpoint skipped work")
         try saved.write(to: checkpointURL)
         var object = try JSONSerialization.jsonObject(with: saved) as! [String: Any]
         object["inputDigest"] = String(repeating: "0", count: 64)
         try JSONSerialization.data(withJSONObject: object).write(to: checkpointURL)
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Mismatched input digest skipped work")
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Mismatched input digest skipped work")
         object["version"] = 999
         try JSONSerialization.data(withJSONObject: object).write(to: checkpointURL)
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Unknown format skipped work")
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Unknown format skipped work")
         try fm.removeItem(at: checkpointURL)
         let outside = root.appendingPathComponent("outside.json")
         try saved.write(to: outside)
         try fm.createSymbolicLink(at: checkpointURL, withDestinationURL: outside)
-        check(checkpoint.coveredSourceIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Checkpoint followed symlink")
+        check(checkpoint.coveredInputIDs(in: accepted, vaultFingerprint: valid.fingerprint).isEmpty, "Checkpoint followed symlink")
         do {
-            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedSourceIDs: [a.sourceID], resultingVaultFingerprint: valid.fingerprint)
+            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: [aID], resultingVaultFingerprint: valid.fingerprint)
             preconditionFailure("Checkpoint wrote through symlink")
         } catch VaultMergeCheckpoint.Failure.unsafeStorage { checks += 1 }
         try checkpoint.clear()
         check(try Data(contentsOf: outside) == saved, "Clearing checkpoint deleted or changed symlink target")
+
+        // Checkpoints written before this change carry a hash per source, not per input version.
+        // Upgrade only the exact known version; preserve changed siblings for the next writer.
+        func hex(_ bytes: some Sequence<UInt8>) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
+        func legacyData(_ inputs: [VaultInput], fingerprint: String, whole: Bool = false) throws -> Data {
+            let hashes = try Dictionary(uniqueKeysWithValues: inputs.map {
+                (hex(SHA256.hash(data: Data($0.sourceID.utf8))), try $0.identity())
+            })
+            var digest = SHA256()
+            for key in hashes.keys.sorted() { digest.update(data: Data(key.utf8)); digest.update(data: Data(hashes[key]!.utf8)) }
+            var value: [String: Any] = ["version": 1, "inputHashes": whole ? [:] : hashes,
+                "inputDigest": hex(digest.finalize()), "vaultFingerprint": fingerprint]
+            if whole { value["wholeInputCount"] = hashes.count }
+            return try JSONSerialization.data(withJSONObject: value, options: .sortedKeys)
+        }
+        let legacyFile = root.appendingPathComponent("legacy-checkpoint.json")
+        let legacyCheckpoint = VaultMergeCheckpoint(file: legacyFile)
+        let legacyBytes = try legacyData([a], fingerprint: valid.fingerprint)
+        try legacyBytes.write(to: legacyFile)
+        let changedA = input(folder: "Nested selected root", text: "Another accepted version")
+        let changedID = try changedA.identity()
+        let mixed = [a, changedA, b]
+        check(legacyCheckpoint.coveredInputIDs(in: mixed, vaultFingerprint: valid.fingerprint) == [aID],
+              "Old checkpoint must cover only the original version, without losing unrelated coverage")
+        check(try Data(contentsOf: legacyFile) == legacyBytes, "Reading old coverage unexpectedly rewrote its receipt")
+        try legacyCheckpoint.recordSuccessfulMerge(inputs: mixed, consumedInputIDs: [aID, changedID, bID], resultingVaultFingerprint: valid.fingerprint)
+        let newReceipt = try Data(contentsOf: legacyFile)
+        check((try JSONSerialization.jsonObject(with: newReceipt) as! [String: Any])["version"] as? Int == 2,
+              "Successful recovery did not upgrade the checkpoint format")
+        check(legacyCheckpoint.coveredInputIDs(in: [b, changedA, a], vaultFingerprint: valid.fingerprint) == [aID, changedID, bID],
+              "Conflicting legacy variants do not survive relaunch/reordering")
+        try legacyCheckpoint.recordSuccessfulMerge(inputs: mixed.reversed(), consumedInputIDs: [bID, aID, changedID], resultingVaultFingerprint: valid.fingerprint)
+        check(try Data(contentsOf: legacyFile) == newReceipt, "Equivalent consumed input sets produce different checkpoint bytes")
+        let untouched = input("unrelated", text: "Untouched input")
+        try legacyCheckpoint.recordSuccessfulMerge(inputs: [untouched], consumedInputIDs: [try untouched.identity()], resultingVaultFingerprint: valid.fingerprint)
+        check(legacyCheckpoint.coveredInputIDs(in: [a, changedA, untouched], vaultFingerprint: valid.fingerprint) == [try untouched.identity()],
+              "A conflicting source poisoned coverage for an unrelated input")
+        try legacyData(largeInputs, fingerprint: valid.fingerprint, whole: true).write(to: legacyFile)
+        check(legacyCheckpoint.coveredInputIDs(in: largeInputs, vaultFingerprint: valid.fingerprint).count == largeInputs.count,
+              "Legacy compact checkpoint lost valid complete-stage coverage")
+        check(legacyCheckpoint.coveredInputIDs(in: largeInputs + [input("large:0", text: "Another version")], vaultFingerprint: valid.fingerprint).isEmpty,
+              "Legacy compact checkpoint guessed coverage for changed input")
+        let variants = (0..<10_001).map { input("one-source", text: "Synthetic version \($0)") }
+        try legacyCheckpoint.recordSuccessfulMerge(inputs: variants, consumedInputIDs: VaultInput.identities(variants), resultingVaultFingerprint: valid.fingerprint)
+        check(legacyCheckpoint.coveredInputIDs(in: variants, vaultFingerprint: valid.fingerprint).count == variants.count,
+              "Large input versions with one source ID cannot be recovered")
+        for invalid in [input(""), input(date: Date(timeIntervalSince1970: .infinity))] {
+            do { _ = try invalid.identity(); preconditionFailure("Invalid input identity accepted") }
+            catch is VaultInput.Failure { checks += 1 }
+        }
+        // Hard links, like symlinks, must never turn a checkpoint write into a write to another file.
+        try fm.linkItem(at: outside, to: checkpointURL)
+        do {
+            try checkpoint.recordSuccessfulMerge(inputs: accepted, consumedInputIDs: [aID], resultingVaultFingerprint: valid.fingerprint)
+            preconditionFailure("Checkpoint accepted hard-linked storage")
+        } catch VaultMergeCheckpoint.Failure.unsafeStorage { checks += 1 }
+        try checkpoint.clear()
+        check(try Data(contentsOf: outside) == saved, "Clearing hard-linked checkpoint changed its target")
         print("Vault integrity production helpers: \(checks) checks passed")
     }
 }
@@ -264,7 +324,7 @@ with tempfile.TemporaryDirectory(prefix="sentient-vault-integrity-build-") as di
     source.write_text(FIXTURE)
     executable = directory / "tests"
     subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "6", "-default-isolation", "MainActor", str(source),
-                    str(APP / "Vault/VaultValidation.swift"),
+                    str(APP / "Vault/VaultValidation.swift"), str(APP / "Vault/VaultInput.swift"),
                     str(APP / "Proactive/VaultMergeCheckpoint.swift"),
                     str(APP / "System/AppSupport.swift"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True, timeout=30)

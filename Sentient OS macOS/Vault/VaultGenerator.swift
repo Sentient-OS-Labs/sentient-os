@@ -60,11 +60,9 @@ actor VaultGenerator {
         /// Persist boundaries so an app update cannot skip/repeat slices of an older resume.
         var sliceBudget: Int? = nil
         var sliceItemLimit: Int? = nil
-        /// Exact accepted inputs for safe cleanup after a resumed merge. Optional for older tokens.
-        var inputSourceIDs: [String]? = nil
-        /// Only survivor summaries, keyed by opaque Mail identities. Rechecked before resuming.
-        var mailInputHashes: [String: String]? = nil
-        var acceptedInputHashes: [String: String]? = nil
+        /// Exact accepted versions consumed by the saved corpus, never source IDs alone.
+        /// Older tokens acquire these from their validated corpus before they can resume.
+        var inputIdentities: Set<String>? = nil
         /// CLI sessions only exist in the runtime that created them. Older tokens have no
         /// scope and must restart from the retained summaries, never import a CLI session.
         var sessionScope: String? = nil

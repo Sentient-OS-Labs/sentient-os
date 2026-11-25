@@ -30,7 +30,7 @@ def main():
         binary = root / "gmail-recovery"
         sources = [
             APP / "Ingestion/ItemKey.swift",
-            APP / "Ingestion/CycleStore.swift",
+            APP / "Ingestion/CycleStore.swift", APP / "Vault/VaultInput.swift",
             APP / "Sources/GmailReadState.swift",
             APP / "Sources/HostedConnectorReadState.swift",
             APP / "Sources/GmailConnect.swift",
@@ -71,7 +71,7 @@ def main():
 }
 ''')
         old_binary = root / "legacy-writer"
-        subprocess.run([*compiler, str(sources[0]), str(sources[2]), str(legacy), str(old_main), "-o", str(old_binary)],
+        subprocess.run([*compiler, str(APP / "Ingestion/ItemKey.swift"), str(APP / "Sources/GmailReadState.swift"), str(APP / "Vault/VaultInput.swift"), str(legacy), str(old_main), "-o", str(old_binary)],
                        check=True, env=environment)
         subprocess.run([str(old_binary), str(root / "migration.store")], check=True, env=environment, timeout=30)
         for phase in ["migration", "write-partial", "reopen-partial", "finish-partial", "reopen-complete", "transactions", "pipeline", "origins", "initial-write", "initial-restart", "initial-reopen-complete"]:

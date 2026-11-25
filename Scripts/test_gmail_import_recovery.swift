@@ -221,7 +221,7 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
                 try check(await store.notes().count == 2, "new process reopens completed summaries")
                 let resumed = try await store.beginGmailRead(initial(at: through.addingTimeInterval(3 * 86_400), replace: true))
                 try check(resumed.id == state.id && resumed.windows == state.windows, "later force-initial request resumes fixed window bounds")
-                await store.wipeNotes(sourceIDs: Set((await store.notes()).map(\.sourceID)))
+                await store.wipeNotes(inputIDs: try VaultInput.identities((await store.notes()).map(\.vaultInput)))
                 try check(try await store.gmailReadState()?.completed == [0, 2], "downstream consumption leaves durable coverage receipts")
             case "finish-partial":
                 guard let state = try await store.gmailReadState() else { throw TestFailure.message("Missing resume state") }
@@ -354,7 +354,7 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
         // A partial force-initial read can already have delivered its accepted notes to the vault.
         let replacement = try await store.beginGmailRead(initial(replace: true))
         for index in [0, 1] { _ = try await store.commitGmailWindow(stateID: replacement.id, origin: replacement.origin, index: index, note: note(replacement, index)) }
-        await store.wipeNotes(sourceIDs: Set([replacement.sourceID(for: 0), replacement.sourceID(for: 1)]))
+        await store.wipeNotes(inputIDs: try VaultInput.identities((await store.notes()).filter { [replacement.sourceID(for: 0), replacement.sourceID(for: 1)].contains($0.sourceID) }.map(\.vaultInput)))
         for index in [2, 3] { _ = try await store.commitGmailWindow(stateID: replacement.id, origin: replacement.origin, index: index, note: note(replacement, index)) }
         let afterReplacement = await store.notes()
         try check(Set(afterReplacement.map(\.sourceID)) == Set([replacement.sourceID(for: 2), replacement.sourceID(for: 3)]),
@@ -401,7 +401,7 @@ nonisolated final class ProgressSpy: @unchecked Sendable {
         try check(completed.count == 3 && completed.last?.completed == 3 && completed.last?.kept == 2
             && completed.filter { $0.summary == nil }.count == 1,
                   "partial pipeline emits completion only for two saved summaries and one covered quiet window")
-        await store.wipeNotes(sourceIDs: Set((await store.notes()).map(\.sourceID)))
+        await store.wipeNotes(inputIDs: try VaultInput.identities((await store.notes()).map(\.vaultInput)))
         await ReadProbe.shared.reset(.success, windows: state.windows)
         _ = try await GmailConnect.runIterative()
         observed = await ReadProbe.shared.stats()

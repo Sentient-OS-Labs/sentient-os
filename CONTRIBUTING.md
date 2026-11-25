@@ -11,7 +11,7 @@ Open an issue first. Not out of bureaucracy, but because we rewrite fast and it 
 You'll need an Apple Silicon Mac on macOS 15.4 or later, and Xcode 26.
 
 1. Clone the repo and open `Sentient OS macOS.xcodeproj`.
-2. Signing: create a `Signing.local.xcconfig` file next to `Signing.xcconfig` with one line, `DEVELOPMENT_TEAM = <your team id>`. It's gitignored, and it's the only place your team should ever appear. Please don't pick a team in Xcode's Signing & Capabilities dropdown: that silently writes it into the project file, and we'll have to bounce the PR for it.
+2. Signing: shared defaults use the shipping team and manual signing with an installed Apple Development certificate/private key. If you use another team, put `DEVELOPMENT_TEAM = <your team id>` in the gitignored `Signing.local.xcconfig` beside `Signing.xcconfig`. You can also set `CODE_SIGN_IDENTITY` there to an exact installed certificate fingerprint, or `CODE_SIGN_STYLE = Automatic` if your setup needs account-managed signing. Keep these settings out of the Xcode project's Build Settings and Signing & Capabilities UI: a build check rejects project-level overrides so both configurations inherit the xcconfig files consistently.
 3. Press Run. The on-device model (Gemma 4 E4B, ~3.7 GB) downloads during onboarding.
 
 A note on project structure: the Xcode project uses synchronized file groups, so files you add or move on disk join the target automatically. No project-file surgery ever.

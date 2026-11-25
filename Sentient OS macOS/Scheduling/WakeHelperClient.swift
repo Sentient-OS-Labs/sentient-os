@@ -31,6 +31,11 @@ final class WakeHelperClient {
     private var probing: Task<DaemonHealth, Never>?
     private var healthRetryAfter: TimeInterval = 0
     private var healthFailures = 0
+    private var connectionGeneration = 0
+    private var connectionDiagnostics = WakeHelperDiagnostics.State()
+    // Observation must not occupy the worker used by an explicit setup/removal request.
+    // Each worker already bounds/coalesces uncancellable macOS calls independently.
+    private let diagnosticRegistration = ServiceRegistration(kind: .wakeHelper)
 
     /// Only explicit setup actions call this. Registration may throw while successfully placing
     /// the item in the approval queue; status is authoritative in that case.
@@ -181,9 +186,14 @@ final class WakeHelperClient {
 
     private func conn() -> NSXPCConnection {
         if let c = connection { return c }
+        connectionGeneration = min(connectionGeneration + 1, 1_000_000)
         let c = NSXPCConnection(machServiceName: WakeHelperConfig.machServiceName, options: .privileged)
         c.remoteObjectInterface = NSXPCInterface(with: WakeHelperProtocol.self)
+        c.interruptionHandler = { [weak self] in Task { @MainActor in
+            self?.connectionDiagnostics.interrupted()
+        } }
         c.invalidationHandler = { [weak self, weak c] in Task { @MainActor in
+            self?.connectionDiagnostics.invalidated()
             if self?.connection === c { self?.connection = nil }
         } }
         c.resume()
@@ -205,8 +215,13 @@ final class WakeHelperClient {
     /// `quiet` softens the error line for probes, where a miss is an expected state, not a fault.
     private func call(quiet: Bool = false, phase: Diagnostics.Phase = .probe,
                       _ body: @escaping (WakeHelperProtocol, @escaping (Bool) -> Void) -> Void) async -> Bool {
+        let reused = connection != nil
         let connection = conn()
         let operation = Diagnostics.current
+        let context = WakeHelperDiagnostics.Context(phase: phase, trigger: CodexTrigger.current,
+            registrationBefore: .init(rawStatus: registration.cachedStatus?.rawValue),
+            connectionGeneration: connectionGeneration, reusedConnection: reused,
+            began: ProcessInfo.processInfo.systemUptime)
         return await withCheckedContinuation { cont in
             let once = Once { cont.resume(returning: $0) }
             DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
@@ -214,6 +229,7 @@ final class WakeHelperClient {
                     if !quiet { Diagnostics.$current.withValue(operation) {
                         Diagnostics.report(.wakeFailed, phase: phase, reason: "xpc_timeout", counts: [.deadlineMS: 30_000])
                     } }
+                    self.observeFailure(.timeout, context: context, operation: operation)
                 }
             }
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ err in
@@ -223,13 +239,65 @@ final class WakeHelperClient {
                     if !quiet { Diagnostics.$current.withValue(operation) {
                         Diagnostics.report(.wakeFailed, phase: phase, reason: "xpc_error", error: err)
                     } }
+                    self.observeFailure(.xpcError, context: context, error: err, operation: operation)
                 }
-            }) as? WakeHelperProtocol else { once.fire(false); return }
-            body(proxy) { ok in once.fire(ok) {
-                if !ok && !quiet { Diagnostics.$current.withValue(operation) {
-                    Diagnostics.report(.wakeFailed, phase: phase, reason: "helper_rejected")
-                } }
-            } }
+            }) as? WakeHelperProtocol else {
+                once.fire(false) { self.observeFailure(.missingProxy, context: context, operation: operation) }
+                return
+            }
+            body(proxy) { ok in
+                // Even a late or negative reply proves this helper answered. It does not
+                // change the original request's result or certify a successful awake hold.
+                self.observeReply(context: context)
+                once.fire(ok) {
+                    if !ok {
+                        if !quiet { Diagnostics.$current.withValue(operation) {
+                            Diagnostics.report(.wakeFailed, phase: phase, reason: "helper_rejected")
+                        } }
+                        self.observeFailure(.rejected, context: context, operation: operation)
+                    }
+                }
+            }
+        }
+    }
+
+    private nonisolated func observeReply(context: WakeHelperDiagnostics.Context) {
+        let now = ProcessInfo.processInfo.systemUptime
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if connectionDiagnostics.recordReply(at: now) {
+                CrashReporting.diagnosticBreadcrumb("wake.helper_replied", data: [
+                    "phase": context.phase.rawValue,
+                    "wake_connection_generation": String(context.connectionGeneration)])
+            }
+        }
+    }
+
+    /// Read-only observation after failure. Never await this task on the XPC result path:
+    /// registration runs on ServiceRegistration's bounded worker, and cannot delay cleanup,
+    /// change admission, install a helper or launch another readiness XPC call.
+    private nonisolated func observeFailure(_ failure: WakeHelperDiagnostics.Failure,
+                                           context: WakeHelperDiagnostics.Context, error: Error? = nil,
+                                           operation: Diagnostics.Operation?) {
+        let ended = ProcessInfo.processInfo.systemUptime
+        // Sanitize error metadata before crossing into the observation task. Never retain
+        // NSError.userInfo, descriptions, executable paths or arbitrary system log text.
+        let base = Diagnostics.$current.withValue(operation) {
+            WakeHelperDiagnostics.failurePayload(failure, context: context, error: error, elapsed: ended - context.began)
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if failure == .rejected { _ = connectionDiagnostics.recordReply(at: ended) }
+            guard connectionDiagnostics.claim(context.phase, failure: failure, now: ended) else { return }
+            defer { connectionDiagnostics.finish(context.phase, failure: failure) }
+            let snapshot = connectionDiagnostics.snapshot(at: ProcessInfo.processInfo.systemUptime)
+            let observed = await Diagnostics.$current.withValue(nil) {
+                await self.diagnosticRegistration.refresh(force: true)
+            }
+            let payload = WakeHelperDiagnostics.enriched(base, observed: .init(rawStatus: observed?.rawValue),
+                snapshot: snapshot, location: .init(bundleURL: Bundle.main.bundleURL,
+                    homeURL: FileManager.default.homeDirectoryForCurrentUser))
+            Diagnostics.$current.withValue(operation) { WakeHelperDiagnostics.emit(payload) }
         }
     }
 }

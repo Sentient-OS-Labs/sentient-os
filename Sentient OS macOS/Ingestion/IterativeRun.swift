@@ -160,6 +160,11 @@ struct IterativeRun {
         var sinceReload = 0
         var consecutiveFailures = 0
         var reloadsWithoutProgress = 0
+        // Selected roots can overlap. Once an attempt and its marker are saved, other roots
+        // advance their own markers without another extraction/model call or survivor note.
+        // Run-local only: no persistent ledger of rejected/private files is introduced.
+        var committedFileIDs = Set<String>()
+        var resetBuckets = Set<String>()
 
         func reloadEngine(reason: String) async {
             p.lastFilePath = nil; p.lastVerdict = nil
@@ -333,7 +338,9 @@ struct IterativeRun {
                 case .initial:
                     // Explicit INITIAL = full reset (re-summarize everything). An .auto-chosen initial
                     // (fresh first run OR resuming an interrupted one) keeps its partial progress.
-                    if mode == .initial { await store.clearBucket(bucket.key); state = nil }
+                    if mode == .initial, resetBuckets.insert(bucket.key).inserted {
+                        await store.clearBucket(bucket.key); state = nil
+                    }
                     let resumeFloor = state?.floor
                     let descentTop: ItemKey
                     if let m = state?.mark, resumeFloor != nil {
@@ -379,16 +386,17 @@ struct IterativeRun {
                         onProgress(p)
                         break bucketLoop
                     }
-                    if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine(reason: "preemptive") }
+                    let duplicateFile = connector.kind == .file && committedFileIDs.contains(w.item.id)
+                    if !duplicateFile, sinceReload >= Self.preemptiveReloadEvery { await reloadEngine(reason: "preemptive") }
 
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
                     p.lastFilePath = w.item.metadata["path"]
                     p.lastItemDate = nil
 
-                    let result = await attempt(w.item, connector: connector)
+                    let result: AttemptResult? = duplicateFile ? nil : await attempt(w.item, connector: connector)
                     // B10: only a GENERATE failure implicates the engine → the GPU-wedge reload path.
                     // An extraction failure means the file is bad; the engine is fine — never reload for it.
-                    if case .generateFailed = result {
+                    if case .generateFailed? = result {
                         consecutiveFailures += 1
                         if consecutiveFailures >= Self.failuresBeforeReload {
                             guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
@@ -410,17 +418,18 @@ struct IterativeRun {
                     // §7.8/B10: for FILE items, extraction succeeded unless it was the extraction that
                     // failed (a generate failure still means the content extracted fine). Feeds the
                     // rolling extraction-rate sensor.
-                    if connector.kind == .file {
+                    if connector.kind == .file, let result {
                         let format = URL(fileURLWithPath: w.item.metadata["path"] ?? "").pathExtension
                         if case .extractionFailed = result { SourceHealth.recordExtraction(succeeded: false, format: format) }
                         else { SourceHealth.recordExtraction(succeeded: true, format: format) }
                     }
                     let draft: NoteDraft?
                     switch result {
-                    case .ok(let d):        consecutiveFailures = 0; reloadsWithoutProgress = 0; draft = d
-                    case .extractionFailed: p.failed += 1; p.extractionFailed += 1; draft = nil   // no reload
-                    case .generateFailed:   p.failed += 1; draft = nil
-                    case .invalidReply:     p.failed += 1; draft = nil
+                    case .ok(let d)?:        consecutiveFailures = 0; reloadsWithoutProgress = 0; draft = d
+                    case .extractionFailed?: p.failed += 1; p.extractionFailed += 1; draft = nil   // no reload
+                    case .generateFailed?:   p.failed += 1; draft = nil
+                    case .invalidReply?:     p.failed += 1; draft = nil
+                    case nil:                draft = nil // another selected root already handled this file
                     }
 
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
@@ -443,7 +452,11 @@ struct IterativeRun {
                         break runLoop
                     }
                     if outcome == .failed { p.failed += 1; break runLoop }
-                    sinceReload += 1; p.done += 1; processedThisConnector += 1
+                    if duplicateFile { p.total -= 1 }
+                    else {
+                        if connector.kind == .file { committedFileIDs.insert(w.item.id) }
+                        sinceReload += 1; p.done += 1; processedThisConnector += 1
+                    }
                     onProgress(p)
                 }
 

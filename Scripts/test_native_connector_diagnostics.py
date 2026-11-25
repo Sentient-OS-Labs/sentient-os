@@ -17,6 +17,8 @@ nonisolated enum MirrorClient{enum MirrorError:Error{case http(Int,String)}}
 nonisolated enum DoubleTapInference{enum Failure:Error{case http(Int,String)}}
 nonisolated enum CodexCLI{enum CLIError:Error{case exitFailure(Int32,String)}}
 '''
+source+='\nnonisolated enum VaultInput {\n'+block((APP/'Vault/VaultInput.swift').read_text(),'enum Failure:')+'\n}\n'
+source+='\nnonisolated enum VaultMergeCheckpoint {\n'+block((APP/'Proactive/VaultMergeCheckpoint.swift').read_text(),'enum Failure:')+'\n}\n'
 source+=block((APP/'Connectors/DirectMCPModels.swift').read_text(),'nonisolated enum DirectMCPError:')
 source+='\nnonisolated enum GranolaResponse {\n'+block((APP/'Sources/GranolaResponse.swift').read_text(),'nonisolated enum Failure:')+'\n}\n'
 source+='\nnonisolated enum Diagnostics {\n'+block((APP/'Diagnostics/Diagnostics.swift').read_text(),'static func errorFields(')+'\n}\n'
@@ -29,6 +31,15 @@ source+=r'''
    precondition(fields["error_case"]==expected)
    precondition(fields.keys.allSatisfy{["error_type","error_case","error_domain","error_code","http_status"].contains($0)})
    print("PASS stable native error case "+expected)
+  }
+  for (error, expectedType, expectedCase) in [
+      (VaultInput.Failure.invalidSourceID as Error, "VaultInputFailure", "invalidSourceID"),
+      (VaultInput.Failure.invalidDate as Error, "VaultInputFailure", "invalidDate"),
+      (VaultMergeCheckpoint.Failure.invalidInput as Error, "VaultMergeCheckpointFailure", "invalidInput"),
+      (VaultMergeCheckpoint.Failure.unsafeStorage as Error, "VaultMergeCheckpointFailure", "unsafeStorage")] {
+   let fields = Diagnostics.errorFields(error)
+   precondition(fields["error_type"] == expectedType && fields["error_case"] == expectedCase)
+   print("PASS qualified recovery diagnostic " + expectedType + "." + expectedCase)
   }
   precondition(Diagnostics.errorFields(DirectMCPError.http(429))["http_status"]=="429")
   let privateText="Synthetic user content must stay local"

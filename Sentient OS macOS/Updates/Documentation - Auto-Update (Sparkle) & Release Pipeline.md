@@ -16,6 +16,7 @@ scripts at the repo root (`Scripts/make_dmg.sh` → `Scripts/release.sh`) plus o
 | `UpdateGateView.swift` | The OLED UI: the full-screen mandatory gate (Update / Quit, no skip) and the small info card for user-initiated checks. Overlaid by the home and the Settings window. |
 | `Info.plist` (repo root) | The Sparkle keys: feed URL, the public EdDSA key, the 3 h check interval, automatic download + install, no profiling, no JavaScript. Xcode merges the generated keys on top of this partial plist. |
 | `Scripts/make_dmg.sh` · `Scripts/release.sh` (repo root) | The release pipeline. |
+| `Signing.xcconfig` · `Scripts/check_signing_config.py` (repo root) | Shared development/archive signing defaults and the build check that keeps project settings from overriding them. |
 
 ## The update model
 
@@ -28,7 +29,7 @@ scripts at the repo root (`Scripts/make_dmg.sh` → `Scripts/release.sh`) plus o
 
 Security: every update is verified twice, an EdDSA signature (our key) and Apple's Developer ID
 signature; Sparkle also enforces the same Team ID as the installed app (`YJ8AZR3G5Q`). The public key
-in `Info.plist` is the permanent root of trust; the private seed lives in Jesai's login Keychain
+in `Info.plist` is the permanent root of trust; the existing private seed lives in authorized release Macs' login Keychains
 (service `https://sparkle-project.org`, account `ed25519`) with an off-machine backup, and NEVER in the
 repo. Losing it strands every user; rotating it means first shipping a build with a new public key.
 Because the app is non-sandboxed, Sparkle's XPC services are never used (do not set
@@ -39,9 +40,17 @@ bump it; bump `MARKETING_VERSION` for the human version.
 
 ## Releasing
 
+Debug builds and Release archives inherit team `YJ8AZR3G5Q`, manual signing and the Apple Development
+identity class from `Signing.xcconfig`. Machine-specific certificate selection belongs in the
+gitignored `Signing.local.xcconfig`; an exact certificate fingerprint can disambiguate multiple
+installed identities with the same name. Keep the shipping team inherited on maintainers' Macs.
+`Scripts/check_signing_config.py` rejects signing-selection overrides in project/target configurations,
+including SDK-qualified settings. Certificates and their private keys stay in Keychain.
+
 You produce the notarized `.app` in Xcode (bump both versions → Archive → Distribute App → Direct
-Distribution → wait for "Ready to distribute" → Export Notarized App); the scripts do the rest, run on
-Jesai's Mac (the EdDSA seed and the authed `gh` live there):
+Distribution → wait for "Ready to distribute" → Export Notarized App). Export selects the shipping
+Developer ID identity separately from the development identity used to archive. The scripts run on
+a configured release Mac with the existing Sparkle key, notarization profile and publishing access:
 
 ```
 ./Scripts/make_dmg.sh "path/to/Sentient OS.app"
