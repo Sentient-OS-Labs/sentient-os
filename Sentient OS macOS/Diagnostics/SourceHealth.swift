@@ -24,11 +24,12 @@ nonisolated enum SourceHealth {
         let source = Diagnostics.source(source)
         let allowed = ["ok", "incomplete", "time_cap", "connector_auth", "invalid_response", "skipped",
                        "unknown", "usage_limit", "timeout_ours", "stream_disconnect"]
-        lock.withLock { _ in
+        let data: Data? = lock.withLock { _ in
             var values = readStatuses()
             values[source] = allowed.contains(outcome) ? outcome : "incomplete"
-            if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: readStatusKey) }
+            return try? JSONEncoder().encode(values)
         }
+        if let data { UserDefaults.standard.set(data, forKey: readStatusKey) }
     }
 
     static func readStatuses() -> [String: String] {
@@ -42,9 +43,10 @@ nonisolated enum SourceHealth {
     static func lastListingCount(_ bucketKey: String) -> Int? { dict()["listing:\(bucketKey)"] }
 
     static func recordListingCount(_ bucketKey: String, _ count: Int) {
-        lock.withLock { _ in
-            var d = dict(); d["listing:\(bucketKey)"] = count; save(d)
+        let d = lock.withLock { _ -> [String: Int] in
+            var d = dict(); d["listing:\(bucketKey)"] = count; return d
         }
+        save(d)
     }
 
     /// Compare this run's listing count to the last, emit a `<source>.listing_collapsed` event if a
@@ -54,14 +56,14 @@ nonisolated enum SourceHealth {
     /// heuristic, not a failed read: emptying a folder must not mark analysis incomplete. Actual
     /// enumeration/access failures report separately through the source-read diagnostics.
     static func checkListingCollapse(source: String, bucketKey: String, count: Int, minPrevious: Int = 20) {
-        let previous: Int? = lock.withLock { _ in
+        let (previous, d): (Int?, [String: Int]) = lock.withLock { _ in
             var d = dict()
             let previous = d["listing:\(bucketKey)"]
             // Keep a healthy baseline through repeated zero reads; a later recovery refreshes it.
             if count > 0 || previous == nil { d["listing:\(bucketKey)"] = count }
-            save(d)
-            return previous
+            return (previous, d)
         }
+        save(d)
         if let previous, previous >= minPrevious, count == 0 {
             CrashReporting.captureEvent("\(Diagnostics.source(source)).listing_collapsed", level: .error,
                 tags: ["source": Diagnostics.source(source)], extra: ["previous": String(previous), "now": "0"],

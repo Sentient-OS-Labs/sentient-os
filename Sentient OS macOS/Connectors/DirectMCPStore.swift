@@ -37,19 +37,21 @@ nonisolated enum DirectMCPStore {
     static func connection(id: UUID) -> DirectMCPConnection? { connections().first { $0.id == id } }
 
     static func save(_ connection: DirectMCPConnection) throws {
-        try indexWriteLock.withLock {
+        let data = try indexWriteLock.withLock {
             var list = readIndex()
             list.removeAll { $0.id == connection.id }
             list.append(connection)
-            UserDefaults.standard.set(try JSONEncoder().encode(list), forKey: preferencesKey)
+            return try JSONEncoder().encode(list)
         }
+        UserDefaults.standard.set(data, forKey: preferencesKey)
         NotificationCenter.default.post(name: changed, object: nil)
     }
     static func removeIndex(id: UUID) {
-        indexWriteLock.withLock {
+        let data = indexWriteLock.withLock {
             let list = readIndex().filter { $0.id != id }
-            if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: preferencesKey) }
+            return try? JSONEncoder().encode(list)
         }
+        if let data { UserDefaults.standard.set(data, forKey: preferencesKey) }
         NotificationCenter.default.post(name: changed, object: nil)
     }
 
