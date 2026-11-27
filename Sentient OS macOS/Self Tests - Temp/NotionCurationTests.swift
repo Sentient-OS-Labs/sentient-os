@@ -260,6 +260,7 @@ enum NotionCurationTests {
             rejects("wrong page cannot establish evidence") { _ = try NotionSource.page(page(["url": NotionSource.stableURL(String(repeating: "a", count: 32))]), candidate: candidate, window: window) }
             rejects("missing edit time cannot become quiet") { _ = try NotionSource.page(page(["page_last_edited_at": NSNull()]), candidate: candidate, window: window) }
             rejects("malformed content cannot become quiet") { _ = try NotionSource.page(page(["text": "no verified content envelope"]), candidate: candidate, window: window) }
+            check(try NotionSource.page(page(["text": "<properties>Status: done</properties>"]), candidate: candidate, window: window)?.content == "", "properties-only page has an empty body")
             rejects("oversized content refused") { _ = try NotionSource.page(page(["text": "<content>" + String(repeating: "x", count: NotionSource.pageByteCap + 1) + "</content>"]), candidate: candidate, window: window) }
             rejects("UTF-8 byte limit is not a character limit") { _ = try NotionSource.page(page(["text": "<content>" + String(repeating: "🙂", count: 7_000) + "</content>"]), candidate: candidate, window: window) }
             for value in ["https://notion.so.evil.test/" + id, "https://evil.test/" + id,
